@@ -6,4 +6,18 @@
 
 pub mod cli;
 
-pub use cli::Cli;
+use thiserror::Error;
+
+pub use cli::{Cli, Commands};
+
+#[derive(Debug, Error)]
+#[error("command `{command}` is not implemented yet")]
+pub struct CommandNotImplemented {
+    command: &'static str,
+}
+
+pub fn execute(cli: Cli) -> Result<(), CommandNotImplemented> {
+    Err(CommandNotImplemented {
+        command: cli.command.name(),
+    })
+}

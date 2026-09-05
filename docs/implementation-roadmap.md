@@ -472,6 +472,8 @@ Critério da milestone: binário compilável, command tree estável, testes unit
 
 **Labels:** `priority:p0`, `type:feature`, `area:cli`
 
+**Status:** implementada — árvore tipada e testes de processo adicionados; handlers retornam erro explícito até suas respectivas issues.
+
 **Escopo:** `setup`, `profile`, `doctor`, `dump`, `restore`, `pull` e `cache` com argumentos previstos.
 
 **Aceite:** testes de `--help`, `--version`, comando inválido, tenant ausente e subcommand ausente usando `assert_cmd`.
