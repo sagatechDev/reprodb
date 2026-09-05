@@ -13,12 +13,14 @@ use crate::{
 };
 
 const IMAGE_DIGEST_TEMPLATE: &str = "{{json .RepoDigests}}";
-const VERSION_QUERY: &str = "SELECT VERSION(), @@version_comment";
+const VERSION_QUERY: &str =
+    "SELECT VERSION(), @@version_comment; SHOW SESSION STATUS LIKE 'Ssl_cipher'";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MysqlServerInfo {
     pub version: MysqlVersion,
     pub vendor: String,
+    pub tls_cipher: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -73,6 +75,33 @@ where
         validate_docker_context(docker_context)?;
         let client = ClientCatalog::validate(mysql_series, configured_image)?;
         self.ensure_image(docker_context, client).await?;
+        self.verify_client_version(docker_context, client).await?;
+        Ok(PreparedMysqlClient {
+            approved: client,
+            docker_context: docker_context.to_owned(),
+        })
+    }
+
+    pub async fn prepare_existing(
+        &self,
+        docker_context: &str,
+        mysql_series: &str,
+        configured_image: &str,
+    ) -> Result<PreparedMysqlClient, DockerClientError> {
+        validate_docker_context(docker_context)?;
+        let client = ClientCatalog::validate(mysql_series, configured_image)?;
+        let inspection = self
+            .runner
+            .output(&image_inspect_spec(docker_context, client))
+            .await?;
+        if !inspection.success {
+            return if image_is_missing(&inspection.stderr) {
+                Err(DockerClientError::ImageUnavailable)
+            } else {
+                Err(DockerClientError::DockerUnavailable)
+            };
+        }
+        validate_inspected_digest(&inspection.stdout, client)?;
         self.verify_client_version(docker_context, client).await?;
         Ok(PreparedMysqlClient {
             approved: client,
@@ -244,6 +273,9 @@ pub enum DockerClientError {
         "the approved MySQL client image could not be pulled; verify registry and network access"
     )]
     ImagePullFailed,
+
+    #[error("the approved MySQL client image is not available locally")]
+    ImageUnavailable,
 
     #[error("the approved MySQL client image could not be inspected after pulling")]
     ImageInspectFailed,
@@ -430,7 +462,11 @@ fn classify_connection_failure(output: &ProcessOutput) -> DockerClientError {
 fn parse_server_info(stdout: &[u8]) -> Result<MysqlServerInfo, DockerClientError> {
     let output =
         std::str::from_utf8(stdout).map_err(|_| DockerClientError::InvalidServerMetadata)?;
-    let line = output.trim();
+    let mut lines = output.lines();
+    let line = lines
+        .next()
+        .ok_or(DockerClientError::InvalidServerMetadata)?
+        .trim_end_matches('\r');
     let (version, vendor) = line
         .split_once('\t')
         .ok_or(DockerClientError::InvalidServerMetadata)?;
@@ -441,9 +477,30 @@ fn parse_server_info(stdout: &[u8]) -> Result<MysqlServerInfo, DockerClientError
         return Err(DockerClientError::InvalidServerMetadata);
     }
 
+    let tls_cipher = match lines.next() {
+        Some(line) => {
+            let line = line.trim_end_matches('\r');
+            let (name, value) = line
+                .split_once('\t')
+                .ok_or(DockerClientError::InvalidServerMetadata)?;
+            if name != "Ssl_cipher"
+                || value.chars().count() > 128
+                || value.chars().any(char::is_control)
+            {
+                return Err(DockerClientError::InvalidServerMetadata);
+            }
+            (!value.is_empty()).then(|| value.to_owned())
+        }
+        None => None,
+    };
+    if lines.any(|line| !line.is_empty()) {
+        return Err(DockerClientError::InvalidServerMetadata);
+    }
+
     Ok(MysqlServerInfo {
         version,
         vendor: vendor.to_owned(),
+        tls_cipher,
     })
 }
 
@@ -548,6 +605,23 @@ mod tests {
                 client.image()
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn read_only_preparation_never_pulls_a_missing_image() {
+        let client = ClientCatalog::resolve("8.4").unwrap();
+        let runtime = DockerMysqlClientRuntime::new(FakeRunner::new([ProcessOutput::failure(
+            1,
+            "Error: No such image",
+        )]));
+
+        let error = runtime
+            .prepare_existing("default", "8.4", client.image())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, DockerClientError::ImageUnavailable));
+        assert_eq!(runtime.runner.commands().len(), 1);
     }
 
     #[tokio::test]
@@ -772,6 +846,20 @@ mod tests {
         }
         assert_eq!(docker_source_host("db.internal"), "db.internal");
         assert_eq!(docker_source_host("10.0.0.8"), "10.0.0.8");
+    }
+
+    #[test]
+    fn parses_the_negotiated_tls_cipher_without_accepting_extra_rows() {
+        let info = parse_server_info(
+            b"8.4.4\tMySQL Community Server - GPL\nSsl_cipher\tTLS_AES_256_GCM_SHA384\n",
+        )
+        .unwrap();
+
+        assert_eq!(info.tls_cipher.as_deref(), Some("TLS_AES_256_GCM_SHA384"));
+        assert!(matches!(
+            parse_server_info(b"8.4.4\tMySQL\nSsl_cipher\tTLS_AES\nunexpected\n"),
+            Err(DockerClientError::InvalidServerMetadata)
+        ));
     }
 
     #[test]

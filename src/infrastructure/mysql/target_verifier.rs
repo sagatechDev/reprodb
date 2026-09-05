@@ -16,6 +16,7 @@ const BOOTSTRAP_MYSQL_SERIES: &str = "8.4";
 
 pub struct DockerLocalTargetVerifier<R> {
     runtime: DockerMysqlClientRuntime<R>,
+    pull_missing_client: bool,
     probe_attempts: usize,
     retry_delay: Duration,
 }
@@ -27,8 +28,18 @@ where
     pub fn new(runner: R) -> Self {
         Self {
             runtime: DockerMysqlClientRuntime::new(runner),
+            pull_missing_client: true,
             probe_attempts: 20,
             retry_delay: Duration::from_millis(500),
+        }
+    }
+
+    pub fn read_only(runner: R) -> Self {
+        Self {
+            runtime: DockerMysqlClientRuntime::new(runner),
+            pull_missing_client: false,
+            probe_attempts: 1,
+            retry_delay: Duration::ZERO,
         }
     }
 
@@ -36,6 +47,7 @@ where
     fn with_retry_policy(runner: R, probe_attempts: usize, retry_delay: Duration) -> Self {
         Self {
             runtime: DockerMysqlClientRuntime::new(runner),
+            pull_missing_client: true,
             probe_attempts,
             retry_delay,
         }
@@ -53,11 +65,16 @@ where
     ) -> Result<VerifiedLocalTarget, TargetVerificationError> {
         let client = ClientCatalog::resolve(BOOTSTRAP_MYSQL_SERIES)
             .map_err(|_| TargetVerificationError::ClientUnavailable)?;
-        let prepared = self
-            .runtime
-            .prepare(&input.docker_context, client.series(), client.image())
-            .await
-            .map_err(map_runtime_error)?;
+        let prepared = if self.pull_missing_client {
+            self.runtime
+                .prepare(&input.docker_context, client.series(), client.image())
+                .await
+        } else {
+            self.runtime
+                .prepare_existing(&input.docker_context, client.series(), client.image())
+                .await
+        }
+        .map_err(map_runtime_error)?;
         let option_file = self
             .runtime
             .create_container_option_file(
@@ -74,6 +91,7 @@ where
         Ok(VerifiedLocalTarget {
             server_version: server.version,
             vendor: server.vendor,
+            tls_cipher: server.tls_cipher,
             client,
         })
     }
@@ -123,6 +141,7 @@ fn map_runtime_error(error: DockerClientError) -> TargetVerificationError {
             TargetVerificationError::ConnectionUnavailable
         }
         DockerClientError::Catalog(_)
+        | DockerClientError::ImageUnavailable
         | DockerClientError::ImagePullFailed
         | DockerClientError::ImageInspectFailed
         | DockerClientError::InvalidImageMetadata

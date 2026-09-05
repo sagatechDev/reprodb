@@ -95,6 +95,15 @@ $REPRODB doctor --preview
 
 Observe se a divisão entre configuração, client MySQL, target local e source ajuda a localizar um problema rapidamente.
 
+O diagnóstico real também está disponível e é somente-leitura:
+
+```bash
+$REPRODB doctor --color always
+echo $?
+```
+
+Ele não baixa a imagem do client, inicia o target ou altera bancos/configuração. Os probes executam containers efêmeros `--rm` do client já presente. É normal obter falhas acionáveis enquanto `profile add` ou `setup` ainda não estiverem completos. Confira se checks independentes continuam aparecendo depois da primeira falha e se as seções `Configuration`, `Storage`, `Docker`, `Source` e `Local target` deixam claro onde agir.
+
 ### 3.4 Reproduzir um tenant
 
 Fluxo normal, com consulta ao cache:
@@ -154,14 +163,14 @@ $REPRODB profile use salt-local
 $REPRODB profile remove salt-local
 ```
 
-Esses comandos podem acessar Docker, MySQL, configuração e Keychain/Secret Service. Use `--preview` quando quiser apenas avaliar a apresentação. `doctor`, `dump`, `restore`, `pull` e `cache` ainda falham explicitamente em vez de fingir que fizeram algo:
+Esses comandos podem acessar Docker, MySQL, configuração e Keychain/Secret Service. Use `--preview` quando quiser apenas avaliar a apresentação. `doctor` já executa checks reais somente-leitura. `dump`, `restore`, `pull` e `cache` ainda falham explicitamente em vez de fingir que fizeram algo:
 
 ```bash
-$REPRODB doctor
+$REPRODB dump sagatec
 echo $?
 ```
 
-Por enquanto, o resultado esperado é `command 'doctor' is not implemented yet` e exit code `1`. Isso mudará com RDB-026.
+Por enquanto, o resultado esperado é `command 'dump' is not implemented yet` e exit code `1`. Isso mudará com a milestone de dump.
 
 ## 7. Checklist para feedback
 

@@ -10,6 +10,7 @@ O projeto está no início da implementação. O backlog e as decisões técnica
 - [`docs/exit-codes.md`](docs/exit-codes.md).
 - [`docs/profiles.md`](docs/profiles.md), para o ciclo de vida dos source profiles;
 - [`docs/setup.md`](docs/setup.md), para configurar o target Docker local;
+- [`docs/doctor.md`](docs/doctor.md), para diagnosticar o ambiente sem alterá-lo;
 - [`docs/ui-ux-test-guide.md`](docs/ui-ux-test-guide.md), para experimentar a CLI sem alterar a máquina.
 
 ## Desenvolvimento

@@ -67,6 +67,10 @@ impl OutputStyle {
         self.paint("1;33", value)
     }
 
+    pub fn danger(&self, value: &str) -> String {
+        self.paint("1;31", value)
+    }
+
     pub fn selected(&self, value: &str) -> String {
         self.paint("1;36", value)
     }

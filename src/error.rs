@@ -2,8 +2,8 @@ use thiserror::Error;
 
 use crate::{
     application::{
-        CredentialProvisionError, ProfileServiceError, SetupServiceError, SourceVerificationError,
-        TargetVerificationError,
+        CredentialProvisionError, DoctorFailureKind, ProfileServiceError, SetupServiceError,
+        SourceVerificationError, TargetVerificationError,
     },
     cli::prompt::PromptError,
     domain::ValueObjectError,
@@ -65,6 +65,12 @@ pub enum AppError {
 
     #[error(transparent)]
     Setup(#[from] SetupServiceError),
+
+    #[error("doctor found required problems; review the failed checks above")]
+    DoctorChecksFailed { kind: DoctorFailureKind },
+
+    #[error("could not write CLI output")]
+    Output(#[source] std::io::Error),
 
     #[error("command `{command}` is not implemented yet")]
     CommandNotImplemented { command: &'static str },
@@ -135,6 +141,15 @@ impl AppError {
                 CredentialProvisionError::InvalidCredentialReference
                 | CredentialProvisionError::Config { .. },
             )) => ErrorCategory::Configuration,
+            Self::DoctorChecksFailed { kind } => match kind {
+                DoctorFailureKind::Configuration => ErrorCategory::Configuration,
+                DoctorFailureKind::Credential => ErrorCategory::Credential,
+                DoctorFailureKind::Dependency => ErrorCategory::Dependency,
+                DoctorFailureKind::SourceConnection => ErrorCategory::SourceConnection,
+                DoctorFailureKind::Docker => ErrorCategory::Docker,
+                DoctorFailureKind::Filesystem => ErrorCategory::Cache,
+            },
+            Self::Output(_) => ErrorCategory::General,
             Self::CommandNotImplemented { .. } => ErrorCategory::General,
             Self::Interrupted => ErrorCategory::Interrupted,
         }
@@ -142,6 +157,10 @@ impl AppError {
 
     pub const fn exit_code(&self) -> u8 {
         self.category().exit_code()
+    }
+
+    pub const fn should_render_on_stderr(&self) -> bool {
+        !matches!(self, Self::DoctorChecksFailed { .. })
     }
 }
 
@@ -213,5 +232,15 @@ mod tests {
         assert_eq!(authentication.exit_code(), 30);
         assert_eq!(docker.exit_code(), 60);
         assert_eq!(client.exit_code(), 20);
+    }
+
+    #[test]
+    fn doctor_failure_is_not_repeated_after_its_structured_report() {
+        let error = AppError::DoctorChecksFailed {
+            kind: DoctorFailureKind::Docker,
+        };
+
+        assert!(!error.should_render_on_stderr());
+        assert_eq!(error.exit_code(), 60);
     }
 }

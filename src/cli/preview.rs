@@ -104,35 +104,46 @@ pub fn doctor(style: &OutputStyle) -> String {
     let brand = style.brand("reprodb");
     let preview = style.attention("(preview)");
     let configuration = style.section("Configuration");
-    let client = style.section("MySQL client");
-    let target = style.section("Local target");
+    let storage = style.section("Storage");
+    let docker = style.section("Docker");
     let source = style.section("Source");
+    let target = style.section("Local target");
     let ok = style.success("✓");
-    let ready = style.success("Ready to pull a tenant.");
+    let ready = style.success("✓ Environment ready for reprodb operations.");
     let footer = style.attention("! Preview only — checks are illustrative and were not executed.");
 
     format!(
         r#"{brand} doctor {preview}
 
 {configuration}
-  {ok} configuration file
-  {ok} active profile: salt-source
-  {ok} source credential available
+  {ok} configuration
+      configuration loaded and validated
 
-{client}
-  {ok} approved Docker image available
-  {ok} mysql client: 8.4.4
-  {ok} mysqldump: 8.4.4
+{storage}
+  {ok} cache filesystem
+      120.0 GiB available for compressed dumps
 
-{target}
-  {ok} Docker context: desktop-linux
-  {ok} container: mysql-8 (running)
-  {ok} target connection
+{docker}
+  {ok} Docker
+      local context desktop-linux is available
 
 {source}
+  {ok} active profile
+      salt-source · mysql.salt.internal:3306 · MySQL 8.4 · TLS REQUIRED
+  {ok} source credential
+      credential is available in the OS store
   {ok} source connection
-  {ok} server version: 8.4.4
-  {ok} tenant resolver: salt_central
+      server MySQL Community Server 8.4.4 · client 8.4.4 · TLS encrypted (TLS_AES_256_GCM_SHA384)
+
+{target}
+  {ok} local target configuration
+      mysql-8 · context desktop-linux · central database salt_central
+  {ok} target credential
+      credential is available in the OS store
+  {ok} target container identity
+      configured name and full container ID match a running container
+  {ok} target connection
+      server MySQL Community Server 8.4.4 · client 8.4.4 · TLS encrypted (TLS_AES_256_GCM_SHA384)
 
 {ready}
 
@@ -244,5 +255,23 @@ mod tests {
         assert!(output.contains("Docker is available"));
         assert!(output.contains("! Port is exposed"));
         assert!(output.contains("! Preview only"));
+    }
+
+    #[test]
+    fn doctor_preview_matches_the_real_report_shape() {
+        let output = doctor(&OutputStyle::plain());
+
+        for section in [
+            "Configuration",
+            "Storage",
+            "Docker",
+            "Source",
+            "Local target",
+        ] {
+            assert!(output.contains(section));
+        }
+        assert!(output.contains("client 8.4.4"));
+        assert!(output.contains("TLS_AES_256_GCM_SHA384"));
+        assert!(output.contains("checks are illustrative"));
     }
 }

@@ -105,12 +105,12 @@ fn valid_but_unimplemented_command_fails_explicitly() {
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
-        .arg("doctor")
+        .args(["dump", "sagatec"])
         .assert()
         .failure()
         .code(1)
         .stderr(predicate::str::contains(
-            "command `doctor` is not implemented yet",
+            "command `dump` is not implemented yet",
         ));
 }
 
@@ -152,7 +152,7 @@ fn doctor_preview_never_claims_that_checks_were_executed() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("Ready to pull a tenant")
+            predicate::str::contains("Environment ready for reprodb operations")
                 .and(predicate::str::contains("were not executed")),
         );
 }

@@ -581,6 +581,8 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 
 **Labels:** `priority:p0`, `type:feature`, `area:config`, `area:mysql`, `area:docker`
 
+**Status:** implementada e validada no macOS contra o `mysql-8` real. O comando agrega checks de configuração, credenciais, filesystem, Docker, identidade do target, client aprovado, conexões, versões e TLS sem baixar imagem, iniciar o target ou persistir configuração. Os probes usam containers efêmeros `--rm` do client. Compilação Linux está validada; execução real em Docker Engine Linux permanece na RDB-002/RDB-061.
+
 **Escopo:** config, profiles, keyring, Docker context, client image, target ID, source/target connection, versões, vendor, TLS, espaço livre e matriz de compatibilidade.
 
 **Aceite:** cada check falha isoladamente com ação recomendada; doctor não altera bancos.
@@ -849,7 +851,7 @@ Não iniciar integração de produção antes de concluir as milestones 0 a 6.
 - [ ] `profile add` coleta conexão como o DBeaver, testa e salva a senha no keyring.
 - [ ] A versão do MySQL é detectada por consulta, não inferida de `mysql:8`.
 - [ ] O client é uma imagem conhecida, fixada e compatível.
-- [ ] `reprodb doctor` valida tudo antes do dump.
+- [x] `reprodb doctor` valida o ambiente implementado antes do dump, com os checks específicos do dump adicionados nas issues da milestone 4.
 - [ ] Alias ou tenant ID resolve via `salt_central`.
 - [ ] `tenancy_db_name` é respeitado.
 - [ ] Dump usa flags conservadoras e `--set-gtid-purged=OFF`.

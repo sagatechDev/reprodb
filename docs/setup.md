@@ -38,3 +38,9 @@ O preview sem efeitos colaterais continua disponível:
 ```bash
 reprodb setup --preview
 ```
+
+Depois do setup, valide a identidade e a conexão sem alterar o container:
+
+```bash
+reprodb doctor
+```

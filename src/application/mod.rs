@@ -1,8 +1,14 @@
 mod credential_transaction;
+mod doctor_service;
 mod profile_service;
 mod setup_service;
 
 pub use credential_transaction::{CredentialProvisionError, persist_config_with_credential};
+pub use doctor_service::{
+    DoctorCheck, DoctorDockerContainer, DoctorDockerError, DoctorDockerInspector,
+    DoctorDockerInventory, DoctorFailureKind, DoctorReport, DoctorSection, DoctorService,
+    DoctorStatus, DoctorStorageError, DoctorStorageInspector, MINIMUM_FREE_BYTES,
+};
 pub use profile_service::{
     NewProfileInput, ProfileCreated, ProfileRemoval, ProfileService, ProfileServiceError,
     ProfileSummary, SourceProfileVerifier, SourceVerificationError, VerifiedSource,

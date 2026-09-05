@@ -28,6 +28,7 @@ pub struct NewLocalTargetInput {
 pub struct VerifiedLocalTarget {
     pub server_version: MysqlVersion,
     pub vendor: String,
+    pub tls_cipher: Option<String>,
     pub client: ApprovedMysqlClient,
 }
 
@@ -263,6 +264,7 @@ mod tests {
                 result: Ok(VerifiedLocalTarget {
                     server_version: "8.4.4".parse().unwrap(),
                     vendor: "MySQL Community Server".to_owned(),
+                    tls_cipher: Some("TLS_AES_256_GCM_SHA384".to_owned()),
                     client: ClientCatalog::resolve("8.4").unwrap(),
                 }),
             }

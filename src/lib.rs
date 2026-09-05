@@ -4,6 +4,8 @@
 //! be tested without spawning the compiled executable. `main.rs` remains the
 //! composition root for process-level concerns.
 
+use std::io::Write as _;
+
 pub mod application;
 pub mod cli;
 pub mod domain;
@@ -132,6 +134,35 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
         },
         Commands::Doctor(arguments) if arguments.preview => {
             print!("{}", cli::preview::doctor(&style));
+            Ok(())
+        }
+        Commands::Doctor(_) => {
+            print!("{}", cli::doctor::render_start(&style));
+            std::io::stdout().flush().map_err(AppError::Output)?;
+            let service = application::DoctorService::new(ConfigRepository::discover()?);
+            let docker = infrastructure::docker::DockerCliDoctorInspector::new(
+                infrastructure::process::TokioProcessRunner,
+            );
+            let source = infrastructure::mysql::DockerSourceProfileVerifier::read_only(
+                infrastructure::process::TokioProcessRunner,
+            );
+            let target = infrastructure::mysql::DockerLocalTargetVerifier::read_only(
+                infrastructure::process::TokioProcessRunner,
+            );
+            let storage = infrastructure::filesystem::LocalFilesystemInspector;
+            let report = service
+                .run(
+                    &infrastructure::credentials::OsCredentialStore,
+                    &docker,
+                    &storage,
+                    &source,
+                    &target,
+                )
+                .await;
+            print!("{}", cli::doctor::render(&style, &report));
+            if let Some(kind) = report.first_failure_kind() {
+                return Err(AppError::DoctorChecksFailed { kind });
+            }
             Ok(())
         }
         Commands::Pull(arguments) if arguments.preview => {

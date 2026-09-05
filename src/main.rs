@@ -17,7 +17,9 @@ async fn main() -> ExitCode {
     match execute(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("{error}");
+            if error.should_render_on_stderr() {
+                eprintln!("{error}");
+            }
             ExitCode::from(error.exit_code())
         }
     }
