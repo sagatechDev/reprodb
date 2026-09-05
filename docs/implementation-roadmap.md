@@ -395,6 +395,8 @@ Critério da milestone: provar conectividade, autenticação, dump, compressão 
 
 **Labels:** `priority:p0`, `type:spike`, `area:mysql`, `area:docker`, `area:restore`
 
+**Status:** em andamento — [resultado parcial do spike](research/streaming-pipeline-spike.md); pipeline e harness macOS validados, isolamento em dois servidores efêmeros, memória, cancelamento e Linux pendentes.
+
 **Objetivo:** provar o núcleo mais arriscado do produto.
 
 **Escopo:**

@@ -1,0 +1,10 @@
+[package]
+name = "reprodb-streaming-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+async-compression = { version = "0.4", features = ["tokio", "zstd"] }
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal"] }
