@@ -431,6 +431,8 @@ Critério da milestone: provar conectividade, autenticação, dump, compressão 
 
 **Labels:** `priority:p0`, `type:spike`, `area:tenant`, `area:security`
 
+**Status:** concluída — [ADR 0002: registro local mínimo do tenant Salt](adr/0002-local-salt-tenant-registration.md), validada inicializando o Laravel real com uma fixture sem JSON central completo.
+
 **Objetivo:** determinar quais campos mínimos de `salt_central.tenants` e `domains` devem existir localmente.
 
 **Escopo:**
