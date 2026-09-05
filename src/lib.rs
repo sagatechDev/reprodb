@@ -44,10 +44,14 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
             let selected = cli::prompt::select_local_target(&candidates)?;
             let candidate = &candidates[selected];
             if candidate.state != infrastructure::docker::ContainerState::Running {
-                return Err(application::SetupServiceError::Verification(
-                    application::TargetVerificationError::ContainerNotRunning,
-                )
-                .into());
+                if !cli::prompt::confirm_container_start(candidate)? {
+                    print!("{}", cli::setup::render_cancelled(&style));
+                    return Ok(());
+                }
+                print!("{}", cli::setup::render_starting(&style, candidate));
+                discovery
+                    .start_container(&docker_context, &candidate.id)
+                    .await?;
             }
             if service.has_local_target()? && !cli::prompt::confirm_target_replacement()? {
                 print!("{}", cli::setup::render_cancelled(&style));

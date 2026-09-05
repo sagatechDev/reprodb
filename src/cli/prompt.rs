@@ -195,6 +195,17 @@ pub fn confirm_target_replacement() -> Result<bool, PromptError> {
         .map_err(unavailable)
 }
 
+pub fn confirm_container_start(candidate: &DockerContainerCandidate) -> Result<bool, PromptError> {
+    Confirm::with_theme(&SimpleTheme)
+        .with_prompt(format!(
+            "Container `{}` is stopped. Start it now?",
+            candidate.name
+        ))
+        .default(true)
+        .interact()
+        .map_err(unavailable)
+}
+
 pub fn confirm_profile_removal(name: &ProfileName) -> Result<bool, PromptError> {
     Confirm::with_theme(&SimpleTheme)
         .with_prompt(format!(

@@ -559,7 +559,7 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 
 **Labels:** `priority:p0`, `type:feature`, `area:docker`, `area:security`
 
-**Status:** em andamento — descoberta e seleção de containers existentes, rejeição de context remoto, alertas de bind, senha mascarada, verificação real por ID e persistência transacional estão implementadas e validadas contra `mysql-8` no macOS. Inicialização de container parado, criação de target dedicado e execução real em Linux permanecem pendentes.
+**Status:** em andamento — descoberta e seleção de containers existentes, rejeição de context remoto, alertas de bind, inicialização confirmada de container parado, senha mascarada, verificação real por ID e persistência transacional estão implementadas e validadas contra `mysql-8` no macOS. Criação de target dedicado e execução real em Linux permanecem pendentes.
 
 **Escopo:**
 

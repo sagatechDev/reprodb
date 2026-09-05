@@ -85,6 +85,14 @@ pub fn render_verifying(style: &OutputStyle, candidate: &DockerContainerCandidat
     )
 }
 
+pub fn render_starting(style: &OutputStyle, candidate: &DockerContainerCandidate) -> String {
+    format!(
+        "{} Starting {} and waiting up to 10 seconds for MySQL...\n",
+        style.selected("›"),
+        style.value(candidate.name.as_str()),
+    )
+}
+
 pub fn render_configured(style: &OutputStyle, configured: &LocalTargetConfigured) -> String {
     let mut output = format!(
         "{ok} Target connection verified: {vendor} {version}\n\

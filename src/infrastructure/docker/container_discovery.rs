@@ -63,6 +63,9 @@ pub enum DockerDiscoveryError {
 
     #[error("Docker returned invalid container metadata")]
     InvalidMetadata,
+
+    #[error("the selected MySQL container could not be started")]
+    ContainerStartFailed,
 }
 
 pub struct DockerTargetDiscovery<R> {
@@ -108,6 +111,22 @@ where
         candidates.sort_by(|left, right| left.name.cmp(&right.name));
 
         Ok((context, candidates))
+    }
+
+    pub async fn start_container(
+        &self,
+        context: &str,
+        container: &ContainerId,
+    ) -> Result<(), DockerDiscoveryError> {
+        validate_context(context)?;
+        let output = self
+            .runner
+            .output(&docker_spec(context).args(["container", "start", container.as_str()]))
+            .await?;
+        if !output.success {
+            return Err(DockerDiscoveryError::ContainerStartFailed);
+        }
+        Ok(())
     }
 
     async fn current_local_context(&self) -> Result<String, DockerDiscoveryError> {
@@ -285,13 +304,20 @@ fn parse_safe_text(bytes: &[u8], max: usize) -> Result<String, DockerDiscoveryEr
         .map_err(|_| DockerDiscoveryError::InvalidMetadata)?
         .trim();
     validate_metadata_text(value, max)?;
-    if !value
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+    validate_context(value)?;
+    Ok(value.to_owned())
+}
+
+fn validate_context(value: &str) -> Result<(), DockerDiscoveryError> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
     {
         return Err(DockerDiscoveryError::InvalidMetadata);
     }
-    Ok(value.to_owned())
+    Ok(())
 }
 
 fn validate_metadata_text(value: &str, max: usize) -> Result<(), DockerDiscoveryError> {
@@ -507,5 +533,30 @@ mod tests {
         assert_eq!(candidates[0].name.as_str(), "custom-database");
         assert_eq!(candidates[0].state, ContainerState::Stopped);
         assert!(candidates[0].published_ports.is_empty());
+    }
+
+    #[tokio::test]
+    async fn starts_a_selected_container_by_context_and_full_id() {
+        let discovery = DockerTargetDiscovery::new(FakeRunner::new([ProcessOutput::success(
+            format!("{}\n", id('a')),
+        )]));
+        let container = ContainerId::try_from(id('a')).unwrap();
+
+        discovery
+            .start_container("desktop-linux", &container)
+            .await
+            .unwrap();
+
+        let commands = discovery.runner.commands();
+        assert_eq!(
+            commands[0].arguments(),
+            [
+                "--context",
+                "desktop-linux",
+                "container",
+                "start",
+                container.as_str(),
+            ]
+        );
     }
 }

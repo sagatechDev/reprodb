@@ -21,7 +21,7 @@ O comando:
 
 O ID completo é a identidade de segurança. O nome fica salvo para apresentação, mas um restore futuro deverá recusar um container recriado com o mesmo nome e outro ID.
 
-Containers parados aparecem na lista para diagnóstico, mas ainda precisam ser iniciados manualmente antes da seleção. A criação de um container dedicado pelo próprio reprodb continua pendente na RDB-025.
+Containers parados aparecem na lista. Se um deles for escolhido, a CLI pede confirmação, inicia exatamente o ID selecionado e tenta a conexão por até 10 segundos enquanto o MySQL fica pronto. A criação de um container dedicado pelo próprio reprodb continua pendente na RDB-025.
 
 Se já houver um target, o comando pede confirmação antes de substituí-lo. A nova configuração e credencial são publicadas antes da remoção da credencial antiga; uma falha de cleanup informa a chave órfã sem desfazer o target válido.
 
@@ -29,7 +29,7 @@ Se já houver um target, o comando pede confirmação antes de substituí-lo. A 
 
 - execução real em Docker Engine Linux ainda precisa ser validada;
 - apenas a série MySQL 8.4 está no catálogo aprovado;
-- criação/inicialização automática de container ainda não foi implementada;
+- criação automática de um container novo ainda não foi implementada;
 - `setup` não altera automaticamente um bind exposto em todas as interfaces;
 - o comando não cria usuário MySQL.
 
