@@ -1,5 +1,6 @@
 use std::{fmt, str::FromStr};
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -71,6 +72,25 @@ macro_rules! validated_string {
         impl fmt::Display for $name {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str(self.as_str())
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                serializer.serialize_str(self.as_str())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let value = String::deserialize(deserializer)?;
+                Self::try_from(value).map_err(de::Error::custom)
             }
         }
 
@@ -298,6 +318,25 @@ impl fmt::Display for CredentialKey {
     }
 }
 
+impl Serialize for CredentialKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for CredentialKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        value.parse().map_err(de::Error::custom)
+    }
+}
+
 impl FromStr for CredentialKey {
     type Err = ValueObjectError;
 
@@ -345,6 +384,25 @@ pub struct MysqlVersion {
 impl fmt::Display for MysqlVersion {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+impl Serialize for MysqlVersion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for MysqlVersion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        value.parse().map_err(de::Error::custom)
     }
 }
 
@@ -489,5 +547,29 @@ mod tests {
 
         assert!(!error.to_string().contains(marker));
         assert!(!format!("{error:?}").contains(marker));
+    }
+
+    #[test]
+    fn serde_roundtrips_without_bypassing_validation() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize)]
+        struct Values {
+            profile: ProfileName,
+            database: DatabaseName,
+            credential: CredentialKey,
+        }
+
+        let profile = ProfileName::try_from("salt-local").unwrap();
+        let key = CredentialKey::new(CredentialScope::Target);
+        let values = Values {
+            profile,
+            database: DatabaseName::try_from("salt_example").unwrap(),
+            credential: key,
+        };
+        let serialized = toml::to_string(&values).unwrap();
+        let deserialized: Values = toml::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, values);
+
+        let invalid = serialized.replace("salt_example", "../../mysql");
+        assert!(toml::from_str::<Values>(&invalid).is_err());
     }
 }

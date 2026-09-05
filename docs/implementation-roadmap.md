@@ -504,6 +504,8 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 
 **Labels:** `priority:p0`, `type:feature`, `area:config`
 
+**Status:** implementada — paths nativos via `ProjectDirs`, schema estrito versionado, escrita atômica sob lock e permissões privadas possuem cobertura automatizada.
+
 **Escopo:** `ProjectDirs`, `schema_version`, parse estrito, escrita em temporário + rename, permissões e lock de escrita.
 
 **Aceite:** primeira execução, TOML inválido, concorrência, falha de escrita e path abstraído são testados.

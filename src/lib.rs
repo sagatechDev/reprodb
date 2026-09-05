@@ -7,6 +7,7 @@
 pub mod cli;
 pub mod domain;
 pub mod error;
+pub mod infrastructure;
 
 pub use cli::{Cli, Commands};
 pub use error::{AppError, ErrorCategory};
