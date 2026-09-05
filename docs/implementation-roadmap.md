@@ -482,6 +482,8 @@ Critério da milestone: binário compilável, command tree estável, testes unit
 
 **Labels:** `priority:p1`, `type:feature`, `area:cli`, `area:security`
 
+**Status:** implementada — categorias e [exit codes](exit-codes.md) estáveis, tracing opt-in e testes contra vazamento de argumentos adicionados.
+
 **Escopo:** erros tipados por categoria, mapeamento estável para exit code, mensagens acionáveis e `tracing` opt-in por `RUST_LOG`.
 
 **Aceite:** nenhum erro inclui secret, SQL do dump ou argv sensível; Ctrl+C é reservado para exit code 130.

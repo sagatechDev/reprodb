@@ -5,19 +5,15 @@
 //! composition root for process-level concerns.
 
 pub mod cli;
-
-use thiserror::Error;
+pub mod error;
 
 pub use cli::{Cli, Commands};
+pub use error::{AppError, ErrorCategory};
 
-#[derive(Debug, Error)]
-#[error("command `{command}` is not implemented yet")]
-pub struct CommandNotImplemented {
-    command: &'static str,
-}
+pub fn execute(cli: Cli) -> Result<(), AppError> {
+    tracing::debug!(command = cli.command.name(), "command received");
 
-pub fn execute(cli: Cli) -> Result<(), CommandNotImplemented> {
-    Err(CommandNotImplemented {
+    Err(AppError::CommandNotImplemented {
         command: cli.command.name(),
     })
 }

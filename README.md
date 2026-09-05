@@ -7,6 +7,7 @@ O projeto está no início da implementação. O backlog e as decisões técnica
 - [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md);
 - [`docs/adr`](docs/adr);
 - [`docs/research`](docs/research).
+- [`docs/exit-codes.md`](docs/exit-codes.md).
 
 ## Desenvolvimento
 
