@@ -4,6 +4,7 @@ pub mod output;
 pub mod preview;
 pub mod profile;
 pub mod prompt;
+pub mod setup;
 
 pub use output::ColorChoice;
 

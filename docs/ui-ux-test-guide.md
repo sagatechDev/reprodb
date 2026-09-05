@@ -45,7 +45,15 @@ Observe:
 $REPRODB setup --preview
 ```
 
-Esse cenário mostra como o futuro `setup` apresentará containers MySQL encontrados no Docker e escolherá o target local. Avalie se imagem, estado, porta e finalidade do container estão claros.
+Esse cenário simula como o `setup` apresenta containers MySQL encontrados no Docker e escolhe o target local. Avalie se imagem, estado, porta e finalidade do container estão claros.
+
+O fluxo real também pode ser percorrido sem salvar: execute o comando abaixo, selecione um container e pressione `Ctrl+C` durante os prompts de credencial.
+
+```bash
+$REPRODB setup --color never
+```
+
+Sem `--preview`, a descoberta consulta o Docker real. Se você concluir todos os prompts com uma credencial válida, o target será testado e salvo no Keychain/Secret Service e no TOML local.
 
 ### 3.2 Cadastrar uma conexão source
 
@@ -137,7 +145,7 @@ Ele também para imediatamente se algum cenário retornar erro inesperado.
 
 ## 6. Estado funcional atual
 
-O ciclo de source profiles já é real:
+O setup de um container existente e o ciclo de source profiles já são reais:
 
 ```bash
 $REPRODB profile add salt-local
@@ -146,14 +154,14 @@ $REPRODB profile use salt-local
 $REPRODB profile remove salt-local
 ```
 
-Esses comandos podem acessar Docker, MySQL, configuração e Keychain/Secret Service. Use `--preview` quando quiser apenas avaliar a apresentação. Os outros fluxos ainda falham explicitamente em vez de fingir que fizeram algo:
+Esses comandos podem acessar Docker, MySQL, configuração e Keychain/Secret Service. Use `--preview` quando quiser apenas avaliar a apresentação. `doctor`, `dump`, `restore`, `pull` e `cache` ainda falham explicitamente em vez de fingir que fizeram algo:
 
 ```bash
-$REPRODB setup
+$REPRODB doctor
 echo $?
 ```
 
-Por enquanto, o resultado esperado é `command 'setup' is not implemented yet` e exit code `1`. Isso mudará com RDB-025.
+Por enquanto, o resultado esperado é `command 'doctor' is not implemented yet` e exit code `1`. Isso mudará com RDB-026.
 
 ## 7. Checklist para feedback
 

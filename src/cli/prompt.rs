@@ -6,8 +6,10 @@ use secrecy::SecretString;
 use thiserror::Error;
 
 use crate::{
-    application::NewProfileInput,
-    domain::{MysqlTlsMode, ProfileName},
+    application::{NewLocalTargetInput, NewProfileInput},
+    cli::setup,
+    domain::{DatabaseName, MysqlTlsMode, ProfileName},
+    infrastructure::docker::DockerContainerCandidate,
 };
 
 #[derive(Debug, Error)]
@@ -23,6 +25,9 @@ pub enum PromptError {
         #[source]
         source: io::Error,
     },
+
+    #[error("the local central database name is invalid")]
+    InvalidCentralDatabase,
 }
 
 pub fn collect_new_profile(name: ProfileName) -> Result<NewProfileInput, PromptError> {
@@ -69,7 +74,7 @@ pub fn collect_new_profile(name: ProfileName) -> Result<NewProfileInput, PromptE
         })
         .interact_text()
         .map_err(unavailable)?;
-    let password = collect_password()?;
+    let password = collect_password("MySQL password: ")?;
     let production = Confirm::with_theme(&theme)
         .with_prompt("Is this a production source?")
         .default(false)
@@ -112,10 +117,10 @@ fn unavailable(source: dialoguer::Error) -> PromptError {
     PromptError::Unavailable { source }
 }
 
-fn collect_password() -> Result<SecretString, PromptError> {
+fn collect_password(prompt: &str) -> Result<SecretString, PromptError> {
     loop {
         let config = ConfigBuilder::new().password_feedback_mask('*').build();
-        let password = read_password_with_config(config)?;
+        let password = read_password_with_config(prompt, config)?;
         if !password.is_empty() {
             return Ok(SecretString::from(password));
         }
@@ -124,9 +129,70 @@ fn collect_password() -> Result<SecretString, PromptError> {
     }
 }
 
-fn read_password_with_config(config: Config) -> Result<String, PromptError> {
-    prompt_password_with_config("MySQL password: ", config)
+fn read_password_with_config(prompt: &str, config: Config) -> Result<String, PromptError> {
+    prompt_password_with_config(prompt, config)
         .map_err(|source| PromptError::PasswordUnavailable { source })
+}
+
+pub fn select_local_target(candidates: &[DockerContainerCandidate]) -> Result<usize, PromptError> {
+    Select::with_theme(&SimpleTheme)
+        .with_prompt("Local restore target")
+        .items(setup::choice_labels(candidates))
+        .default(0)
+        .interact()
+        .map_err(unavailable)
+}
+
+pub fn collect_local_target(
+    docker_context: String,
+    candidate: &DockerContainerCandidate,
+) -> Result<NewLocalTargetInput, PromptError> {
+    let theme = SimpleTheme;
+    let username = Input::<String>::with_theme(&theme)
+        .with_prompt("Local MySQL username")
+        .default("root".to_owned())
+        .validate_with(|value: &String| -> Result<(), &str> {
+            if value.is_empty()
+                || value.trim() != value
+                || value.chars().count() > 32
+                || value.chars().any(char::is_control)
+            {
+                Err("enter a username up to 32 characters")
+            } else {
+                Ok(())
+            }
+        })
+        .interact_text()
+        .map_err(unavailable)?;
+    let password = collect_password("Local MySQL password: ")?;
+    let central_database = Input::<String>::with_theme(&theme)
+        .with_prompt("Local central database")
+        .default("salt_central".to_owned())
+        .validate_with(|value: &String| -> Result<(), &str> {
+            DatabaseName::try_from(value.as_str())
+                .map(|_| ())
+                .map_err(|_| "enter a safe non-administrative database name")
+        })
+        .interact_text()
+        .map_err(unavailable)?;
+
+    Ok(NewLocalTargetInput {
+        docker_context,
+        container_name: candidate.name.clone(),
+        container_id: candidate.id.clone(),
+        username,
+        password,
+        central_database: DatabaseName::try_from(central_database)
+            .map_err(|_| PromptError::InvalidCentralDatabase)?,
+    })
+}
+
+pub fn confirm_target_replacement() -> Result<bool, PromptError> {
+    Confirm::with_theme(&SimpleTheme)
+        .with_prompt("Replace the currently configured local target?")
+        .default(false)
+        .interact()
+        .map_err(unavailable)
 }
 
 pub fn confirm_profile_removal(name: &ProfileName) -> Result<bool, PromptError> {
@@ -155,7 +221,7 @@ mod tests {
             .password_feedback_mask('*')
             .build();
 
-        let password = read_password_with_config(config).unwrap();
+        let password = read_password_with_config("MySQL password: ", config).unwrap();
         let rendered = fs::read_to_string(output.path()).unwrap();
 
         assert_eq!(password, "pasted password !@# á");
@@ -171,7 +237,7 @@ mod tests {
             .password_feedback_mask('*')
             .build();
 
-        let error = read_password_with_config(config).unwrap_err();
+        let error = read_password_with_config("MySQL password: ", config).unwrap_err();
 
         assert_eq!(
             error.to_string(),

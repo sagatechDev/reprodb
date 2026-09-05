@@ -9,6 +9,7 @@ O projeto está no início da implementação. O backlog e as decisões técnica
 - [`docs/research`](docs/research).
 - [`docs/exit-codes.md`](docs/exit-codes.md).
 - [`docs/profiles.md`](docs/profiles.md), para o ciclo de vida dos source profiles;
+- [`docs/setup.md`](docs/setup.md), para configurar o target Docker local;
 - [`docs/ui-ux-test-guide.md`](docs/ui-ux-test-guide.md), para experimentar a CLI sem alterar a máquina.
 
 ## Desenvolvimento
@@ -31,7 +32,7 @@ Os spikes são deliberadamente separados do crate principal e não representam a
 
 ## Prévia da experiência
 
-Enquanto os fluxos reais ainda estão sendo implementados, é possível percorrer a UX planejada sem acessar Docker, MySQL, Keychain ou arquivos de configuração:
+Enquanto os demais fluxos ainda estão sendo implementados, é possível percorrer a UX planejada sem acessar Docker, MySQL, Keychain ou arquivos de configuração:
 
 ```bash
 ./scripts/preview-cli.sh

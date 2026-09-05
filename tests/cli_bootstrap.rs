@@ -105,12 +105,12 @@ fn valid_but_unimplemented_command_fails_explicitly() {
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
-        .arg("setup")
+        .arg("doctor")
         .assert()
         .failure()
         .code(1)
         .stderr(predicate::str::contains(
-            "command `setup` is not implemented yet",
+            "command `doctor` is not implemented yet",
         ));
 }
 

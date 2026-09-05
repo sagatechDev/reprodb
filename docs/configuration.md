@@ -43,7 +43,7 @@ allow_domain_lookup = true
 
 Senha não é um campo válido do schema. O TOML armazena apenas chaves opacas com escopo `source` ou `target`; a credencial é persistida pelo credential store do sistema operacional.
 
-O Docker context detectado durante o cadastro fica em `client_runtime.docker_context`. O `setup` deve selecionar um target no mesmo context, impedindo que verificação, dump e restore sejam executados acidentalmente em Engines diferentes.
+O Docker context detectado durante o cadastro fica em `client_runtime.docker_context`. O `setup` seleciona um target no mesmo context, impedindo que verificação, dump e restore sejam executados acidentalmente em Engines diferentes.
 
 Os modos TLS iniciais são `required`, `preferred` e `disabled`. Um profile marcado como `production = true` somente é válido com `tls_mode = "required"`. O modo padrão de novos profiles é `required`; `preferred` e `disabled` precisam ser escolhidos explicitamente para fontes que não sejam de produção.
 

@@ -4,7 +4,7 @@ use secrecy::SecretString;
 use thiserror::Error;
 
 use crate::{
-    domain::{MysqlTlsMode, MysqlVersion},
+    domain::{ContainerId, MysqlTlsMode, MysqlVersion},
     infrastructure::{
         credentials::{MYSQL_OPTION_FILE_CONTAINER_PATH, MysqlOptionFile, OptionFileError},
         mysql::{ApprovedMysqlClient, ClientCatalog, ClientCatalogError},
@@ -98,6 +98,16 @@ where
         .map_err(Into::into)
     }
 
+    pub fn create_container_option_file(
+        &self,
+        port: u16,
+        username: &str,
+        password: &SecretString,
+        tls_mode: MysqlTlsMode,
+    ) -> Result<MysqlOptionFile, DockerClientError> {
+        MysqlOptionFile::create("127.0.0.1", port, username, password, tls_mode).map_err(Into::into)
+    }
+
     pub async fn probe_connection(
         &self,
         client: &PreparedMysqlClient,
@@ -112,6 +122,32 @@ where
             .output(&connection_probe_spec(
                 client.docker_context(),
                 client.approved(),
+                option_file.path(),
+            ))
+            .await?;
+        if !output.success {
+            return Err(classify_connection_failure(&output));
+        }
+
+        parse_server_info(&output.stdout)
+    }
+
+    pub async fn probe_container_connection(
+        &self,
+        client: &PreparedMysqlClient,
+        container: &ContainerId,
+        option_file: &MysqlOptionFile,
+    ) -> Result<MysqlServerInfo, DockerClientError> {
+        if !option_file.path().is_absolute() {
+            return Err(DockerClientError::OptionFilePathNotAbsolute);
+        }
+
+        let output = self
+            .runner
+            .output(&container_connection_probe_spec(
+                client.docker_context(),
+                client.approved(),
+                container,
                 option_file.path(),
             ))
             .await?;
@@ -304,6 +340,36 @@ fn connection_probe_spec(
         OsString::from("--rm"),
         OsString::from("--pull=never"),
         OsString::from("--add-host=host.docker.internal:host-gateway"),
+        OsString::from("--mount"),
+        mount,
+        OsString::from(client.image()),
+        OsString::from("mysql"),
+        OsString::from(format!(
+            "--defaults-file={MYSQL_OPTION_FILE_CONTAINER_PATH}"
+        )),
+        OsString::from("--no-login-paths"),
+        OsString::from("--batch"),
+        OsString::from("--skip-column-names"),
+        OsString::from("--execute"),
+        OsString::from(VERSION_QUERY),
+    ])
+}
+
+fn container_connection_probe_spec(
+    context: &str,
+    client: ApprovedMysqlClient,
+    container: &ContainerId,
+    option_file: &Path,
+) -> ProcessSpec {
+    let mut mount = OsString::from("type=bind,src=");
+    mount.push(option_file.as_os_str());
+    mount.push(format!(",dst={MYSQL_OPTION_FILE_CONTAINER_PATH},readonly"));
+
+    docker_spec(context).args([
+        OsString::from("run"),
+        OsString::from("--rm"),
+        OsString::from("--pull=never"),
+        OsString::from(format!("--network=container:{}", container.as_str())),
         OsString::from("--mount"),
         mount,
         OsString::from(client.image()),
@@ -655,6 +721,48 @@ mod tests {
         assert!(matches!(error, DockerClientError::SourceNetworkUnavailable));
         assert!(!error.to_string().contains(marker));
         assert!(!format!("{error:?}").contains(marker));
+    }
+
+    #[tokio::test]
+    async fn target_probe_joins_the_selected_container_network_by_exact_id() {
+        let client = ClientCatalog::resolve("8.4").unwrap();
+        let runtime = DockerMysqlClientRuntime::new(FakeRunner::new([ProcessOutput::success(
+            "8.4.4\tMySQL Community Server - GPL\n",
+        )]));
+        let option_file = runtime
+            .create_container_option_file(
+                3306,
+                "root",
+                &SecretString::from("password-that-must-not-leak"),
+                MysqlTlsMode::Required,
+            )
+            .unwrap();
+        assert!(
+            fs::read_to_string(option_file.path())
+                .unwrap()
+                .contains("host=\"127.0.0.1\"")
+        );
+        let prepared = PreparedMysqlClient {
+            approved: client,
+            docker_context: "desktop-linux".to_owned(),
+        };
+        let container = ContainerId::try_from("a".repeat(64)).unwrap();
+
+        let server = runtime
+            .probe_container_connection(&prepared, &container, &option_file)
+            .await
+            .unwrap();
+
+        assert_eq!(server.version.to_string(), "8.4.4");
+        let commands = runtime.runner.commands();
+        let args = arguments(&commands[0]);
+        assert!(args.contains(&format!("--network=container:{}", container.as_str())));
+        assert!(!args.join(" ").contains("password-that-must-not-leak"));
+        assert!(
+            !args
+                .iter()
+                .any(|argument| matches!(argument.as_str(), "sh" | "bash" | "-c"))
+        );
     }
 
     #[test]

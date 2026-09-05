@@ -26,6 +26,49 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
             print!("{}", cli::preview::setup(&style));
             Ok(())
         }
+        Commands::Setup(_) => {
+            let repository = ConfigRepository::discover()?;
+            let service = application::SetupService::new(repository);
+            let discovery = infrastructure::docker::DockerTargetDiscovery::new(
+                infrastructure::process::TokioProcessRunner,
+            );
+            let (docker_context, candidates) = discovery.discover().await?;
+            print!(
+                "{}",
+                cli::setup::render_discovered(&style, &docker_context, &candidates)
+            );
+            if candidates.is_empty() {
+                return Err(application::SetupServiceError::NoCandidates.into());
+            }
+
+            let selected = cli::prompt::select_local_target(&candidates)?;
+            let candidate = &candidates[selected];
+            if candidate.state != infrastructure::docker::ContainerState::Running {
+                return Err(application::SetupServiceError::Verification(
+                    application::TargetVerificationError::ContainerNotRunning,
+                )
+                .into());
+            }
+            if service.has_local_target()? && !cli::prompt::confirm_target_replacement()? {
+                print!("{}", cli::setup::render_cancelled(&style));
+                return Ok(());
+            }
+
+            let input = cli::prompt::collect_local_target(docker_context, candidate)?;
+            println!("\n{}", cli::setup::render_verifying(&style, candidate));
+            let verifier = infrastructure::mysql::DockerLocalTargetVerifier::new(
+                infrastructure::process::TokioProcessRunner,
+            );
+            let configured = service
+                .configure(
+                    &infrastructure::credentials::OsCredentialStore,
+                    &verifier,
+                    input,
+                )
+                .await?;
+            print!("{}", cli::setup::render_configured(&style, &configured));
+            Ok(())
+        }
         Commands::Profile(arguments) => match arguments.command {
             ProfileCommands::Add(arguments) if arguments.preview => {
                 let profile = ProfileName::try_from(arguments.name)?;

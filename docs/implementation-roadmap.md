@@ -152,7 +152,7 @@ O arquivo é montado read-only no client container, referenciado por `--defaults
 
 ### 3.6 Target Docker selecionado no setup
 
-`setup` lista containers candidatos usando `docker ps -a --format json` e confirma o escolhido com `docker inspect` e uma conexão MySQL real.
+`setup` obtém os IDs completos com `docker container ls -a --no-trunc --quiet`, consulta metadata estruturada com `docker container inspect` e confirma o escolhido com uma conexão MySQL real.
 
 Não basta procurar `mysql` no nome da imagem. A descoberta considera:
 
@@ -558,6 +558,8 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 #### RDB-025 — Implementar `reprodb setup`
 
 **Labels:** `priority:p0`, `type:feature`, `area:docker`, `area:security`
+
+**Status:** em andamento — descoberta e seleção de containers existentes, rejeição de context remoto, alertas de bind, senha mascarada, verificação real por ID e persistência transacional estão implementadas e validadas contra `mysql-8` no macOS. Inicialização de container parado, criação de target dedicado e execução real em Linux permanecem pendentes.
 
 **Escopo:**
 

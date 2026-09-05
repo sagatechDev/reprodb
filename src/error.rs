@@ -1,10 +1,14 @@
 use thiserror::Error;
 
 use crate::{
-    application::{CredentialProvisionError, ProfileServiceError, SourceVerificationError},
+    application::{
+        CredentialProvisionError, ProfileServiceError, SetupServiceError, SourceVerificationError,
+        TargetVerificationError,
+    },
     cli::prompt::PromptError,
     domain::ValueObjectError,
     infrastructure::config::ConfigError,
+    infrastructure::docker::DockerDiscoveryError,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,6 +60,12 @@ pub enum AppError {
     #[error(transparent)]
     Prompt(#[from] PromptError),
 
+    #[error(transparent)]
+    DockerDiscovery(#[from] DockerDiscoveryError),
+
+    #[error(transparent)]
+    Setup(#[from] SetupServiceError),
+
     #[error("command `{command}` is not implemented yet")]
     CommandNotImplemented { command: &'static str },
 
@@ -97,6 +107,34 @@ impl AppError {
             }
             Self::Configuration(_) => ErrorCategory::Configuration,
             Self::Prompt(_) => ErrorCategory::Usage,
+            Self::DockerDiscovery(_) => ErrorCategory::Docker,
+            Self::Setup(SetupServiceError::Config(_)) => ErrorCategory::Configuration,
+            Self::Setup(SetupServiceError::NoCandidates) => ErrorCategory::Docker,
+            Self::Setup(SetupServiceError::InvalidField { .. }) => ErrorCategory::Usage,
+            Self::Setup(SetupServiceError::Verification(
+                TargetVerificationError::ClientUnavailable
+                | TargetVerificationError::UnsupportedServerSeries,
+            )) => ErrorCategory::Dependency,
+            Self::Setup(SetupServiceError::Verification(
+                TargetVerificationError::AuthenticationFailed,
+            )) => ErrorCategory::Credential,
+            Self::Setup(SetupServiceError::Verification(
+                TargetVerificationError::ContainerNotRunning
+                | TargetVerificationError::ConnectionUnavailable
+                | TargetVerificationError::InvalidMetadata,
+            )) => ErrorCategory::Docker,
+            Self::Setup(SetupServiceError::Provision(
+                CredentialProvisionError::Credential(_)
+                | CredentialProvisionError::CredentialAlreadyExists
+                | CredentialProvisionError::ConfigAndRollback { .. },
+            ))
+            | Self::Setup(SetupServiceError::PreviousCredentialCleanup { .. }) => {
+                ErrorCategory::Credential
+            }
+            Self::Setup(SetupServiceError::Provision(
+                CredentialProvisionError::InvalidCredentialReference
+                | CredentialProvisionError::Config { .. },
+            )) => ErrorCategory::Configuration,
             Self::CommandNotImplemented { .. } => ErrorCategory::General,
             Self::Interrupted => ErrorCategory::Interrupted,
         }
