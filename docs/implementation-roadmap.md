@@ -546,7 +546,7 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 
 **Labels:** `priority:p0`, `type:feature`, `area:config`, `area:credentials`
 
-**Status:** em andamento — a prévia segura da jornada de cadastro e os cenários simulados de `setup`, `doctor` e `pull` estão disponíveis para validação antecipada de UI/UX; persistência, prompts reais e conexão continuam pendentes.
+**Status:** em andamento — `list`, `use` e `remove` já operam sobre a configuração real; `remove` confirma a ação e limpa a credencial depois de retirar sua referência. A prévia segura da jornada de `add` e os cenários simulados de `setup`, `doctor` e `pull` continuam disponíveis para validação antecipada de UI/UX. Coleta real do cadastro, TLS e teste da conexão antes do commit continuam pendentes.
 
 **Escopo:** `add`, `list`, `use`, `remove`; prompts interativos; senha sem echo; teste da conexão antes do commit.
 

@@ -2,7 +2,8 @@ use clap::Parser;
 use reprodb::{Cli, execute};
 use std::process::ExitCode;
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -13,7 +14,7 @@ fn main() -> ExitCode {
 
     let cli = Cli::parse();
 
-    match execute(cli) {
+    match execute(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");

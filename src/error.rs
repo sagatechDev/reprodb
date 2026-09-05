@@ -1,6 +1,9 @@
 use thiserror::Error;
 
-use crate::domain::ValueObjectError;
+use crate::{
+    application::ProfileServiceError, cli::prompt::PromptError, domain::ValueObjectError,
+    infrastructure::config::ConfigError,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErrorCategory {
@@ -42,6 +45,15 @@ pub enum AppError {
     #[error(transparent)]
     InvalidValue(#[from] ValueObjectError),
 
+    #[error(transparent)]
+    Profile(#[from] ProfileServiceError),
+
+    #[error(transparent)]
+    Configuration(#[from] ConfigError),
+
+    #[error(transparent)]
+    Prompt(#[from] PromptError),
+
     #[error("command `{command}` is not implemented yet")]
     CommandNotImplemented { command: &'static str },
 
@@ -53,6 +65,13 @@ impl AppError {
     pub const fn category(&self) -> ErrorCategory {
         match self {
             Self::InvalidValue(..) => ErrorCategory::Usage,
+            Self::Profile(ProfileServiceError::Config(_))
+            | Self::Profile(ProfileServiceError::NotFound) => ErrorCategory::Configuration,
+            Self::Profile(ProfileServiceError::CredentialCleanup { .. }) => {
+                ErrorCategory::Credential
+            }
+            Self::Configuration(_) => ErrorCategory::Configuration,
+            Self::Prompt(_) => ErrorCategory::Usage,
             Self::CommandNotImplemented { .. } => ErrorCategory::General,
             Self::Interrupted => ErrorCategory::Interrupted,
         }
@@ -101,5 +120,18 @@ mod tests {
 
         assert_eq!(error.to_string(), "command `pull` is not implemented yet");
         assert_eq!(error.exit_code(), 1);
+    }
+
+    #[test]
+    fn failed_credential_cleanup_uses_the_credential_exit_code() {
+        let error = AppError::Profile(ProfileServiceError::CredentialCleanup {
+            orphaned_key: crate::domain::CredentialKey::new(crate::domain::CredentialScope::Source),
+            source: crate::infrastructure::credentials::CredentialError::StoreUnavailable {
+                operation: crate::infrastructure::credentials::CredentialOperation::Delete,
+            },
+        });
+
+        assert_eq!(error.exit_code(), 11);
+        assert!(!error.to_string().contains("password"));
     }
 }

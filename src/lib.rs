@@ -15,8 +15,9 @@ use cli::output::OutputStyle;
 pub use cli::{Cli, Commands};
 use domain::{ProfileName, TenantLookup};
 pub use error::{AppError, ErrorCategory};
+use infrastructure::config::ConfigRepository;
 
-pub fn execute(cli: Cli) -> Result<(), AppError> {
+pub async fn execute(cli: Cli) -> Result<(), AppError> {
     tracing::debug!(command = cli.command.name(), "command received");
     let style = OutputStyle::stdout(cli.color);
 
@@ -29,6 +30,33 @@ pub fn execute(cli: Cli) -> Result<(), AppError> {
             ProfileCommands::Add(arguments) if arguments.preview => {
                 let profile = ProfileName::try_from(arguments.name)?;
                 print!("{}", cli::preview::profile_add(&style, &profile));
+                Ok(())
+            }
+            ProfileCommands::List => {
+                let service = application::ProfileService::new(ConfigRepository::discover()?);
+                let profiles = service.list()?;
+                print!("{}", cli::profile::render_list(&style, &profiles));
+                Ok(())
+            }
+            ProfileCommands::Use(arguments) => {
+                let name = ProfileName::try_from(arguments.name)?;
+                let service = application::ProfileService::new(ConfigRepository::discover()?);
+                service.activate(&name)?;
+                print!("{}", cli::profile::render_activated(&style, &name));
+                Ok(())
+            }
+            ProfileCommands::Remove(arguments) => {
+                let name = ProfileName::try_from(arguments.name)?;
+                let confirmed = arguments.yes || cli::prompt::confirm_profile_removal(&name)?;
+                if !confirmed {
+                    print!("{}", cli::profile::render_removal_cancelled(&style));
+                    return Ok(());
+                }
+                let service = application::ProfileService::new(ConfigRepository::discover()?);
+                let removal = service
+                    .remove(&infrastructure::credentials::OsCredentialStore, &name)
+                    .await?;
+                print!("{}", cli::profile::render_removed(&style, &name, removal));
                 Ok(())
             }
             _ => Err(AppError::CommandNotImplemented { command: "profile" }),

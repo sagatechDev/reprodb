@@ -2,6 +2,8 @@ use clap::{Args, Parser, Subcommand};
 
 pub mod output;
 pub mod preview;
+pub mod profile;
+pub mod prompt;
 
 pub use output::ColorChoice;
 
@@ -73,7 +75,7 @@ pub enum ProfileCommands {
     Use(ProfileNameArgs),
 
     /// Remove a source profile and its credential.
-    Remove(ProfileNameArgs),
+    Remove(ProfileRemoveArgs),
 }
 
 #[derive(Debug, Args)]
@@ -99,6 +101,17 @@ pub struct ProfileNameArgs {
     /// Profile name.
     #[arg(value_name = "NAME")]
     pub name: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ProfileRemoveArgs {
+    /// Profile name.
+    #[arg(value_name = "NAME")]
+    pub name: String,
+
+    /// Remove without an interactive confirmation.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 }
 
 #[derive(Debug, Args)]
@@ -191,6 +204,21 @@ mod tests {
         };
         assert_eq!(arguments.name, "salt-local");
         assert!(arguments.preview);
+    }
+
+    #[test]
+    fn parses_non_interactive_profile_removal() {
+        let cli =
+            Cli::try_parse_from(["reprodb", "profile", "remove", "salt-source", "--yes"]).unwrap();
+
+        let Commands::Profile(arguments) = cli.command else {
+            panic!("expected profile command");
+        };
+        let ProfileCommands::Remove(arguments) = arguments.command else {
+            panic!("expected profile remove command");
+        };
+        assert_eq!(arguments.name, "salt-source");
+        assert!(arguments.yes);
     }
 
     #[test]

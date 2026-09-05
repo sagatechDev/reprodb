@@ -8,6 +8,7 @@ O projeto está no início da implementação. O backlog e as decisões técnica
 - [`docs/adr`](docs/adr);
 - [`docs/research`](docs/research).
 - [`docs/exit-codes.md`](docs/exit-codes.md).
+- [`docs/profiles.md`](docs/profiles.md), para o ciclo de vida dos source profiles;
 - [`docs/ui-ux-test-guide.md`](docs/ui-ux-test-guide.md), para experimentar a CLI sem alterar a máquina.
 
 ## Desenvolvimento
