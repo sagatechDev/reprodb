@@ -117,4 +117,4 @@ Isso deve virar uma asserção da futura construção de comandos do `DockerCliR
 - persistência durável com `fsync`, checksum e metadata pertencem à implementação do cache, não a este spike;
 - a fixture de aproximadamente 1,7 MiB prova compatibilidade funcional, não representa o impacto de um tenant real no source.
 
-RDB-003 prova a viabilidade técnica do núcleo. Ela não encerra a milestone 0 e não autoriza conexão com produção enquanto RDB-002, RDB-004 e RDB-005 estiverem abertas.
+RDB-003 prova a viabilidade técnica do núcleo. Ela não encerra a milestone 0 e não autoriza conexão com produção enquanto RDB-002 e RDB-005 estiverem abertas.

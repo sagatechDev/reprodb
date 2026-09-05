@@ -419,6 +419,8 @@ Critério da milestone: provar conectividade, autenticação, dump, compressão 
 
 **Labels:** `priority:p0`, `type:spike`, `area:credentials`, `area:security`
 
+**Status:** concluída — [ADR 0001: transporte de credenciais](adr/0001-credential-transport.md), com serializer e autenticação real validados no spike.
+
 **Objetivo:** fixar uma estratégia única para source e target.
 
 **Decisão esperada:** keyring → `SecretString` → option file temporário restrito → mount read-only → `--defaults-file`.
@@ -886,7 +888,8 @@ Não iniciar integração de produção antes de concluir as milestones 0 a 6.
 
 ## 13. Referências técnicas externas
 
-- MySQL option files: <https://dev.mysql.com/doc/refman/8.0/en/option-file-options.html>
+- MySQL option files: <https://dev.mysql.com/doc/refman/8.4/en/option-files.html>
+- MySQL option-file handling: <https://dev.mysql.com/doc/refman/8.4/en/option-file-options.html>
 - MySQL `mysqldump`: <https://dev.mysql.com/doc/refman/8.0/en/mysqldump.html>
 - Docker Official Image — MySQL: <https://hub.docker.com/_/mysql>
 - Docker container list: <https://docs.docker.com/reference/cli/docker/container/ls/>

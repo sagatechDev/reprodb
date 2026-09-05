@@ -54,6 +54,14 @@ O comportamento de memória pode ser comparado com streams sintéticos de aproxi
 
 O teste usa o RSS máximo reportado pelo sistema e falha se o stream 20 vezes maior consumir mais de três vezes a memória do menor. Ele é uma proteção inicial contra buffering acidental, não um benchmark de produção.
 
+O transporte da credencial também possui um teste real contra MySQL:
+
+```bash
+./run-credential-test.sh
+```
+
+Ele autentica uma senha com espaços, aspas simples e duplas, `#`, `;`, barra invertida, newline, tab e carriage return. Também verifica modo `0600`, mount read-only e ausência de um marcador secreto no container e no erro de autenticação.
+
 ## Uso
 
 O option file deve ser absoluto, possuir permissões restritas e seguir o formato MySQL:
@@ -70,7 +78,7 @@ protocol=TCP
 Dump:
 
 ```bash
-cargo run -- \
+cargo run --bin reprodb-streaming-spike -- \
   dump \
   mysql:<tag>@sha256:<digest> \
   /absolute/path/source.cnf \
@@ -81,7 +89,7 @@ cargo run -- \
 Restore, depois que o database target já existir:
 
 ```bash
-cargo run -- \
+cargo run --bin reprodb-streaming-spike -- \
   restore \
   mysql:<tag>@sha256:<digest> \
   /absolute/path/target.cnf \

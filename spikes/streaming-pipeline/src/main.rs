@@ -182,6 +182,7 @@ async fn dump_to_partial(
         "mysqldump",
         &[
             format!("--defaults-file={CLIENT_CONFIG_PATH}"),
+            "--no-login-paths".into(),
             "--single-transaction".into(),
             "--quick".into(),
             "--no-tablespaces".into(),
@@ -267,6 +268,7 @@ async fn restore(
         "mysql",
         &[
             format!("--defaults-file={CLIENT_CONFIG_PATH}"),
+            "--no-login-paths".into(),
             "--binary-mode".into(),
             database.into(),
         ],
