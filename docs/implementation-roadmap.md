@@ -354,6 +354,8 @@ Critério da milestone: provar conectividade, autenticação, dump, compressão 
 
 **Labels:** `priority:p0`, `type:spike`, `area:mysql`, `area:security`
 
+**Status:** concluída — [relatório do baseline MySQL](research/mysql-baseline-2026-09-05.md).
+
 **Objetivo:** substituir a suposição genérica “Salt usa MySQL 8” por uma matriz concreta para desenvolvimento e testes, sem acessar produção.
 
 **Escopo:**
@@ -370,6 +372,8 @@ Critério da milestone: provar conectividade, autenticação, dump, compressão 
 #### RDB-002 — Spike do client MySQL em Docker no macOS e Linux
 
 **Labels:** `priority:p0`, `type:spike`, `area:mysql`, `area:docker`, `area:cross-platform`
+
+**Status:** em andamento — [resultado do spike](research/docker-client-spike.md); caminho macOS local validado, Linux/VPN pendentes.
 
 **Objetivo:** provar que um client container alcança os mesmos hosts acessíveis pelo DBeaver.
 
