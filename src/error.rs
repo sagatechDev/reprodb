@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::domain::ValueObjectError;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErrorCategory {
     General,
@@ -37,6 +39,9 @@ impl ErrorCategory {
 
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error(transparent)]
+    InvalidValue(#[from] ValueObjectError),
+
     #[error("command `{command}` is not implemented yet")]
     CommandNotImplemented { command: &'static str },
 
@@ -47,6 +52,7 @@ pub enum AppError {
 impl AppError {
     pub const fn category(&self) -> ErrorCategory {
         match self {
+            Self::InvalidValue(..) => ErrorCategory::Usage,
             Self::CommandNotImplemented { .. } => ErrorCategory::General,
             Self::Interrupted => ErrorCategory::Interrupted,
         }

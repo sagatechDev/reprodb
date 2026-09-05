@@ -8,6 +8,7 @@ O projeto está no início da implementação. O backlog e as decisões técnica
 - [`docs/adr`](docs/adr);
 - [`docs/research`](docs/research).
 - [`docs/exit-codes.md`](docs/exit-codes.md).
+- [`docs/ui-ux-test-guide.md`](docs/ui-ux-test-guide.md), para experimentar a CLI sem alterar a máquina.
 
 ## Desenvolvimento
 
@@ -26,3 +27,13 @@ cargo test --all-features
 ```
 
 Os spikes são deliberadamente separados do crate principal e não representam a arquitetura final da aplicação.
+
+## Prévia da experiência
+
+Enquanto os fluxos reais ainda estão sendo implementados, é possível percorrer a UX planejada sem acessar Docker, MySQL, Keychain ou arquivos de configuração:
+
+```bash
+./scripts/preview-cli.sh
+```
+
+Cada saída simulada também pode ser executada separadamente com `--preview`. Consulte o [roteiro de teste de UI/UX](docs/ui-ux-test-guide.md).

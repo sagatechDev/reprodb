@@ -115,6 +115,79 @@ fn valid_but_unimplemented_command_fails_explicitly() {
 }
 
 #[test]
+fn setup_preview_is_safe_and_successful() {
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .args(["setup", "--preview"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Local MySQL setup (preview)").and(
+            predicate::str::contains("Docker and local configuration were not changed"),
+        ));
+}
+
+#[test]
+fn profile_add_preview_shows_the_planned_questions() {
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .args(["profile", "add", "salt-local", "--preview"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Add source profile (preview)")
+                .and(predicate::str::contains("MySQL host"))
+                .and(predicate::str::contains("Salt Central"))
+                .and(predicate::str::contains("nothing was saved")),
+        );
+}
+
+#[test]
+fn doctor_preview_never_claims_that_checks_were_executed() {
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .args(["doctor", "--preview"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Ready to pull a tenant")
+                .and(predicate::str::contains("were not executed")),
+        );
+}
+
+#[test]
+fn pull_preview_can_show_the_fresh_path() {
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .args(["pull", "guerra", "--fresh", "--preview"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Fresh dump requested")
+                .and(predicate::str::contains("Tenant    guerra"))
+                .and(predicate::str::contains("were not accessed")),
+        );
+}
+
+#[test]
+fn preview_rejects_a_profile_name_that_could_control_the_terminal() {
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .args(["profile", "add", "bad\nname", "--preview"])
+        .assert()
+        .failure()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "profile name has an invalid format",
+        ));
+}
+
+#[test]
 fn errors_do_not_repeat_tenant_input() {
     let mut command = Command::cargo_bin("reprodb").unwrap();
 

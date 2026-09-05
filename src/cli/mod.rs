@@ -1,5 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 
+pub mod preview;
+
 /// Local CLI for reproducing Salt tenant databases.
 #[derive(Debug, Parser)]
 #[command(name = "reprodb", version, about)]
@@ -11,13 +13,13 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     /// Configure the local Docker target.
-    Setup,
+    Setup(PreviewArgs),
 
     /// Manage MySQL source profiles.
     Profile(ProfileArgs),
 
     /// Validate configuration and local dependencies.
-    Doctor,
+    Doctor(PreviewArgs),
 
     /// Create a managed cached dump without restoring it.
     Dump(TenantArgs),
@@ -35,9 +37,9 @@ pub enum Commands {
 impl Commands {
     pub fn name(&self) -> &'static str {
         match self {
-            Self::Setup => "setup",
+            Self::Setup(_) => "setup",
             Self::Profile(_) => "profile",
-            Self::Doctor => "doctor",
+            Self::Doctor(_) => "doctor",
             Self::Dump(_) => "dump",
             Self::Restore(_) => "restore",
             Self::Pull(_) => "pull",
@@ -55,7 +57,7 @@ pub struct ProfileArgs {
 #[derive(Debug, Subcommand)]
 pub enum ProfileCommands {
     /// Add a source profile through interactive prompts.
-    Add(ProfileNameArgs),
+    Add(ProfileAddArgs),
 
     /// List configured source profiles.
     List,
@@ -65,6 +67,24 @@ pub enum ProfileCommands {
 
     /// Remove a source profile and its credential.
     Remove(ProfileNameArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PreviewArgs {
+    /// Show the planned interactive experience without making changes.
+    #[arg(long)]
+    pub preview: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ProfileAddArgs {
+    /// Profile name.
+    #[arg(value_name = "NAME")]
+    pub name: String,
+
+    /// Show the planned interactive experience without making changes.
+    #[arg(long)]
+    pub preview: bool,
 }
 
 #[derive(Debug, Args)]
@@ -101,6 +121,10 @@ pub struct PullArgs {
     /// Ignore a valid cache entry and create a fresh dump.
     #[arg(long)]
     pub fresh: bool,
+
+    /// Show the planned flow without connecting, dumping or restoring.
+    #[arg(long)]
+    pub preview: bool,
 }
 
 #[derive(Debug, Args)]
@@ -136,6 +160,22 @@ mod tests {
         };
         assert_eq!(arguments.tenant, "sagatec");
         assert!(arguments.fresh);
+        assert!(!arguments.preview);
+    }
+
+    #[test]
+    fn parses_profile_add_preview() {
+        let cli =
+            Cli::try_parse_from(["reprodb", "profile", "add", "salt-local", "--preview"]).unwrap();
+
+        let Commands::Profile(arguments) = cli.command else {
+            panic!("expected profile command");
+        };
+        let ProfileCommands::Add(arguments) = arguments.command else {
+            panic!("expected profile add command");
+        };
+        assert_eq!(arguments.name, "salt-local");
+        assert!(arguments.preview);
     }
 
     #[test]
