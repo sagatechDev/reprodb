@@ -534,6 +534,8 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 
 **Labels:** `priority:p0`, `type:feature`, `area:mysql`, `area:docker`
 
+**Status:** implementação concluída e validada no Docker Desktop/macOS contra o `mysql-8` local; compilação Linux validada, com execução real em Docker Engine Linux/VPN ainda acompanhada pela RDB-002.
+
 **Escopo:** catálogo versionado, imagem fixada por digest, `image inspect`, `pull`, mount de option file, rede Mac/Linux e execução sem shell interpolation.
 
 **Aceite:** client incompatível ou digest divergente é recusado; ausência de rede produz erro acionável.

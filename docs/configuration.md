@@ -31,7 +31,7 @@ mysql_series = "8.4"
 production = false
 
 [profiles.salt-local.client]
-image = "mysql:8.4.4@sha256:<digest-aprovado>"
+image = "mysql:8.4.4@sha256:1d967fb75a64dc3c2894c69285becfc2304ae0c3c4f4c715c297f3c12d60b01c"
 
 [profiles.salt-local.tenant_resolver]
 type = "salt-central"

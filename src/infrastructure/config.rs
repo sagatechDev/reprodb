@@ -14,6 +14,7 @@ use thiserror::Error;
 use crate::domain::{
     ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseName, ProfileName,
 };
+use crate::infrastructure::mysql::{ClientCatalog, ClientCatalogError};
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 const CONFIG_FILE_NAME: &str = "reprodb.toml";
@@ -203,6 +204,21 @@ impl SourceProfileConfig {
         )?;
         validate_mysql_series(&self.mysql_series)?;
         self.client.validate()?;
+        match ClientCatalog::validate(&self.mysql_series, &self.client.image) {
+            Ok(_) => {}
+            Err(ClientCatalogError::UnsupportedSeries) => {
+                return Err(ConfigError::InvalidField {
+                    field: "profile.mysql_series",
+                    reason: "has no client approved by reprodb",
+                });
+            }
+            Err(ClientCatalogError::UnapprovedImage) => {
+                return Err(ConfigError::InvalidField {
+                    field: "profile.client.image",
+                    reason: "does not match the approved tag and digest",
+                });
+            }
+        }
         self.tenant_resolver.validate()
     }
 }
@@ -573,8 +589,11 @@ mod tests {
                 mysql_series: "8.4".to_owned(),
                 production: false,
                 client: MysqlClientConfig {
-                    image: "mysql:8.4.4@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_owned(),
+                    image: concat!(
+                        "mysql:8.4.4@sha256:",
+                        "1d967fb75a64dc3c2894c69285becfc2304ae0c3c4f4c715c297f3c12d60b01c"
+                    )
+                    .to_owned(),
                 },
                 tenant_resolver: TenantResolverConfig::SaltCentral {
                     central_database: DatabaseName::try_from("salt_central").unwrap(),
@@ -696,6 +715,23 @@ mod tests {
             error,
             ConfigError::InvalidField {
                 field: "local_target.credential_key",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_a_client_outside_the_approved_catalog() {
+        let temp = TempDir::new().unwrap();
+        let repository = test_repository(&temp);
+        let mut config = valid_config();
+        config.profiles.values_mut().next().unwrap().client.image = "mysql:8".to_owned();
+
+        let error = repository.save(&config).unwrap_err();
+        assert!(matches!(
+            error,
+            ConfigError::InvalidField {
+                field: "profile.client.image",
                 ..
             }
         ));
