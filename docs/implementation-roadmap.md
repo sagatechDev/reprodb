@@ -1,0 +1,902 @@
+# reprodb — Roadmap de implementação
+
+> Documento de referência para transformar o plano arquitetural do reprodb em milestones e issues executáveis.
+>
+> Estado da análise: 5 de setembro de 2026.
+
+## 1. Objetivo
+
+Construir uma CLI local em Rust que permita a um desenvolvedor reproduzir um tenant do Salt com um fluxo semelhante a:
+
+```bash
+reprodb setup
+reprodb profile add salt-local
+reprodb doctor
+reprodb pull sagatec
+```
+
+O fluxo completo deve:
+
+1. resolver o tenant a partir do cadastro do `salt_central`;
+2. conectar ao source MySQL por host/porta, como o DBeaver faz;
+3. executar uma versão conhecida do `mysqldump`;
+4. comprimir o stdout em Zstandard sem criar SQL cru em disco;
+5. publicar um artefato atômico no cache local;
+6. recriar o database no MySQL Docker escolhido durante o setup;
+7. restaurar o dump;
+8. garantir no `salt_central` local o registro mínimo necessário para inicializar o tenant;
+9. funcionar em macOS e Linux.
+
+Produção continua sendo apenas um source profile. Ela não terá outro dump engine; apenas políticas adicionais e uma matriz de compatibilidade validada.
+
+## 2. Evidências do ambiente real
+
+Esta seção registra o que foi observado no ambiente local usado para desenhar o backlog. Esses valores são evidência para o desenvolvimento, não defaults eternos do produto.
+
+| Item | Observação em 2026-09-05 | Consequência para o reprodb |
+|---|---|---|
+| Docker context | `desktop-linux`, endpoint Unix local | `setup` deve aceitar sockets Unix do Docker Desktop e do Linux, mas rejeitar contexts SSH/TCP remotos no MVP |
+| Container local | `mysql-8`, imagem configurada como `mysql:8` | Não confiar em tag major mutável para determinar compatibilidade |
+| Versão real do container | MySQL Community Server `8.4.4`, Linux `arm64` | A tag `mysql:8` já não significa necessariamente MySQL 8.0 |
+| Porta do target local | `3306` publicada em `0.0.0.0` | `setup` deve mostrar o bind e alertar quando MySQL estiver exposto além de loopback |
+| Clients no host macOS | `mysql` e `mysqldump` `8.0.45`, Homebrew, `arm64` | O host pode ter um client diferente do target; a CLI precisa controlar o client que usa |
+| Salt README | Declara MySQL 8.0 / MySQL >= 8.0 | A série exata de produção ainda precisa ser medida, não presumida |
+| Salt CI | Usa `mysql:8` | O CI também está sujeito à mudança silenciosa da tag major |
+| Databases locais | `salt_central` e vários `salt_*` | O resolver do Salt deve consultar o database central, não apenas aplicar um pattern cego |
+| `salt_central` local | 424 tabelas e aproximadamente 19 MiB | Não restaurar o database central inteiro só para registrar um tenant |
+| Tabelas observadas | Todas as tabelas `salt_*` observadas são InnoDB | `--single-transaction` é adequado para o estado local, mas produção ainda precisa de preflight |
+| FKs entre schemas | Nenhuma encontrada no ambiente examinado | Tenant e central podem ser restaurados separadamente, mas a aplicação ainda depende do registro de tenancy |
+| Objetos observados | Nenhuma view, trigger, routine ou event nos schemas locais examinados | O dump policy deve detectar esses objetos em produção e tornar sua inclusão explícita |
+| Collations | Mistura de `utf8mb4_0900_ai_ci` e `utf8mb4_unicode_ci` | Metadata precisa preservar charset e collation do database original |
+| Tamanho local | Tenants de aproximadamente 24 MiB até 2,56 GiB | Testes precisam cobrir streaming e um cenário de tamanho significativo |
+| GTID local | `OFF` | Ainda usar `--set-gtid-purged=OFF` para impedir comportamento diferente em outro source |
+| Tenant registry | `salt_central.tenants` usa `id` + JSON `data`; domains ficam em `domains` | O alias digitado pode ser resolvido por tenant ID ou domain |
+| Nome do database | `tenancy_db_name` quando presente; caso contrário, tenant ID | Essa regra deve ser reproduzida pelo `SaltCentralTenantResolver` |
+| Prefix/suffix do Salt | Ambos vazios em `config/tenancy.php` | Hoje o database normalmente tem o mesmo nome do tenant ID |
+| Snapshot existente no Salt | Já usa `mysqldump`, `mysql`, `--single-transaction`, `--no-tablespaces` e `--set-gtid-purged=OFF` | Há precedente funcional, mas o reprodb não deve repetir senha em argumento nem SQL cru persistente |
+
+Exemplos reais de resolução encontrados:
+
+```text
+domain sagatec -> tenant id salt_sagatec -> database salt_sagatec
+domain sigga   -> tenant id salt_sigga   -> database salt_sigga
+domain watt    -> tenant id salt_watt_construtora -> database salt_watt_construtora
+```
+
+O registro central pode conter campos sensíveis dentro do JSON `data`. O reprodb não deve imprimir, logar ou copiar esse JSON inteiro por padrão.
+
+## 3. Decisões arquiteturais adotadas
+
+### 3.1 Dois fluxos de configuração
+
+`reprodb setup` configura o ambiente local e o target Docker.
+
+`reprodb profile add NAME` configura um source MySQL.
+
+As duas conexões possuem credenciais diferentes e chaves diferentes no credential store.
+
+### 3.2 Autenticação interativa
+
+`profile add` pergunta, no mínimo:
+
+```text
+profile name
+host
+port
+username
+password
+MySQL series esperada
+TLS mode
+tenant resolver
+central database ou pattern
+```
+
+`setup` pergunta, no mínimo:
+
+```text
+Docker target
+target username
+target password
+central database local
+database pattern/policy local
+```
+
+Senhas são lidas sem echo e persistidas somente no keyring do sistema operacional. O TOML guarda apenas `credential_key`.
+
+### 3.3 Client MySQL controlado por Docker
+
+O runtime inicial dos clients será um container efêmero baseado em imagem oficial MySQL fixada por tag exata e digest.
+
+```text
+reprodb
+  -> docker run --rm <mysql-client-image> mysqldump
+  -> stdout
+  -> zstd
+  -> cache
+```
+
+A CLI não fará busca aberta na internet nem instalará pacotes no sistema. Ela consultará um catálogo de versões testadas presente no código. Quando a imagem estiver ausente, usará `docker pull` para obter exatamente a referência aprovada.
+
+O client do host poderá existir como adapter futuro ou fallback explícito, mas não será escolhido silenciosamente pelo MVP.
+
+### 3.4 Conexão igual à do DBeaver
+
+O source profile continua sendo descrito por host, porta, usuário e TLS. A diferença é que o processo MySQL roda em um container efêmero.
+
+O spike deve validar:
+
+- host externo acessível pela rede/VPN;
+- source publicado em `127.0.0.1` no macOS;
+- source publicado em `127.0.0.1` no Linux;
+- `host.docker.internal` no Docker Desktop;
+- `host-gateway` no Linux;
+- IPv4, DNS e erro de TLS.
+
+Se a VPN corporativa impedir tráfego originado pelo Docker, isso bloqueia o adapter Docker para produção e exige uma ADR antes de implementar download de binários no host.
+
+### 3.5 Configuração temporária do client
+
+A senha não será passada como `--password=...`.
+
+Cada execução cria um option file temporário com permissões restritas:
+
+```ini
+[client]
+host=...
+port=3306
+user=...
+password="..."
+protocol=TCP
+```
+
+O arquivo é montado read-only no client container, referenciado por `--defaults-file`, mantido até o processo terminar e removido por um guard mesmo em erro/cancelamento.
+
+### 3.6 Target Docker selecionado no setup
+
+`setup` lista containers candidatos usando `docker ps -a --format json` e confirma o escolhido com `docker inspect` e uma conexão MySQL real.
+
+Não basta procurar `mysql` no nome da imagem. A descoberta considera:
+
+- imagem/configuração;
+- porta 3306 exposta ou publicada;
+- estado e healthcheck;
+- versão retornada pelo servidor;
+- vendor retornado por `@@version_comment`;
+- redes Docker;
+- container ID exato.
+
+O setup também oferece criar um container dedicado ao reprodb. Essa é a opção recomendada. Um container criado pela ferramenta recebe a label:
+
+```text
+com.sagatech.reprodb.target=true
+```
+
+Ao selecionar um container existente, o reprodb armazena nome e ID. Se o nome apontar futuramente para outro ID, operações destrutivas são bloqueadas até um novo `setup`.
+
+### 3.7 Resolver real do Salt
+
+O MVP terá um `SaltCentralTenantResolver` além do resolver por pattern.
+
+Resolução conceitual:
+
+```text
+entrada do usuário
+  -> procurar por tenants.id exato
+  -> ou procurar por domains.domain exato
+  -> obter tenant id
+  -> usar data.tenancy_db_name quando presente
+  -> senão usar tenant id
+  -> validar DatabaseName novamente
+```
+
+O resolver não deve seguir automaticamente `tenancy_db_host`, `tenancy_db_username` ou `tenancy_db_password` encontrados no JSON central. O source profile é a autoridade da conexão. Uma divergência deve produzir erro explícito e pedir outro profile.
+
+### 3.8 Contexto central local mínimo
+
+Restaurar apenas `salt_<tenant>` pode não ser suficiente para o Salt inicializar a tenancy. O fluxo de restore deve garantir um registro mínimo no `salt_central` local:
+
+- tenant ID;
+- `tenancy_db_name` apontando para o database restaurado;
+- domain selecionado ou alias local;
+- timestamps necessários pelo schema.
+
+O JSON `data` completo não será copiado no MVP, pois pode conter credenciais de integrações. A issue específica deverá validar qual conjunto mínimo permite inicializar o Salt sem transportar secrets centrais.
+
+### 3.9 Pipeline assíncrono
+
+O pipeline utilizará Tokio e uma implementação Zstd assíncrona:
+
+```text
+mysqldump ChildStdout
+  -> contador/hash/progresso
+  -> ZstdEncoder
+  -> dump.sql.zst.part
+```
+
+Não haverá buffer proporcional ao dump. O crate síncrono `zstd` não será conectado diretamente a um `AsyncRead`; usar `async-compression` ou uma thread dedicada será decidido e provado no spike.
+
+### 3.10 Artefato atômico de cache
+
+A unidade de publicação será um diretório:
+
+```text
+cache/profiles/<source-fingerprint>/<database>/<dump-id>.part/
+  dump.sql.zst
+  metadata.json
+```
+
+Após sucesso completo:
+
+```text
+rename <dump-id>.part -> <dump-id>
+```
+
+`current.json` não será fonte de verdade. O cache selecionará o artefato completo mais recente e poderá reconstruir índices derivados.
+
+### 3.11 Restore somente de artefato gerenciado
+
+O MVP não aceitará um SQL/Zstd arbitrário por path como fluxo normal.
+
+```bash
+reprodb restore sagatec --dump-id <id>
+```
+
+Importação de arquivo externo ficará fora do MVP ou exigirá um comando separado, aviso explícito e validações adicionais.
+
+## 4. Modelo de configuração proposto
+
+Exemplo sem secrets:
+
+```toml
+schema_version = 1
+active_profile = "salt-local"
+
+[client_runtime]
+type = "docker"
+
+[local_target]
+docker_context = "desktop-linux"
+container_name = "mysql-8"
+container_id = "62a9bfe47f1c..."
+username = "root"
+credential_key = "targets/<uuid>"
+central_database = "salt_central"
+
+[profiles.salt-local]
+host = "127.0.0.1"
+port = 3306
+username = "root"
+credential_key = "profiles/<uuid>"
+mysql_family = "mysql"
+mysql_series = "8.4"
+production = false
+
+[profiles.salt-local.client]
+image = "mysql:<tested-tag>@sha256:<tested-digest>"
+
+[profiles.salt-local.tenant_resolver]
+type = "salt-central"
+central_database = "salt_central"
+allow_domain_lookup = true
+```
+
+O host salvo deve representar o endpoint informado pelo usuário. Traduções necessárias para o namespace de rede Docker pertencem ao `MysqlClientRuntime`, não ao domínio do profile.
+
+## 5. Comandos do MVP
+
+```bash
+reprodb setup
+
+reprodb profile add NAME
+reprodb profile list
+reprodb profile use NAME
+reprodb profile remove NAME
+
+reprodb doctor
+
+reprodb dump TENANT
+reprodb restore TENANT --dump-id ID
+reprodb pull TENANT
+reprodb pull TENANT --fresh
+
+reprodb cache list
+reprodb cache clean
+reprodb cache purge TENANT
+```
+
+## 6. Labels sugeridas
+
+Ao criar as issues no tracker, usar combinações destas labels:
+
+```text
+priority:p0
+priority:p1
+priority:p2
+
+type:spike
+type:feature
+type:test
+type:hardening
+type:docs
+
+area:cli
+area:config
+area:credentials
+area:mysql
+area:docker
+area:tenant
+area:cache
+area:restore
+area:security
+area:cross-platform
+```
+
+Os IDs `RDB-NNN` abaixo são estáveis dentro deste documento e podem ser usados no título da issue.
+
+## 7. Roadmap por milestones e issues
+
+| Milestone | Issues | Resultado esperado |
+|---|---|---|
+| 0 — Riscos técnicos | RDB-001 a RDB-005 | Pipeline e decisões críticas provados sem produção |
+| 1 — Bootstrap | RDB-010 a RDB-013 | Projeto Rust, CLI base, erros e infraestrutura de testes |
+| 2 — Configuração/setup | RDB-020 a RDB-026 | Source profiles e target Docker configuráveis com credenciais seguras |
+| 3 — Tenant Salt | RDB-030 a RDB-033 | Alias/ID resolvido pelo `salt_central` |
+| 4 — Dump/cache | RDB-041 a RDB-046 | Artefato Zstd atômico, íntegro e reutilizável |
+| 5 — Restore/pull | RDB-050 a RDB-055 | Tenant restaurado e inicializável pelo Salt com um comando |
+| 6 — Resiliência | RDB-060 a RDB-064 | Falhas, cancelamento, performance e macOS/Linux cobertos |
+| 7 — Produção | RDB-070 a RDB-074 | TLS, compatibilidade e piloto aprovados |
+
+### Milestone 0 — Eliminar riscos técnicos
+
+Critério da milestone: provar conectividade, autenticação, dump, compressão e restore em macOS e Linux antes de construir a aplicação completa.
+
+#### RDB-001 — Inventariar o baseline MySQL local e de CI do Salt
+
+**Labels:** `priority:p0`, `type:spike`, `area:mysql`, `area:security`
+
+**Objetivo:** substituir a suposição genérica “Salt usa MySQL 8” por uma matriz concreta para desenvolvimento e testes, sem acessar produção.
+
+**Escopo:**
+
+- registrar `VERSION()` e `@@version_comment` dos ambientes locais/testáveis;
+- registrar série, patch e vendor;
+- registrar GTID, charset/collation e TLS;
+- contar engines, views, triggers, routines e events;
+- documentar o que README, CI e containers realmente usam;
+- não consultar nem registrar dados de negócio.
+
+**Aceite:** relatório técnico versionado, sem host, usuário ou segredo sensível, que permita escolher client e target locais. A inspeção do source de produção continua reservada à Milestone 7.
+
+#### RDB-002 — Spike do client MySQL em Docker no macOS e Linux
+
+**Labels:** `priority:p0`, `type:spike`, `area:mysql`, `area:docker`, `area:cross-platform`
+
+**Objetivo:** provar que um client container alcança os mesmos hosts acessíveis pelo DBeaver.
+
+**Escopo:**
+
+- imagem oficial fixada por digest;
+- conexão a host externo/VPN;
+- conexão a uma porta publicada no host;
+- suporte a Docker Desktop e Docker Engine Linux;
+- option file read-only sem senha em argv;
+- stdout e stderr separados;
+- cancelamento e propagação de exit code.
+
+**Aceite:** `SELECT VERSION()` e um dump pequeno funcionam nos dois sistemas. Se VPN falhar, abrir ADR de runtime host antes de continuar.
+
+**Depende de:** RDB-001 apenas para escolher a imagem final; pode começar com o MySQL local.
+
+#### RDB-003 — Spike end-to-end dump → Zstd → restore
+
+**Labels:** `priority:p0`, `type:spike`, `area:mysql`, `area:docker`, `area:restore`
+
+**Objetivo:** provar o núcleo mais arriscado do produto.
+
+**Escopo:**
+
+- crate Rust descartável, independente da estrutura final do produto;
+- source MySQL efêmero;
+- fixture com UTF-8, NULL, bigint, datetime, decimal, blob, FK e volume significativo;
+- `mysqldump` por stdout;
+- compressão Zstd streaming;
+- decode streaming;
+- restore em outro MySQL;
+- comparação dos dados e schema;
+- Ctrl+C e limpeza do parcial.
+
+**Aceite:** teste automatizado reproduzível, RAM aproximadamente constante e nenhum `.sql` cru persistente.
+
+**Depende de:** RDB-002.
+
+#### RDB-004 — ADR do transporte de credenciais
+
+**Labels:** `priority:p0`, `type:spike`, `area:credentials`, `area:security`
+
+**Objetivo:** fixar uma estratégia única para source e target.
+
+**Decisão esperada:** keyring → `SecretString` → option file temporário restrito → mount read-only → `--defaults-file`.
+
+**Aceite:** testes com espaços, aspas, `#`, `;`, barra invertida e newline; segredo ausente de config, Debug, logs, argv e mensagens de erro.
+
+#### RDB-005 — ADR do contexto central necessário para reproduzir um tenant
+
+**Labels:** `priority:p0`, `type:spike`, `area:tenant`, `area:security`
+
+**Objetivo:** determinar quais campos mínimos de `salt_central.tenants` e `domains` devem existir localmente.
+
+**Escopo:**
+
+- inicializar o Salt com tenant local restaurado;
+- identificar campos realmente necessários;
+- excluir credenciais de integração e outros secrets;
+- definir comportamento para `tenant_links`;
+- decidir alias/domain local.
+
+**Aceite:** contrato de `LocalTenantRegistration` documentado e fixture automatizada que inicializa tenancy sem copiar o JSON central completo.
+
+### Milestone 1 — Bootstrap da aplicação
+
+Critério da milestone: binário compilável, command tree estável, testes unitários em macOS/Linux e composição fora dos handlers do clap.
+
+#### RDB-010 — Criar o projeto Rust e CI
+
+**Labels:** `priority:p0`, `type:feature`, `area:cli`, `area:cross-platform`
+
+**Escopo:**
+
+- `Cargo.toml` e `Cargo.lock`;
+- `src/lib.rs` como API testável;
+- `src/main.rs` como composition root;
+- `rustfmt`, Clippy e testes;
+- CI unitário em Linux e macOS;
+- MSRV documentada.
+
+**Aceite:** `cargo fmt --check`, `cargo clippy -- -D warnings` e `cargo test` passam nos dois sistemas.
+
+**Depende de:** RDB-003, para evitar consolidar uma arquitetura antes do spike.
+
+#### RDB-011 — Implementar a árvore inicial do clap com TDD
+
+**Labels:** `priority:p0`, `type:feature`, `area:cli`
+
+**Escopo:** `setup`, `profile`, `doctor`, `dump`, `restore`, `pull` e `cache` com argumentos previstos.
+
+**Aceite:** testes de `--help`, `--version`, comando inválido, tenant ausente e subcommand ausente usando `assert_cmd`.
+
+#### RDB-012 — Definir erros, exit codes e logging seguro
+
+**Labels:** `priority:p1`, `type:feature`, `area:cli`, `area:security`
+
+**Escopo:** erros tipados por categoria, mapeamento estável para exit code, mensagens acionáveis e `tracing` opt-in por `RUST_LOG`.
+
+**Aceite:** nenhum erro inclui secret, SQL do dump ou argv sensível; Ctrl+C é reservado para exit code 130.
+
+#### RDB-013 — Definir infraestrutura de testes e fixtures
+
+**Labels:** `priority:p1`, `type:test`, `area:mysql`, `area:docker`
+
+**Escopo:** builders, clock fake, credential store em memória, diretórios temporários, client runtime fake e fixtures SQL.
+
+**Aceite:** testes de aplicação não dependem do keyring nem do Docker; integrações reais são marcadas e executadas separadamente.
+
+### Milestone 2 — Configuração, credenciais e setup
+
+Critério da milestone: target Docker e múltiplos source profiles podem ser configurados sem secrets no TOML.
+
+#### RDB-020 — Implementar paths e config TOML transacional
+
+**Labels:** `priority:p0`, `type:feature`, `area:config`
+
+**Escopo:** `ProjectDirs`, `schema_version`, parse estrito, escrita em temporário + rename, permissões e lock de escrita.
+
+**Aceite:** primeira execução, TOML inválido, concorrência, falha de escrita e path abstraído são testados.
+
+#### RDB-021 — Implementar value objects do domínio
+
+**Labels:** `priority:p0`, `type:feature`, `area:tenant`, `area:security`
+
+**Escopo:** `ProfileName`, `TenantLookup`, `TenantId`, `DomainAlias`, `DatabaseName`, `ContainerName`, `ContainerId`, `CredentialKey` e `MysqlVersion`.
+
+**Aceite:** limites de tamanho/charset, databases administrativos, nomes maiores que o limite MySQL e inputs de injection são rejeitados.
+
+#### RDB-022 — Implementar CredentialStore e option files temporários
+
+**Labels:** `priority:p0`, `type:feature`, `area:credentials`, `area:security`
+
+**Escopo:** `OsCredentialStore`, `MemoryCredentialStore`, `SecretString`, arquivo temporário restrito e rollback de cadastro incompleto.
+
+**Aceite:** cobre o contrato da RDB-004 e funciona em keychain do macOS e backend suportado no Linux.
+
+#### RDB-023 — Implementar catálogo e runtime de client Docker
+
+**Labels:** `priority:p0`, `type:feature`, `area:mysql`, `area:docker`
+
+**Escopo:** catálogo versionado, imagem fixada por digest, `image inspect`, `pull`, mount de option file, rede Mac/Linux e execução sem shell interpolation.
+
+**Aceite:** client incompatível ou digest divergente é recusado; ausência de rede produz erro acionável.
+
+**Depende de:** RDB-002, RDB-004 e RDB-022.
+
+#### RDB-024 — Implementar comandos de profile
+
+**Labels:** `priority:p0`, `type:feature`, `area:config`, `area:credentials`
+
+**Escopo:** `add`, `list`, `use`, `remove`; prompts interativos; senha sem echo; teste da conexão antes do commit.
+
+**Aceite:** profile duplicado, remoção do ativo, keyring indisponível, conexão inválida e cleanup da credencial são testados.
+
+**Depende de:** RDB-020, RDB-022 e RDB-023.
+
+#### RDB-025 — Implementar `reprodb setup`
+
+**Labels:** `priority:p0`, `type:feature`, `area:docker`, `area:security`
+
+**Escopo:**
+
+- validar Docker e context local;
+- listar containers candidatos em JSON;
+- mostrar imagem, estado, versão, porta e redes;
+- mostrar o endereço de bind da porta e alertar para `0.0.0.0`/`::`;
+- permitir escolher existente;
+- oferecer criar container dedicado;
+- pedir credencial do target;
+- guardar container name + ID;
+- validar conexão real.
+
+**Aceite:** funciona com o container local atual, com container parado, sem candidatos e com um container customizado que realmente executa MySQL.
+
+**Depende de:** RDB-020, RDB-022 e RDB-023.
+
+#### RDB-026 — Implementar `reprodb doctor`
+
+**Labels:** `priority:p0`, `type:feature`, `area:config`, `area:mysql`, `area:docker`
+
+**Escopo:** config, profiles, keyring, Docker context, client image, target ID, source/target connection, versões, vendor, TLS, espaço livre e matriz de compatibilidade.
+
+**Aceite:** cada check falha isoladamente com ação recomendada; doctor não altera bancos.
+
+**Depende de:** RDB-020 a RDB-025.
+
+### Milestone 3 — Resolução de tenant Salt
+
+Critério da milestone: um alias como `sagatec` resolve de modo seguro para tenant e database reais.
+
+#### RDB-030 — Implementar PatternTenantResolver
+
+**Labels:** `priority:p1`, `type:feature`, `area:tenant`
+
+**Escopo:** pattern com exatamente um `{tenant}`, validação no carregamento e validação final de `DatabaseName`.
+
+**Aceite:** casos válidos, traversal, SQL injection, pattern inválido e databases administrativos são cobertos.
+
+#### RDB-031 — Implementar SaltCentralTenantResolver
+
+**Labels:** `priority:p0`, `type:feature`, `area:tenant`, `area:mysql`
+
+**Escopo:** lookup por `tenants.id` ou `domains.domain`, resolução de `tenancy_db_name`, output estruturado e validação final.
+
+**Aceite:** cobre tenants locais observados, alias inexistente, ambiguidade, JSON inválido e database bloqueado; não expõe o JSON `data` em logs.
+
+**Depende de:** RDB-021, RDB-023 e RDB-024.
+
+#### RDB-032 — Detectar overrides de conexão por tenant
+
+**Labels:** `priority:p1`, `type:hardening`, `area:tenant`, `area:security`
+
+**Escopo:** detectar `tenancy_db_host`, `port`, `username` ou `connection` diferentes do profile sem retornar passwords.
+
+**Aceite:** resolver bloqueia a operação e informa que o tenant requer outro source profile; nunca segue configuração central silenciosamente.
+
+#### RDB-033 — Criar fixtures do `salt_central`
+
+**Labels:** `priority:p1`, `type:test`, `area:tenant`
+
+**Escopo:** tenants por ID, domains, override de database, tenant links e JSON contendo chaves sensíveis fictícias.
+
+**Aceite:** testes provam resolução e ausência de secrets em snapshot/output.
+
+### Milestone 4 — Dump, compressão e cache
+
+Critério da milestone: `reprodb dump TENANT` gera um artefato `.sql.zst` atômico, íntegro e restaurável.
+
+#### RDB-041 — Implementar preflight e DumpPolicy MySQL 8
+
+**Labels:** `priority:p0`, `type:feature`, `area:mysql`, `area:security`
+
+**Flags iniciais:**
+
+```text
+--single-transaction
+--quick
+--no-tablespaces
+--hex-blob
+--set-gtid-purged=OFF
+--triggers
+--skip-lock-tables
+```
+
+**Escopo adicional:** versão/vendor, engines não InnoDB, DDL concorrente documentado, routines/events, definers e charset/collation do database.
+
+**Aceite:** argumentos são testados como lista ordenada; nenhuma shell string; policy incompatível bloqueia antes do dump.
+
+#### RDB-042 — Implementar compressão Zstd streaming e progresso
+
+**Labels:** `priority:p0`, `type:feature`, `area:cache`
+
+**Escopo:** `AsyncRead` → contador/hash → encoder → arquivo; nível inicial medido; bytes, tempo e throughput sem percentual falso.
+
+**Aceite:** roundtrip, dump grande e falha de encoder são testados; memória não cresce proporcionalmente ao input.
+
+#### RDB-043 — Implementar artefato e metadata atômicos
+
+**Labels:** `priority:p0`, `type:feature`, `area:cache`, `area:security`
+
+**Metadata:** tenant lookup, tenant ID, database, profile, source fingerprint, source/client version, charset/collation, policy version, timestamps, bytes, checksum e formato.
+
+**Aceite:** somente diretórios completos são visíveis como cache; crash em cada etapa deixa no máximo `.part` recuperável.
+
+#### RDB-044 — Implementar validade, TTL e fingerprint do cache
+
+**Labels:** `priority:p0`, `type:feature`, `area:cache`
+
+**Escopo:** TTL desde `completed_at`, default de duas horas, config fingerprint, checksum, arquivo ausente/corrompido e relógio futuro.
+
+**Aceite:** hit, miss, expired, profile alterado, policy alterada e `--fresh` são testados.
+
+#### RDB-045 — Implementar locks e cleanup oportunista
+
+**Labels:** `priority:p0`, `type:feature`, `area:cache`
+
+**Escopo:** advisory lock por source+database, lock separado por target+database, cleanup de expirados e partials órfãos sem remover operação ativa.
+
+**Aceite:** concorrência entre processos, crash e liberação de lock são testados no SO.
+
+#### RDB-046 — Entregar `reprodb dump`
+
+**Labels:** `priority:p0`, `type:feature`, `area:cli`, `area:mysql`, `area:cache`
+
+**Aceite:** resolve tenant, faz preflight, gera cache e apresenta caminho/ID/metadata sem executar restore.
+
+### Milestone 5 — Restore e pull
+
+Critério da milestone: um comando restaura o tenant no target selecionado e deixa o Salt capaz de inicializá-lo.
+
+#### RDB-050 — Implementar barreira de segurança do LocalTarget
+
+**Labels:** `priority:p0`, `type:hardening`, `area:docker`, `area:restore`, `area:security`
+
+**Escopo:** context local, container ID, vendor/version, credencial, allowlist do database e container dedicado/confirmado.
+
+**Aceite:** context remoto, ID trocado, database administrativo, target incompatível e ausência de setup bloqueiam antes de qualquer `DROP`.
+
+#### RDB-051 — Implementar RestoreEngine streaming
+
+**Labels:** `priority:p0`, `type:feature`, `area:restore`, `area:mysql`
+
+**Ordem obrigatória:** validar metadata → verificar checksum/Zstd → validar target → adquirir lock → drop/create com charset/collation original → importar → validar exit code.
+
+**Aceite:** dump corrompido não destrói o database existente; falha no import marca estado incompleto e permite retry sem novo dump.
+
+#### RDB-052 — Implementar registro central local mínimo
+
+**Labels:** `priority:p0`, `type:feature`, `area:tenant`, `area:restore`, `area:security`
+
+**Escopo:** implementar o contrato da RDB-005 e fazer upsert seguro no `salt_central` local após o restore tenant.
+
+**Aceite:** Salt inicializa o tenant pelo domain/ID local; nenhum secret central do source é copiado.
+
+#### RDB-053 — Entregar `reprodb restore`
+
+**Labels:** `priority:p0`, `type:feature`, `area:cli`, `area:restore`
+
+**Aceite:** aceita apenas `dump-id` gerenciado, mostra source/target, restaura e informa claramente o estado final.
+
+#### RDB-054 — Entregar `reprodb pull`
+
+**Labels:** `priority:p0`, `type:feature`, `area:cli`
+
+**Fluxo:** config → resolver → credencial → cache → dump se necessário → target gate → restore → registro central → success.
+
+**Aceite:** cache hit não acessa o source; `--fresh` sempre produz novo dump; retry de restore reutiliza o artefato.
+
+#### RDB-055 — Implementar comandos de cache
+
+**Labels:** `priority:p1`, `type:feature`, `area:cache`, `area:cli`
+
+**Escopo:** `list`, `clean` e `purge TENANT`, mostrando tamanho, idade, expiração, profile e integridade.
+
+**Aceite:** nunca remove artefato locked; remoções materiais são reportadas.
+
+### Milestone 6 — Resiliência, performance e cross-platform
+
+Critério da milestone: falhas deixam estado compreensível e o fluxo é comprovado em macOS e Linux.
+
+#### RDB-060 — Implementar cancelamento e supervisão de processos
+
+**Labels:** `priority:p0`, `type:hardening`, `area:cross-platform`
+
+**Escopo:** Ctrl+C durante dump, compressão e restore; kill + wait; fechamento de stdin; cleanup de option file/partial; liberação de locks.
+
+**Aceite:** nenhum child órfão conhecido, cache completo anterior preservado e exit code 130.
+
+#### RDB-061 — Implementar fault injection
+
+**Labels:** `priority:p0`, `type:test`, `area:mysql`, `area:cache`, `area:restore`
+
+**Cenários:** host/porta/senha inválidos, permission denied, disconnect, disco cheio, stderr grande, Docker parado, container ausente, imagem ausente, Zstd corrompido e falha no rename.
+
+**Aceite:** cada falha possui teste e mensagem acionável sem secret.
+
+#### RDB-062 — E2E real no Linux
+
+**Labels:** `priority:p0`, `type:test`, `area:cross-platform`
+
+**Aceite:** binário real executa `setup` não interativo de teste, profile, pull, cache hit e comparação do target em CI com Docker.
+
+#### RDB-063 — Smoke suite no macOS Intel/ARM
+
+**Labels:** `priority:p0`, `type:test`, `area:cross-platform`
+
+**Escopo:** paths, keychain, Docker Desktop, host gateway, imagem do client, sinais e permissões.
+
+**Aceite:** execução documentada em pelo menos Apple Silicon; Intel fica obrigatório se fizer parte do parque real.
+
+#### RDB-064 — Benchmark com tenant representativo
+
+**Labels:** `priority:p1`, `type:test`, `area:mysql`, `area:cache`
+
+**Métricas:** duração do dump/restore, bytes, ratio, throughput, pico de RAM, cache hit/miss e tempo total.
+
+**Aceite:** benchmark com tenant pequeno e outro de pelo menos centenas de MiB; nível Zstd escolhido com dados.
+
+### Milestone 7 — Hardening para produção
+
+Critério da milestone: source de produção é habilitado somente após compatibilidade, segurança e impacto medidos.
+
+#### RDB-070 — Implementar TLS do source
+
+**Labels:** `priority:p0`, `type:hardening`, `area:mysql`, `area:security`
+
+**Escopo:** `disabled`, `preferred`, `required`, `verify_ca`, `verify_identity`, CA/cert paths sem conteúdo sensível no TOML.
+
+**Aceite:** produção não pode degradar TLS silenciosamente; certificado inválido falha antes do dump.
+
+#### RDB-071 — Implementar políticas para source classificado como produção
+
+**Labels:** `priority:p0`, `type:hardening`, `area:security`
+
+**Escopo:** destaque visual, cache obrigatório, `--fresh` explícito, dump policy conservadora e proibição arquitetural de restore no source.
+
+**Aceite:** o booleano/classificação não é a única barreira; restore continua restrito ao `LocalTarget` validado.
+
+#### RDB-072 — Revisar permissões e objetos reais
+
+**Labels:** `priority:p0`, `type:hardening`, `area:mysql`
+
+**Escopo:** grants mínimos, InnoDB, views, triggers, routines, events, definers, GTID e testes de restore desses objetos.
+
+**Aceite:** matriz documentada e restore funcional dos objetos realmente usados pelo Salt.
+
+#### RDB-073 — Executar piloto controlado
+
+**Labels:** `priority:p0`, `type:test`, `area:mysql`, `area:security`
+
+**Escopo:** tenant pequeno, janela de baixo tráfego, acompanhamento do banco, medição, restore local e comparação funcional.
+
+**Aceite:** vários dumps/restores bem-sucedidos, impacto aceito pelo responsável e nenhuma falha de consistência conhecida.
+
+#### RDB-074 — Documentar segurança e operação
+
+**Labels:** `priority:p1`, `type:docs`, `area:security`
+
+**Escopo:** threat model, retenção, disco criptografado, cache contendo produção, incidentes, cleanup, troubleshooting e limitações de lock local.
+
+**Aceite:** documentação interna revisada antes da liberação ampla.
+
+## 8. Dependências e caminho crítico
+
+```text
+RDB-001 ─┐
+         ├─> RDB-002 ─> RDB-003 ─> RDB-010
+RDB-004 ─┘                         │
+                                   ├─> configuração/setup/profile
+                                   ├─> resolver Salt Central
+                                   └─> dump/cache/restore/pull
+
+RDB-005 ─> registro central local ─> pull realmente utilizável no Salt
+
+MVP local completo
+  ─> fault injection + macOS/Linux
+  ─> TLS + matriz do source real
+  ─> piloto de produção
+```
+
+Não iniciar integração de produção antes de concluir as milestones 0 a 6.
+
+## 9. Definition of Done do MVP local
+
+- [ ] `reprodb setup` encontra ou cria um target MySQL Docker e grava sua identidade.
+- [ ] `profile add` coleta conexão como o DBeaver, testa e salva a senha no keyring.
+- [ ] A versão do MySQL é detectada por consulta, não inferida de `mysql:8`.
+- [ ] O client é uma imagem conhecida, fixada e compatível.
+- [ ] `reprodb doctor` valida tudo antes do dump.
+- [ ] Alias ou tenant ID resolve via `salt_central`.
+- [ ] `tenancy_db_name` é respeitado.
+- [ ] Dump usa flags conservadoras e `--set-gtid-purged=OFF`.
+- [ ] Compressão e restore são streaming.
+- [ ] Nenhum SQL cru é persistido no fluxo normal.
+- [ ] Cache é atômico, possui checksum, TTL e source fingerprint.
+- [ ] Restore valida o artefato antes de dropar o database.
+- [ ] Target Docker remoto ou trocado é bloqueado.
+- [ ] Registro central local mínimo é criado sem copiar secrets.
+- [ ] Ctrl+C limpa child, partial, option file e lock.
+- [ ] E2E passa no Linux.
+- [ ] Smoke suite passa no macOS usado pela equipe.
+
+## 10. Definition of Done para produção
+
+- [ ] Versão/vendor exatos do source foram medidos.
+- [ ] Client/source/target pertencem a uma matriz testada.
+- [ ] TLS é verificado.
+- [ ] Engines e DDL concorrente foram avaliados.
+- [ ] Views/triggers/routines/events/definers reais foram restaurados em teste.
+- [ ] Permissões mínimas do usuário foram revisadas.
+- [ ] Nenhum segredo aparece em arquivo persistente, argv, logs ou erro.
+- [ ] Política de retenção de dados de produção foi aprovada.
+- [ ] Disco criptografado e diretório de cache adequado são requisitos documentados.
+- [ ] Piloto com tenant pequeno mediu duração e impacto.
+- [ ] Restore local foi validado funcionalmente no Salt.
+- [ ] Limitação de lock apenas local está documentada.
+
+## 11. Fora do MVP
+
+- servidor ou cache central;
+- S3, SQS, Redis ou Lambda;
+- coordenação entre computadores;
+- atualização automática da CLI;
+- busca aberta na internet por executáveis;
+- download/instalação silenciosa de pacotes no host;
+- MariaDB ou Percona sem matriz específica;
+- importação arbitrária de `.sql` ou `.sql.zst`;
+- cópia integral de `salt_central`;
+- cópia de credenciais de integração do tenant;
+- sanitização genérica de SQL;
+- criptografia própria de credentials;
+- parser SQL próprio;
+- restore em host MySQL arbitrário;
+- restore em Docker context remoto;
+- interface web.
+
+## 12. Referências do Salt usadas na análise
+
+- `Salt/config/tenancy.php`: prefix/suffix, central connection e database tenancy.
+- `Salt/app/Models/Tenant.php`: modelo `TenantWithDatabase`.
+- `Salt/vendor/stancl/tenancy/src/DatabaseConfig.php`: regra efetiva de `tenancy_db_name` ou tenant ID.
+- `Salt/app/Support/Testing/TenantBootstrap/TenantSnapshotManager.php`: snapshot existente com `mysqldump`/`mysql`.
+- `Salt/app/Support/Testing/TenantBootstrap/TenantCatalog.php`: tenants locais de teste.
+- `Salt/.github/workflows/cicd.yml`: serviço configurado com a tag mutável `mysql:8`.
+- `Salt/README.md`: baseline declarado de MySQL 8 e documentação do snapshot de tenant.
+
+## 13. Referências técnicas externas
+
+- MySQL option files: <https://dev.mysql.com/doc/refman/8.0/en/option-file-options.html>
+- MySQL `mysqldump`: <https://dev.mysql.com/doc/refman/8.0/en/mysqldump.html>
+- Docker Official Image — MySQL: <https://hub.docker.com/_/mysql>
+- Docker container list: <https://docs.docker.com/reference/cli/docker/container/ls/>
+- Docker contexts: <https://docs.docker.com/engine/manage-resources/contexts/>
+- Tokio processes: <https://docs.rs/tokio/latest/tokio/process/>
+- Async compression: <https://docs.rs/async-compression/latest/async_compression/>
+
+## 14. Regra de manutenção deste documento
+
+Este roadmap é a referência até as issues serem criadas no tracker.
+
+Quando uma decisão mudar:
+
+1. registrar uma ADR ou atualizar a seção de decisões;
+2. atualizar a issue afetada;
+3. ajustar dependências e Definition of Done;
+4. não alterar silenciosamente critérios de aceite já usados em implementação.
+
+Quando as issues forem criadas, registrar neste arquivo o link correspondente ao lado de cada `RDB-NNN`.
