@@ -4,6 +4,31 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 use uuid::Uuid;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MysqlTlsMode {
+    Disabled,
+    #[default]
+    Preferred,
+    Required,
+}
+
+impl MysqlTlsMode {
+    pub const fn option_value(self) -> &'static str {
+        match self {
+            Self::Disabled => "DISABLED",
+            Self::Preferred => "PREFERRED",
+            Self::Required => "REQUIRED",
+        }
+    }
+}
+
+impl fmt::Display for MysqlTlsMode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.option_value())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ValueKind {
     ProfileName,
@@ -436,6 +461,14 @@ impl FromStr for MysqlVersion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mysql_tls_mode_has_explicit_option_file_values() {
+        assert_eq!(MysqlTlsMode::Disabled.option_value(), "DISABLED");
+        assert_eq!(MysqlTlsMode::Preferred.option_value(), "PREFERRED");
+        assert_eq!(MysqlTlsMode::Required.option_value(), "REQUIRED");
+        assert_eq!(MysqlTlsMode::default(), MysqlTlsMode::Preferred);
+    }
 
     #[test]
     fn accepts_observed_salt_identifiers() {

@@ -12,7 +12,8 @@ use tempfile::NamedTempFile;
 use thiserror::Error;
 
 use crate::domain::{
-    ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseName, ProfileName,
+    ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseName, MysqlTlsMode,
+    ProfileName,
 };
 use crate::infrastructure::mysql::{ClientCatalog, ClientCatalogError};
 
@@ -120,6 +121,18 @@ impl AppConfig {
 
         if let Some(target) = &self.local_target {
             target.validate()?;
+            if let Some(runtime_context) = &self.client_runtime.docker_context
+                && runtime_context != &target.docker_context
+            {
+                return Err(ConfigError::InvalidField {
+                    field: "local_target.docker_context",
+                    reason: "must match the MySQL client runtime Docker context",
+                });
+            }
+        }
+
+        if let Some(context) = &self.client_runtime.docker_context {
+            validate_docker_context("client_runtime.docker_context", context)?;
         }
 
         for profile in self.profiles.values() {
@@ -142,6 +155,9 @@ pub enum ClientRuntimeKind {
 pub struct ClientRuntimeConfig {
     #[serde(rename = "type")]
     pub kind: ClientRuntimeKind,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker_context: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -157,7 +173,7 @@ pub struct LocalTargetConfig {
 
 impl LocalTargetConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        validate_plain_text("local_target.docker_context", &self.docker_context, 128)?;
+        validate_docker_context("local_target.docker_context", &self.docker_context)?;
         validate_plain_text("local_target.username", &self.username, 32)?;
         validate_credential_scope(
             "local_target.credential_key",
@@ -183,6 +199,8 @@ pub struct SourceProfileConfig {
     pub mysql_family: MysqlFamily,
     pub mysql_series: String,
     pub production: bool,
+    #[serde(default)]
+    pub tls_mode: MysqlTlsMode,
     pub client: MysqlClientConfig,
     pub tenant_resolver: TenantResolverConfig,
 }
@@ -203,6 +221,12 @@ impl SourceProfileConfig {
             CredentialScope::Source,
         )?;
         validate_mysql_series(&self.mysql_series)?;
+        if self.production && self.tls_mode != MysqlTlsMode::Required {
+            return Err(ConfigError::InvalidField {
+                field: "profile.tls_mode",
+                reason: "must be `required` for a production source",
+            });
+        }
         self.client.validate()?;
         match ClientCatalog::validate(&self.mysql_series, &self.client.image) {
             Ok(_) => {}
@@ -486,6 +510,21 @@ fn validate_plain_text(
     Ok(())
 }
 
+fn validate_docker_context(field: &'static str, value: &str) -> Result<(), ConfigError> {
+    let valid = !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'));
+    if !valid {
+        return Err(ConfigError::InvalidField {
+            field,
+            reason: "must contain only ASCII letters, digits, `_`, `.` or `-`",
+        });
+    }
+    Ok(())
+}
+
 fn validate_mysql_series(series: &str) -> Result<(), ConfigError> {
     validate_plain_text("profile.mysql_series", series, 16)?;
     let mut components = series.split('.');
@@ -588,6 +627,7 @@ mod tests {
                 mysql_family: MysqlFamily::Mysql,
                 mysql_series: "8.4".to_owned(),
                 production: false,
+                tls_mode: MysqlTlsMode::Preferred,
                 client: MysqlClientConfig {
                     image: concat!(
                         "mysql:8.4.4@sha256:",
@@ -732,6 +772,62 @@ mod tests {
             error,
             ConfigError::InvalidField {
                 field: "profile.client.image",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn production_profile_must_require_tls() {
+        let temp = TempDir::new().unwrap();
+        let repository = test_repository(&temp);
+        let mut config = valid_config();
+        let profile = config.profiles.values_mut().next().unwrap();
+        profile.production = true;
+        profile.tls_mode = MysqlTlsMode::Preferred;
+
+        let error = repository.save(&config).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigError::InvalidField {
+                field: "profile.tls_mode",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn local_target_and_client_runtime_must_share_a_docker_context() {
+        let temp = TempDir::new().unwrap();
+        let repository = test_repository(&temp);
+        let mut config = valid_config();
+        config.client_runtime.docker_context = Some("default".to_owned());
+
+        let error = repository.save(&config).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigError::InvalidField {
+                field: "local_target.docker_context",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn local_target_rejects_an_untrusted_docker_context_without_a_runtime_context() {
+        let temp = TempDir::new().unwrap();
+        let repository = test_repository(&temp);
+        let mut config = valid_config();
+        config.local_target.as_mut().unwrap().docker_context = "default\n--host=remote".to_owned();
+
+        let error = repository.save(&config).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigError::InvalidField {
+                field: "local_target.docker_context",
                 ..
             }
         ));

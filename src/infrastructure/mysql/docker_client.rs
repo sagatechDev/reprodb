@@ -4,7 +4,7 @@ use secrecy::SecretString;
 use thiserror::Error;
 
 use crate::{
-    domain::MysqlVersion,
+    domain::{MysqlTlsMode, MysqlVersion},
     infrastructure::{
         credentials::{MYSQL_OPTION_FILE_CONTAINER_PATH, MysqlOptionFile, OptionFileError},
         mysql::{ApprovedMysqlClient, ClientCatalog, ClientCatalogError},
@@ -49,6 +49,21 @@ where
         Self { runner }
     }
 
+    pub async fn current_context(&self) -> Result<String, DockerClientError> {
+        let output = self
+            .runner
+            .output(&ProcessSpec::new("docker").args(["context", "show"]))
+            .await?;
+        if !output.success {
+            return Err(DockerClientError::DockerUnavailable);
+        }
+        let context = std::str::from_utf8(&output.stdout)
+            .map_err(|_| DockerClientError::InvalidDockerContext)?
+            .trim();
+        validate_docker_context(context)?;
+        Ok(context.to_owned())
+    }
+
     pub async fn prepare(
         &self,
         docker_context: &str,
@@ -71,9 +86,16 @@ where
         port: u16,
         username: &str,
         password: &SecretString,
+        tls_mode: MysqlTlsMode,
     ) -> Result<MysqlOptionFile, DockerClientError> {
-        MysqlOptionFile::create(docker_source_host(source_host), port, username, password)
-            .map_err(Into::into)
+        MysqlOptionFile::create(
+            docker_source_host(source_host),
+            port,
+            username,
+            password,
+            tls_mode,
+        )
+        .map_err(Into::into)
     }
 
     pub async fn probe_connection(
@@ -529,6 +551,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn discovers_and_validates_the_current_docker_context() {
+        let runtime = DockerMysqlClientRuntime::new(FakeRunner::new([ProcessOutput::success(
+            "desktop-linux\n",
+        )]));
+
+        assert_eq!(runtime.current_context().await.unwrap(), "desktop-linux");
+        let commands = runtime.runner.commands();
+        assert_eq!(arguments(&commands[0]), ["context", "show"]);
+    }
+
+    #[tokio::test]
+    async fn rejects_untrusted_docker_context_output() {
+        let runtime = DockerMysqlClientRuntime::new(FakeRunner::new([ProcessOutput::success(
+            "default\n--host=unexpected",
+        )]));
+
+        assert!(matches!(
+            runtime.current_context().await,
+            Err(DockerClientError::InvalidDockerContext)
+        ));
+    }
+
+    #[tokio::test]
     async fn connection_probe_mounts_the_option_file_read_only_without_shell() {
         let client = ClientCatalog::resolve("8.4").unwrap();
         let runner = FakeRunner::new([ProcessOutput::success(
@@ -541,6 +586,7 @@ mod tests {
                 3306,
                 "root",
                 &SecretString::from("password-that-must-not-leak"),
+                MysqlTlsMode::Preferred,
             )
             .unwrap();
         let option_contents = fs::read_to_string(option_file.path()).unwrap();
@@ -592,6 +638,7 @@ mod tests {
                 3306,
                 "root",
                 &SecretString::from("secret"),
+                MysqlTlsMode::Preferred,
             )
             .unwrap();
         let marker = "sensitive-marker";

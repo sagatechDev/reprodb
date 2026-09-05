@@ -8,6 +8,8 @@ use secrecy::{ExposeSecret, SecretString};
 use tempfile::{Builder, TempDir};
 use thiserror::Error;
 
+use crate::domain::MysqlTlsMode;
+
 pub const MYSQL_OPTION_FILE_CONTAINER_PATH: &str = "/run/secrets/reprodb.cnf";
 const OPTION_FILE_NAME: &str = "client.cnf";
 
@@ -31,6 +33,7 @@ impl MysqlOptionFile {
         port: u16,
         username: &str,
         password: &SecretString,
+        tls_mode: MysqlTlsMode,
     ) -> Result<Self, OptionFileError> {
         validate_value("host", host)?;
         validate_value("username", username)?;
@@ -55,7 +58,7 @@ impl MysqlOptionFile {
             source,
         })?;
 
-        if let Err(error) = write_contents(file, host, port, username, password) {
+        if let Err(error) = write_contents(file, host, port, username, password, tls_mode) {
             let _ = fs::remove_file(&path);
             return Err(error);
         }
@@ -108,6 +111,7 @@ fn write_contents(
     port: u16,
     username: &str,
     password: &SecretString,
+    tls_mode: MysqlTlsMode,
 ) -> Result<(), OptionFileError> {
     let mut writer = BufWriter::new(file);
     writer
@@ -117,6 +121,7 @@ fn write_contents(
         .and_then(|_| write_option(&mut writer, "user", username))
         .and_then(|_| write_option(&mut writer, "password", password.expose_secret()))
         .and_then(|_| writer.write_all(b"protocol=TCP\n"))
+        .and_then(|_| writeln!(writer, "ssl-mode={}", tls_mode.option_value()))
         .and_then(|_| writer.flush())
         .map_err(|source| OptionFileError::Io {
             operation: "write the MySQL option file",
@@ -185,8 +190,14 @@ mod tests {
     #[test]
     fn escapes_mysql_option_file_metacharacters() {
         let password = SecretString::from(" leading '\"#;\\\n\t\r\u{0008} trailing ");
-        let option_file =
-            MysqlOptionFile::create("db.example.test", 3307, "user name", &password).unwrap();
+        let option_file = MysqlOptionFile::create(
+            "db.example.test",
+            3307,
+            "user name",
+            &password,
+            MysqlTlsMode::Required,
+        )
+        .unwrap();
 
         let rendered = fs::read_to_string(option_file.path()).unwrap();
         assert_eq!(
@@ -198,6 +209,7 @@ mod tests {
                 "user=\"user name\"\n",
                 "password=\" leading '\\\"#;\\\\\\n\\t\\r\\b trailing \"\n",
                 "protocol=TCP\n",
+                "ssl-mode=REQUIRED\n",
             )
         );
     }
@@ -210,6 +222,7 @@ mod tests {
             3306,
             "root",
             &SecretString::from(format!("invalid\0{marker}")),
+            MysqlTlsMode::Preferred,
         )
         .unwrap_err();
 
@@ -223,9 +236,14 @@ mod tests {
 
     #[test]
     fn guard_removes_the_private_directory_and_file_on_drop() {
-        let option_file =
-            MysqlOptionFile::create("localhost", 3306, "root", &SecretString::from("secret"))
-                .unwrap();
+        let option_file = MysqlOptionFile::create(
+            "localhost",
+            3306,
+            "root",
+            &SecretString::from("secret"),
+            MysqlTlsMode::Preferred,
+        )
+        .unwrap();
         let directory = option_file.directory_path().to_owned();
         let path = option_file.path().to_owned();
         assert!(path.exists());
@@ -238,9 +256,14 @@ mod tests {
 
     #[test]
     fn exposes_only_the_fixed_container_destination() {
-        let option_file =
-            MysqlOptionFile::create("localhost", 3306, "root", &SecretString::from("secret"))
-                .unwrap();
+        let option_file = MysqlOptionFile::create(
+            "localhost",
+            3306,
+            "root",
+            &SecretString::from("secret"),
+            MysqlTlsMode::Preferred,
+        )
+        .unwrap();
 
         assert_eq!(option_file.container_path(), "/run/secrets/reprodb.cnf");
     }
@@ -250,9 +273,14 @@ mod tests {
     fn creates_private_directory_and_file_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
-        let option_file =
-            MysqlOptionFile::create("localhost", 3306, "root", &SecretString::from("secret"))
-                .unwrap();
+        let option_file = MysqlOptionFile::create(
+            "localhost",
+            3306,
+            "root",
+            &SecretString::from("secret"),
+            MysqlTlsMode::Preferred,
+        )
+        .unwrap();
         let directory_mode = fs::metadata(option_file.directory_path())
             .unwrap()
             .permissions()

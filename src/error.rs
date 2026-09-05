@@ -1,7 +1,9 @@
 use thiserror::Error;
 
 use crate::{
-    application::ProfileServiceError, cli::prompt::PromptError, domain::ValueObjectError,
+    application::{CredentialProvisionError, ProfileServiceError, SourceVerificationError},
+    cli::prompt::PromptError,
+    domain::ValueObjectError,
     infrastructure::config::ConfigError,
 };
 
@@ -66,7 +68,30 @@ impl AppError {
         match self {
             Self::InvalidValue(..) => ErrorCategory::Usage,
             Self::Profile(ProfileServiceError::Config(_))
-            | Self::Profile(ProfileServiceError::NotFound) => ErrorCategory::Configuration,
+            | Self::Profile(ProfileServiceError::NotFound)
+            | Self::Profile(ProfileServiceError::AlreadyExists) => ErrorCategory::Configuration,
+            Self::Profile(ProfileServiceError::InvalidField { .. }) => ErrorCategory::Usage,
+            Self::Profile(ProfileServiceError::Verification(
+                SourceVerificationError::DockerUnavailable,
+            )) => ErrorCategory::Docker,
+            Self::Profile(ProfileServiceError::Verification(
+                SourceVerificationError::ClientUnavailable
+                | SourceVerificationError::UnsupportedServerSeries,
+            )) => ErrorCategory::Dependency,
+            Self::Profile(ProfileServiceError::Verification(
+                SourceVerificationError::NetworkUnavailable
+                | SourceVerificationError::AuthenticationFailed
+                | SourceVerificationError::InvalidMetadata,
+            )) => ErrorCategory::SourceConnection,
+            Self::Profile(ProfileServiceError::Provision(
+                CredentialProvisionError::Credential(_)
+                | CredentialProvisionError::CredentialAlreadyExists
+                | CredentialProvisionError::ConfigAndRollback { .. },
+            )) => ErrorCategory::Credential,
+            Self::Profile(ProfileServiceError::Provision(
+                CredentialProvisionError::InvalidCredentialReference
+                | CredentialProvisionError::Config { .. },
+            )) => ErrorCategory::Configuration,
             Self::Profile(ProfileServiceError::CredentialCleanup { .. }) => {
                 ErrorCategory::Credential
             }
@@ -133,5 +158,22 @@ mod tests {
 
         assert_eq!(error.exit_code(), 11);
         assert!(!error.to_string().contains("password"));
+    }
+
+    #[test]
+    fn source_verification_errors_keep_actionable_exit_categories() {
+        let authentication = AppError::Profile(ProfileServiceError::Verification(
+            SourceVerificationError::AuthenticationFailed,
+        ));
+        let docker = AppError::Profile(ProfileServiceError::Verification(
+            SourceVerificationError::DockerUnavailable,
+        ));
+        let client = AppError::Profile(ProfileServiceError::Verification(
+            SourceVerificationError::ClientUnavailable,
+        ));
+
+        assert_eq!(authentication.exit_code(), 30);
+        assert_eq!(docker.exit_code(), 60);
+        assert_eq!(client.exit_code(), 20);
     }
 }

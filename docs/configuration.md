@@ -12,6 +12,7 @@ active_profile = "salt-local"
 
 [client_runtime]
 type = "docker"
+docker_context = "desktop-linux"
 
 [local_target]
 docker_context = "desktop-linux"
@@ -29,6 +30,7 @@ credential_key = "source:550e8400-e29b-41d4-a716-446655440000"
 mysql_family = "mysql"
 mysql_series = "8.4"
 production = false
+tls_mode = "required"
 
 [profiles.salt-local.client]
 image = "mysql:8.4.4@sha256:1d967fb75a64dc3c2894c69285becfc2304ae0c3c4f4c715c297f3c12d60b01c"
@@ -39,7 +41,11 @@ central_database = "salt_central"
 allow_domain_lookup = true
 ```
 
-Senha não é um campo válido do schema. O TOML armazena apenas chaves opacas com escopo `source` ou `target`; a credencial será persistida pelo credential store do sistema operacional na RDB-022.
+Senha não é um campo válido do schema. O TOML armazena apenas chaves opacas com escopo `source` ou `target`; a credencial é persistida pelo credential store do sistema operacional.
+
+O Docker context detectado durante o cadastro fica em `client_runtime.docker_context`. O `setup` deve selecionar um target no mesmo context, impedindo que verificação, dump e restore sejam executados acidentalmente em Engines diferentes.
+
+Os modos TLS iniciais são `required`, `preferred` e `disabled`. Um profile marcado como `production = true` somente é válido com `tls_mode = "required"`. O modo padrão de novos profiles é `required`; `preferred` e `disabled` precisam ser escolhidos explicitamente para fontes que não sejam de produção.
 
 ## Garantias de persistência
 

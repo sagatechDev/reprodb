@@ -1,12 +1,79 @@
+use async_trait::async_trait;
+use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 
 use crate::{
-    domain::{CredentialKey, ProfileName},
+    domain::{
+        CredentialKey, CredentialScope, DatabaseName, MysqlTlsMode, MysqlVersion, ProfileName,
+    },
     infrastructure::{
-        config::{ConfigError, ConfigRepository},
+        config::{
+            ConfigError, ConfigRepository, MysqlClientConfig, MysqlFamily, SourceProfileConfig,
+            TenantResolverConfig,
+        },
         credentials::{CredentialError, CredentialStore},
+        mysql::ApprovedMysqlClient,
     },
 };
+
+use super::credential_transaction::{CredentialProvisionError, persist_config_with_credential};
+
+pub struct NewProfileInput {
+    pub name: ProfileName,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: SecretString,
+    pub tls_mode: MysqlTlsMode,
+    pub production: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedSource {
+    pub docker_context: String,
+    pub server_version: MysqlVersion,
+    pub vendor: String,
+    pub client: ApprovedMysqlClient,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileCreated {
+    pub name: ProfileName,
+    pub docker_context: String,
+    pub server_version: MysqlVersion,
+    pub vendor: String,
+    pub client_version: MysqlVersion,
+    pub tls_mode: MysqlTlsMode,
+}
+
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum SourceVerificationError {
+    #[error("Docker is unavailable; start Docker and verify its current context")]
+    DockerUnavailable,
+
+    #[error("the approved MySQL client could not be prepared")]
+    ClientUnavailable,
+
+    #[error("the MySQL source could not be reached; verify host, port, VPN and Docker networking")]
+    NetworkUnavailable,
+
+    #[error("the MySQL source rejected the username or password")]
+    AuthenticationFailed,
+
+    #[error("the MySQL source returned invalid connection metadata")]
+    InvalidMetadata,
+
+    #[error("the detected MySQL server series is not supported by the approved client catalog")]
+    UnsupportedServerSeries,
+}
+
+#[async_trait]
+pub trait SourceProfileVerifier: Send + Sync {
+    async fn verify(
+        &self,
+        input: &NewProfileInput,
+    ) -> Result<VerifiedSource, SourceVerificationError>;
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileSummary {
@@ -15,6 +82,7 @@ pub struct ProfileSummary {
     pub host: String,
     pub port: u16,
     pub mysql_series: String,
+    pub tls_mode: MysqlTlsMode,
     pub production: bool,
 }
 
@@ -25,6 +93,21 @@ pub enum ProfileServiceError {
 
     #[error("source profile does not exist; run `reprodb profile list`")]
     NotFound,
+
+    #[error("a source profile with this name already exists")]
+    AlreadyExists,
+
+    #[error("invalid source profile field `{field}`: {reason}")]
+    InvalidField {
+        field: &'static str,
+        reason: &'static str,
+    },
+
+    #[error(transparent)]
+    Verification(#[from] SourceVerificationError),
+
+    #[error(transparent)]
+    Provision(#[from] CredentialProvisionError),
 
     #[error(
         "profile was removed, but credential `{orphaned_key}` could not be deleted; retry cleanup from the OS credential store"
@@ -62,9 +145,91 @@ impl ProfileService {
                 host: profile.host,
                 port: profile.port,
                 mysql_series: profile.mysql_series,
+                tls_mode: profile.tls_mode,
                 production: profile.production,
             })
             .collect())
+    }
+
+    pub fn ensure_name_available(&self, name: &ProfileName) -> Result<(), ProfileServiceError> {
+        if self.repository.load()?.profiles.contains_key(name) {
+            return Err(ProfileServiceError::AlreadyExists);
+        }
+        Ok(())
+    }
+
+    pub async fn add(
+        &self,
+        store: &dyn CredentialStore,
+        verifier: &dyn SourceProfileVerifier,
+        input: NewProfileInput,
+    ) -> Result<ProfileCreated, ProfileServiceError> {
+        let mut config = self.repository.load()?;
+        if config.profiles.contains_key(&input.name) {
+            return Err(ProfileServiceError::AlreadyExists);
+        }
+        validate_new_profile(&input)?;
+
+        let verified = verifier.verify(&input).await?;
+        let detected_series = format!(
+            "{}.{}",
+            verified.server_version.major, verified.server_version.minor
+        );
+        if detected_series != verified.client.series() {
+            return Err(SourceVerificationError::UnsupportedServerSeries.into());
+        }
+
+        if let Some(configured_context) = &config.client_runtime.docker_context
+            && configured_context != &verified.docker_context
+        {
+            return Err(ProfileServiceError::InvalidField {
+                field: "client_runtime.docker_context",
+                reason: "differs from the current Docker context",
+            });
+        }
+        config.client_runtime.docker_context = Some(verified.docker_context.clone());
+
+        let credential_key = CredentialKey::new(CredentialScope::Source);
+        config.profiles.insert(
+            input.name.clone(),
+            SourceProfileConfig {
+                host: input.host,
+                port: input.port,
+                username: input.username,
+                credential_key,
+                mysql_family: MysqlFamily::Mysql,
+                mysql_series: detected_series,
+                production: input.production,
+                tls_mode: input.tls_mode,
+                client: MysqlClientConfig {
+                    image: verified.client.image().to_owned(),
+                },
+                tenant_resolver: TenantResolverConfig::SaltCentral {
+                    central_database: DatabaseName::try_from("salt_central")
+                        .expect("the fixed central database is valid"),
+                    allow_domain_lookup: true,
+                },
+            },
+        );
+        config.active_profile = Some(input.name.clone());
+
+        persist_config_with_credential(
+            store,
+            &self.repository,
+            credential_key,
+            input.password,
+            &config,
+        )
+        .await?;
+
+        Ok(ProfileCreated {
+            name: input.name,
+            docker_context: verified.docker_context,
+            server_version: verified.server_version,
+            vendor: verified.vendor,
+            client_version: verified.client.version(),
+            tls_mode: input.tls_mode,
+        })
     }
 
     pub fn activate(&self, name: &ProfileName) -> Result<(), ProfileServiceError> {
@@ -112,15 +277,66 @@ impl ProfileService {
     }
 }
 
+fn validate_new_profile(input: &NewProfileInput) -> Result<(), ProfileServiceError> {
+    validate_input_text("host", &input.host, 255, false)?;
+    validate_input_text("username", &input.username, 32, true)?;
+    if input.port == 0 {
+        return Err(ProfileServiceError::InvalidField {
+            field: "port",
+            reason: "must be between 1 and 65535",
+        });
+    }
+    if input.password.expose_secret().is_empty() || input.password.expose_secret().contains('\0') {
+        return Err(ProfileServiceError::InvalidField {
+            field: "password",
+            reason: "cannot be empty or contain NUL",
+        });
+    }
+    if input.production && input.tls_mode != MysqlTlsMode::Required {
+        return Err(ProfileServiceError::InvalidField {
+            field: "tls_mode",
+            reason: "must require TLS for a production source",
+        });
+    }
+    Ok(())
+}
+
+fn validate_input_text(
+    field: &'static str,
+    value: &str,
+    max_chars: usize,
+    allow_internal_whitespace: bool,
+) -> Result<(), ProfileServiceError> {
+    let invalid_whitespace = if allow_internal_whitespace {
+        value.trim() != value
+    } else {
+        value.chars().any(char::is_whitespace)
+    };
+    if value.is_empty()
+        || value.chars().count() > max_chars
+        || value.chars().any(char::is_control)
+        || invalid_whitespace
+    {
+        return Err(ProfileServiceError::InvalidField {
+            field,
+            reason: "has an invalid format or length",
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{
+        collections::BTreeMap,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use tempfile::TempDir;
 
     use super::*;
     use crate::{
-        domain::{CredentialScope, DatabaseName},
+        domain::{CredentialScope, DatabaseName, MysqlTlsMode},
         infrastructure::{
             config::{
                 AppConfig, AppPaths, MysqlClientConfig, MysqlFamily, SourceProfileConfig,
@@ -148,6 +364,11 @@ mod tests {
             mysql_family: MysqlFamily::Mysql,
             mysql_series: "8.4".to_owned(),
             production,
+            tls_mode: if production {
+                MysqlTlsMode::Required
+            } else {
+                MysqlTlsMode::Preferred
+            },
             client: MysqlClientConfig {
                 image: client.image().to_owned(),
             },
@@ -170,6 +391,156 @@ mod tests {
             ..AppConfig::default()
         };
         repository.save(&config).unwrap();
+    }
+
+    fn new_profile_input(name: &str) -> NewProfileInput {
+        NewProfileInput {
+            name: ProfileName::try_from(name).unwrap(),
+            host: "127.0.0.1".to_owned(),
+            port: 3306,
+            username: "root".to_owned(),
+            password: SecretString::from("password-that-must-not-leak"),
+            tls_mode: MysqlTlsMode::Preferred,
+            production: false,
+        }
+    }
+
+    struct FakeVerifier {
+        calls: AtomicUsize,
+        result: Result<VerifiedSource, SourceVerificationError>,
+    }
+
+    impl FakeVerifier {
+        fn successful() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                result: Ok(VerifiedSource {
+                    docker_context: "desktop-linux".to_owned(),
+                    server_version: "8.4.4".parse().unwrap(),
+                    vendor: "MySQL Community Server".to_owned(),
+                    client: ClientCatalog::resolve("8.4").unwrap(),
+                }),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl SourceProfileVerifier for FakeVerifier {
+        async fn verify(
+            &self,
+            _input: &NewProfileInput,
+        ) -> Result<VerifiedSource, SourceVerificationError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.result.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn verifies_and_persists_a_new_active_profile_and_credential() {
+        let temp = TempDir::new().unwrap();
+        let repository = repository(&temp);
+        let store = crate::infrastructure::credentials::MemoryCredentialStore::default();
+        let verifier = FakeVerifier::successful();
+
+        let created = ProfileService::new(repository.clone())
+            .add(&store, &verifier, new_profile_input("salt-source"))
+            .await
+            .unwrap();
+
+        assert_eq!(created.name.as_str(), "salt-source");
+        assert_eq!(created.server_version.to_string(), "8.4.4");
+        assert_eq!(verifier.calls.load(Ordering::SeqCst), 1);
+        let config = repository.load().unwrap();
+        assert_eq!(config.active_profile.unwrap().as_str(), "salt-source");
+        assert_eq!(
+            config.client_runtime.docker_context.as_deref(),
+            Some("desktop-linux")
+        );
+        let profile = config
+            .profiles
+            .get(&ProfileName::try_from("salt-source").unwrap())
+            .unwrap();
+        assert_eq!(profile.mysql_series, "8.4");
+        assert_eq!(profile.tls_mode, MysqlTlsMode::Preferred);
+        assert_eq!(
+            store
+                .get(&profile.credential_key)
+                .await
+                .unwrap()
+                .expose_secret(),
+            "password-that-must-not-leak"
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_profile_is_rejected_before_connection_or_credentials() {
+        let temp = TempDir::new().unwrap();
+        let repository = repository(&temp);
+        save_profiles(&repository);
+        let store = crate::infrastructure::credentials::MemoryCredentialStore::default();
+        let verifier = FakeVerifier::successful();
+
+        let error = ProfileService::new(repository)
+            .add(&store, &verifier, new_profile_input("local"))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ProfileServiceError::AlreadyExists));
+        assert_eq!(verifier.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn production_profile_requires_tls_before_connection() {
+        let temp = TempDir::new().unwrap();
+        let repository = repository(&temp);
+        let verifier = FakeVerifier::successful();
+        let mut input = new_profile_input("production");
+        input.production = true;
+        input.tls_mode = MysqlTlsMode::Preferred;
+
+        let error = ProfileService::new(repository)
+            .add(
+                &crate::infrastructure::credentials::MemoryCredentialStore::default(),
+                &verifier,
+                input,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProfileServiceError::InvalidField {
+                field: "tls_mode",
+                ..
+            }
+        ));
+        assert_eq!(verifier.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn connection_failure_leaves_config_and_credential_store_untouched() {
+        let temp = TempDir::new().unwrap();
+        let repository = repository(&temp);
+        let verifier = FakeVerifier {
+            calls: AtomicUsize::new(0),
+            result: Err(SourceVerificationError::AuthenticationFailed),
+        };
+
+        let error = ProfileService::new(repository.clone())
+            .add(
+                &crate::infrastructure::credentials::MemoryCredentialStore::default(),
+                &verifier,
+                new_profile_input("salt-source"),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProfileServiceError::Verification(SourceVerificationError::AuthenticationFailed)
+        ));
+        assert_eq!(repository.load().unwrap(), AppConfig::default());
+        assert!(!repository.paths().config_file().exists());
     }
 
     #[test]

@@ -1,8 +1,41 @@
 use crate::{
-    application::{ProfileRemoval, ProfileSummary},
+    application::{ProfileCreated, ProfileRemoval, ProfileSummary},
     cli::output::OutputStyle,
     domain::ProfileName,
 };
+
+pub fn render_add_intro(style: &OutputStyle, name: &ProfileName) -> String {
+    format!(
+        "{} · Add source profile\n\nProfile  {}\n",
+        style.brand("reprodb"),
+        style.value(name.as_str())
+    )
+}
+
+pub fn render_verifying(style: &OutputStyle, tls_mode: crate::domain::MysqlTlsMode) -> String {
+    format!(
+        "{} Detecting Docker context, preparing the approved client and testing the source...\n  TLS mode: {tls_mode}",
+        style.selected("›"),
+    )
+}
+
+pub fn render_created(style: &OutputStyle, created: &ProfileCreated) -> String {
+    format!(
+        "{ok} Source connection verified: {vendor} {server}\n\
+         {ok} Approved MySQL client ready: {client}\n\
+         {ok} Docker context: {context}\n\
+         {ok} TLS mode: {tls}\n\
+         {ok} Password saved in the OS credential store\n\
+         {ok} Source profile {name} saved and activated\n",
+        ok = style.success("✓"),
+        vendor = created.vendor,
+        server = created.server_version,
+        client = created.client_version,
+        context = created.docker_context,
+        tls = created.tls_mode,
+        name = style.value(created.name.as_str()),
+    )
+}
 
 pub fn render_list(style: &OutputStyle, profiles: &[ProfileSummary]) -> String {
     if profiles.is_empty() {
@@ -30,8 +63,8 @@ pub fn render_list(style: &OutputStyle, profiles: &[ProfileSummary]) -> String {
             style.muted("development")
         };
         output.push_str(&format!(
-            "{marker} {}{active}\n    {}:{} · MySQL {} · {policy}\n",
-            profile.name, profile.host, profile.port, profile.mysql_series,
+            "{marker} {}{active}\n    {}:{} · MySQL {} · TLS {} · {policy}\n",
+            profile.name, profile.host, profile.port, profile.mysql_series, profile.tls_mode,
         ));
     }
     output
@@ -81,6 +114,7 @@ mod tests {
             host: "127.0.0.1".to_owned(),
             port: 3306,
             mysql_series: "8.4".to_owned(),
+            tls_mode: crate::domain::MysqlTlsMode::Required,
             production,
         }
     }
@@ -91,6 +125,36 @@ mod tests {
 
         assert!(output.contains("No source profiles configured"));
         assert!(output.contains("reprodb profile add salt-source"));
+    }
+
+    #[test]
+    fn verification_message_makes_the_effective_tls_policy_visible() {
+        let output = render_verifying(&OutputStyle::plain(), crate::domain::MysqlTlsMode::Required);
+
+        assert!(output.contains("testing the source"));
+        assert!(output.contains("TLS mode: REQUIRED"));
+    }
+
+    #[test]
+    fn created_profile_output_reports_only_safe_connection_metadata() {
+        let client = crate::infrastructure::mysql::ClientCatalog::resolve("8.4").unwrap();
+        let output = render_created(
+            &OutputStyle::plain(),
+            &ProfileCreated {
+                name: ProfileName::try_from("salt-source").unwrap(),
+                docker_context: "desktop-linux".to_owned(),
+                server_version: "8.4.4".parse().unwrap(),
+                vendor: "MySQL Community Server".to_owned(),
+                client_version: client.version(),
+                tls_mode: crate::domain::MysqlTlsMode::Required,
+            },
+        );
+
+        assert!(output.contains("Source connection verified"));
+        assert!(output.contains("TLS mode: REQUIRED"));
+        assert!(output.contains("Docker context: desktop-linux"));
+        assert!(output.contains("saved and activated"));
+        assert!(!output.to_ascii_lowercase().contains("password-that"));
     }
 
     #[test]

@@ -62,6 +62,14 @@ Avalie principalmente:
 - se o resumo final é suficiente antes de salvar;
 - se a localização da senha está clara sem expor seu valor.
 
+A prévia usa asteriscos para representar o feedback do prompt real. Para conferir o comportamento em um terminal sem concluir o cadastro:
+
+```bash
+$REPRODB profile add ux-mask-check --color never
+```
+
+Aceite os defaults de host e porta, informe um usuário, digite ou cole uma senha e observe um `*` por caractere. Pressione `Ctrl+C` ainda nos prompts para sair antes da conexão e da persistência. Em geral, colar usa `Cmd+V` no macOS e `Ctrl+Shift+V` no Linux, mas o atalho é definido pelo terminal.
+
 O nome do profile já passa pela validação real. Experimente um nome inválido:
 
 ```bash
@@ -127,16 +135,25 @@ O script abaixo compila o binário e executa a sequência de descoberta e os qua
 
 Ele também para imediatamente se algum cenário retornar erro inesperado.
 
-## 6. Limite atual intencional
+## 6. Estado funcional atual
 
-Sem `--preview`, os handlers ainda falham explicitamente em vez de fingir que fizeram algo:
+O ciclo de source profiles já é real:
+
+```bash
+$REPRODB profile add salt-local
+$REPRODB profile list
+$REPRODB profile use salt-local
+$REPRODB profile remove salt-local
+```
+
+Esses comandos podem acessar Docker, MySQL, configuração e Keychain/Secret Service. Use `--preview` quando quiser apenas avaliar a apresentação. Os outros fluxos ainda falham explicitamente em vez de fingir que fizeram algo:
 
 ```bash
 $REPRODB setup
 echo $?
 ```
 
-Por enquanto, o resultado esperado é `command 'setup' is not implemented yet` e exit code `1`. Isso mudará conforme RDB-024, RDB-025 e RDB-026 forem concluídas.
+Por enquanto, o resultado esperado é `command 'setup' is not implemented yet` e exit code `1`. Isso mudará com RDB-025.
 
 ## 7. Checklist para feedback
 

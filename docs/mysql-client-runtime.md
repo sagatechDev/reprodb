@@ -42,6 +42,8 @@ type=bind,src=<arquivo-temporário>,dst=/run/secrets/reprodb.cnf,readonly
 
 `--defaults-file` é o primeiro argumento do client. A senha não aparece no argv, em variáveis de ambiente do container ou nos erros devolvidos pelo runtime.
 
+O mesmo option file recebe explicitamente `ssl-mode=REQUIRED`, `PREFERRED` ou `DISABLED`. `profile add` usa `REQUIRED` por padrão e não permite uma política mais fraca em profiles de produção. `REQUIRED` garante criptografia, mas ainda não valida CA e hostname; `VERIFY_CA`/`VERIFY_IDENTITY` exigirão uma etapa própria para distribuir e montar certificados com segurança.
+
 ## Diagnóstico
 
 Erros externos são convertidos para categorias sem repetir o stderr bruto:

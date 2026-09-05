@@ -32,6 +32,29 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
                 print!("{}", cli::preview::profile_add(&style, &profile));
                 Ok(())
             }
+            ProfileCommands::Add(arguments) => {
+                let name = ProfileName::try_from(arguments.name)?;
+                let service = application::ProfileService::new(ConfigRepository::discover()?);
+                service.ensure_name_available(&name)?;
+                println!("{}", cli::profile::render_add_intro(&style, &name));
+                let input = cli::prompt::collect_new_profile(name)?;
+                println!(
+                    "\n{}",
+                    cli::profile::render_verifying(&style, input.tls_mode)
+                );
+                let verifier = infrastructure::mysql::DockerSourceProfileVerifier::new(
+                    infrastructure::process::TokioProcessRunner,
+                );
+                let created = service
+                    .add(
+                        &infrastructure::credentials::OsCredentialStore,
+                        &verifier,
+                        input,
+                    )
+                    .await?;
+                print!("{}", cli::profile::render_created(&style, &created));
+                Ok(())
+            }
             ProfileCommands::List => {
                 let service = application::ProfileService::new(ConfigRepository::discover()?);
                 let profiles = service.list()?;
@@ -59,7 +82,6 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
                 print!("{}", cli::profile::render_removed(&style, &name, removal));
                 Ok(())
             }
-            _ => Err(AppError::CommandNotImplemented { command: "profile" }),
         },
         Commands::Doctor(arguments) if arguments.preview => {
             print!("{}", cli::preview::doctor(&style));

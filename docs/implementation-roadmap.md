@@ -85,11 +85,10 @@ host
 port
 username
 password
-MySQL series esperada
 TLS mode
-tenant resolver
-central database ou pattern
 ```
+
+A série MySQL e o vendor são detectados por uma conexão real; o usuário não precisa conhecê-los. O resolver inicial é o `SaltCentralTenantResolver`, fixado pela convenção observada no Salt, e poderá virar uma escolha quando houver um segundo caso real.
 
 `setup` pergunta, no mínimo:
 
@@ -101,7 +100,7 @@ central database local
 database pattern/policy local
 ```
 
-Senhas são lidas sem echo e persistidas somente no keyring do sistema operacional. O TOML guarda apenas `credential_key`.
+Durante a senha, a CLI mostra um `*` por caractere digitado ou colado. O conteúdo nunca é exibido e é persistido somente no keyring do sistema operacional. O TOML guarda apenas `credential_key`.
 
 ### 3.3 Client MySQL controlado por Docker
 
@@ -253,6 +252,7 @@ active_profile = "salt-local"
 
 [client_runtime]
 type = "docker"
+docker_context = "desktop-linux"
 
 [local_target]
 docker_context = "desktop-linux"
@@ -270,6 +270,7 @@ credential_key = "source:<uuid>"
 mysql_family = "mysql"
 mysql_series = "8.4"
 production = false
+tls_mode = "required"
 
 [profiles.salt-local.client]
 image = "mysql:<tested-tag>@sha256:<tested-digest>"
@@ -546,9 +547,9 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 
 **Labels:** `priority:p0`, `type:feature`, `area:config`, `area:credentials`
 
-**Status:** em andamento — `list`, `use` e `remove` já operam sobre a configuração real; `remove` confirma a ação e limpa a credencial depois de retirar sua referência. A prévia segura da jornada de `add` e os cenários simulados de `setup`, `doctor` e `pull` continuam disponíveis para validação antecipada de UI/UX. Coleta real do cadastro, TLS e teste da conexão antes do commit continuam pendentes.
+**Status:** implementada no macOS — `add`, `list`, `use` e `remove` operam sobre configuração e credential store reais. O cadastro usa senha mascarada por asteriscos, aceita texto colado, aplica TLS explícito, prepara o client Docker aprovado e faz conexão real com detecção de versão antes da persistência. Nenhum profile é salvo quando a verificação falha. A integração com `mysql-8` passou usando `REQUIRED`; a execução do fluxo completo com Secret Service permanece pendente no Linux.
 
-**Escopo:** `add`, `list`, `use`, `remove`; prompts interativos; senha sem echo; teste da conexão antes do commit.
+**Escopo:** `add`, `list`, `use`, `remove`; prompts interativos; senha mascarada sem revelar conteúdo; teste da conexão antes do commit.
 
 **Aceite:** profile duplicado, remoção do ativo, keyring indisponível, conexão inválida e cleanup da credencial são testados.
 

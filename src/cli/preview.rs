@@ -30,7 +30,7 @@ pub fn setup(style: &OutputStyle) -> String {
 
 ? Use mysql-8 as the local restore target?  {yes}
 ? Local MySQL username                   {root}
-? Local MySQL password                   ••••••••
+? Local MySQL password                   ********
 
 {review}
   Container   mysql-8
@@ -71,9 +71,9 @@ pub fn profile_add(style: &OutputStyle, profile: &ProfileName) -> String {
 ? MySQL host              mysql.salt.internal
 ? MySQL port              3306
 ? MySQL username          readonly_user
-? MySQL password          ••••••••
-? Connection security    Require TLS
+? MySQL password          ********
 ? Is this production?    No
+? Connection security    Require TLS
 
 {detection}
   {ok} Connected to the source
@@ -81,9 +81,9 @@ pub fn profile_add(style: &OutputStyle, profile: &ProfileName) -> String {
   {ok} Approved MySQL 8.4.4 client selected
 
 {tenant_resolution}
-  {ok} Central database detected: salt_central
-  {ok} Domain sagatec resolves to salt_sagatec
-  {ok} Domain polymer resolves to salt_polymer
+  Resolver    Salt Central
+  Database    salt_central
+  Examples    sagatec → salt_sagatec; polymer → salt_polymer
 
 {review}
   Source      readonly_user@mysql.salt.internal:3306
@@ -208,8 +208,9 @@ mod tests {
         let output = profile_add(&OutputStyle::plain(), &profile);
 
         assert!(output.contains("Profile\n  Name        salt-source"));
-        assert!(output.contains("sagatec resolves to salt_sagatec"));
-        assert!(output.contains("polymer resolves to salt_polymer"));
+        assert!(output.contains("sagatec → salt_sagatec"));
+        assert!(output.contains("polymer → salt_polymer"));
+        assert!(output.contains("MySQL password          ********"));
         assert!(output.contains("nothing was saved"));
         assert!(!output.contains("readonly_password"));
     }

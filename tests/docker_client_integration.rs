@@ -2,28 +2,39 @@
 
 use std::process::{Command, Stdio};
 
-use reprodb::infrastructure::{
-    mysql::{ClientCatalog, DockerMysqlClientRuntime},
-    process::TokioProcessRunner,
+use reprodb::{
+    domain::MysqlTlsMode,
+    infrastructure::{
+        mysql::{ClientCatalog, DockerMysqlClientRuntime},
+        process::TokioProcessRunner,
+    },
 };
 use secrecy::{SecretString, zeroize::Zeroize};
 
 #[tokio::test]
 #[ignore = "requires the local mysql-8 container and reads its test-only root password"]
 async fn docker_client_connects_to_the_local_mysql_source() {
-    let context =
-        std::env::var("REPRODB_TEST_DOCKER_CONTEXT").unwrap_or_else(|_| "default".to_owned());
+    let runtime = DockerMysqlClientRuntime::new(TokioProcessRunner);
+    let context = match std::env::var("REPRODB_TEST_DOCKER_CONTEXT") {
+        Ok(context) => context,
+        Err(_) => runtime.current_context().await.unwrap(),
+    };
     let container =
         std::env::var("REPRODB_TEST_MYSQL_CONTAINER").unwrap_or_else(|_| "mysql-8".to_owned());
     let password = local_container_root_password(&context, &container);
     let approved = ClientCatalog::resolve("8.4").unwrap();
-    let runtime = DockerMysqlClientRuntime::new(TokioProcessRunner);
     let prepared = runtime
         .prepare(&context, approved.series(), approved.image())
         .await
         .unwrap();
     let option_file = runtime
-        .create_option_file("127.0.0.1", 3306, "root", &password)
+        .create_option_file(
+            "127.0.0.1",
+            3306,
+            "root",
+            &password,
+            MysqlTlsMode::Preferred,
+        )
         .unwrap();
 
     let server = runtime
