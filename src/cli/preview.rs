@@ -1,131 +1,201 @@
-use crate::domain::{ProfileName, TenantLookup};
+use crate::{
+    cli::output::OutputStyle,
+    domain::{ProfileName, TenantLookup},
+};
 
-pub fn setup() -> String {
-    r#"reprodb · Local MySQL setup (preview)
+pub fn setup(style: &OutputStyle) -> String {
+    let brand = style.brand("reprodb");
+    let preview = style.attention("(preview)");
+    let docker = style.section("Docker");
+    let containers = style.section("MySQL containers found");
+    let review = style.section("Review");
+    let ok = style.success("✓");
+    let selected = style.selected("›");
+    let pending = style.attention("○");
+    let warning = style.attention("! Port is exposed on every host interface");
+    let footer =
+        style.attention("! Preview only — Docker and local configuration were not changed.");
 
-Docker
-  ✓ Docker is available
-  ✓ Context: desktop-linux
+    format!(
+        r#"{brand} · Local MySQL setup {preview}
 
-MySQL containers found
-  › mysql-8       mysql:8.4    running    localhost:3306
-    mysql-legacy  mysql:5.7    stopped    localhost:3307
+{docker}
+  {ok} Docker is available
+  {ok} Context: desktop-linux
 
-? Use mysql-8 as the local restore target?  Yes
-? Local MySQL username  root
-? Local MySQL password  ••••••••
+{containers}
+  {selected} mysql-8  mysql:8  running  0.0.0.0:3306 → 3306/tcp
+    Server detected: MySQL Community Server 8.4.4
+    {warning}
 
-Review
+? Use mysql-8 as the local restore target?  {yes}
+? Local MySQL username                   {root}
+? Local MySQL password                   ••••••••
+
+{review}
   Container   mysql-8
-  Image       mysql:8.4
+  Server      MySQL 8.4.4
   Address     localhost:3306
-  Database    resolved from the tenant
+  Database    salt_sagatec (example resolved from tenant)
 
-○ Validate target connection
-○ Save local target configuration
+{pending} Validate target connection
+{pending} Save local target configuration
 
-Preview only — Docker and local configuration were not changed.
-"#
-    .to_owned()
+{footer}
+"#,
+        yes = style.value("Yes"),
+        root = style.value("root"),
+    )
 }
 
-pub fn profile_add(profile: &ProfileName) -> String {
-    format!(
-        r#"reprodb · Add source profile (preview)
+pub fn profile_add(style: &OutputStyle, profile: &ProfileName) -> String {
+    let brand = style.brand("reprodb");
+    let preview = style.attention("(preview)");
+    let profile_section = style.section("Profile");
+    let connection = style.section("Source connection");
+    let detection = style.section("Automatic detection");
+    let tenant_resolution = style.section("Tenant resolution");
+    let review = style.section("Review");
+    let ok = style.success("✓");
+    let pending = style.attention("○");
+    let footer =
+        style.attention("! Preview only — no connection was attempted and nothing was saved.");
 
-Profile
+    format!(
+        r#"{brand} · Add source profile {preview}
+
+{profile_section}
   Name        {profile}
 
-Connection
-? MySQL host              db.example.internal
+{connection}
+? MySQL host              mysql.salt.internal
 ? MySQL port              3306
 ? MySQL username          readonly_user
 ? MySQL password          ••••••••
-? MySQL server series     8.4
-? Require TLS             Yes
+? Connection security    Require TLS
+? Is this production?    No
 
-Tenant resolution
-? Resolver                Salt Central
-? Central database        salt_central
-? Domain lookup column    domain
+{detection}
+  {ok} Connected to the source
+  {ok} MySQL Community Server 8.4.4 detected
+  {ok} Approved MySQL 8.4.4 client selected
 
-Review
-  Source      readonly_user@db.example.internal:3306
-  MySQL       8.4 (client selected from the approved catalog)
+{tenant_resolution}
+  {ok} Central database detected: salt_central
+  {ok} Domain sagatec resolves to salt_sagatec
+  {ok} Domain polymer resolves to salt_polymer
+
+{review}
+  Source      readonly_user@mysql.salt.internal:3306
+  Server      MySQL 8.4.4
+  Client      approved Docker image, pinned by digest
   Resolver    Salt Central
   Password    OS credential store
 
-○ Test source connection
-○ Save password in Keychain / Secret Service
-○ Save profile and make it active
+{pending} Save password in Keychain / Secret Service
+{pending} Save profile and make it active
 
-Preview only — no connection was attempted and nothing was saved.
+{footer}
 "#
     )
 }
 
-pub fn doctor() -> String {
-    r#"reprodb doctor (preview)
-
-Configuration
-  ✓ configuration file
-  ✓ active profile: salt-local
-  ✓ source credential available
-
-MySQL client
-  ✓ Docker image approved for MySQL 8.4
-  ✓ mysql client: 8.4.4
-  ✓ mysqldump: 8.4.4
-
-Local target
-  ✓ Docker context: desktop-linux
-  ✓ container: mysql-8 (running)
-  ✓ target connection
-
-Source
-  ✓ source connection
-  ✓ server version: 8.4.4
-
-Ready to pull a tenant.
-
-Preview only — checks above are illustrative and were not executed.
-"#
-    .to_owned()
-}
-
-pub fn pull(tenant: &TenantLookup, fresh: bool) -> String {
-    let cache_message = if fresh {
-        "Fresh dump requested; the local cache will be ignored."
-    } else {
-        "No valid local cache found."
-    };
+pub fn doctor(style: &OutputStyle) -> String {
+    let brand = style.brand("reprodb");
+    let preview = style.attention("(preview)");
+    let configuration = style.section("Configuration");
+    let client = style.section("MySQL client");
+    let target = style.section("Local target");
+    let source = style.section("Source");
+    let ok = style.success("✓");
+    let ready = style.success("Ready to pull a tenant.");
+    let footer = style.attention("! Preview only — checks are illustrative and were not executed.");
 
     format!(
-        r#"reprodb pull (preview)
+        r#"{brand} doctor {preview}
 
-Profile   salt-local
-Tenant    {tenant}
-Source    resolved through salt_central
-Target    mysql-8/<resolved-database>
+{configuration}
+  {ok} configuration file
+  {ok} active profile: salt-source
+  {ok} source credential available
 
-Checking cache...
-{cache_message}
+{client}
+  {ok} approved Docker image available
+  {ok} mysql client: 8.4.4
+  {ok} mysqldump: 8.4.4
 
-Exporting...
-1.84 GiB | 42.1 MiB/s | 00:44
+{target}
+  {ok} Docker context: desktop-linux
+  {ok} container: mysql-8 (running)
+  {ok} target connection
 
-Restoring...
-✓ local database recreated
-✓ import completed
+{source}
+  {ok} source connection
+  {ok} server version: 8.4.4
+  {ok} tenant resolver: salt_central
 
-Ready.
+{ready}
 
-Database   <resolved-database>
-Container  mysql-8
-
-Preview only — source, cache, Docker and local databases were not accessed.
+{footer}
 "#
     )
+}
+
+pub fn pull(style: &OutputStyle, tenant: &TenantLookup, fresh: bool) -> String {
+    let (tenant_id, database) = preview_resolution(tenant);
+    let cache_message = if fresh {
+        style.attention("! Fresh dump requested; the local cache will be ignored.")
+    } else {
+        "No valid local cache found.".to_owned()
+    };
+    let brand = style.brand("reprodb");
+    let preview = style.attention("(preview)");
+    let exporting = style.section("Exporting source database");
+    let restoring = style.section("Restoring local database");
+    let ok = style.success("✓");
+    let ready = style.success("Ready.");
+    let footer = style
+        .attention("! Preview only — source, cache, Docker and local databases were not accessed.");
+    let profile = style.value("salt-source");
+    let tenant_value = style.value(tenant.as_str());
+    let source_value = style.value(database);
+    let target_value = style.value(&format!("mysql-8/{database}"));
+
+    format!(
+        r#"{brand} pull {preview}
+
+Profile    {profile}
+Domain     {tenant_value}
+Tenant ID  {tenant_id}
+Source DB  {source_value}
+Target DB  {target_value}
+
+{cache_message}
+
+{exporting}
+1.84 GiB | 42.1 MiB/s | 00:44
+
+{restoring}
+  {ok} database recreated with source charset and collation
+  {ok} import completed
+  {ok} local tenant registration updated
+
+{ready}
+
+Database   {database}
+Container  mysql-8
+
+{footer}
+"#
+    )
+}
+
+fn preview_resolution(tenant: &TenantLookup) -> (&str, &str) {
+    match tenant.as_str() {
+        "sagatec" => ("salt_sagatec", "salt_sagatec"),
+        "polymer" => ("salt_polymer", "salt_polymer"),
+        _ => ("<resolved-tenant-id>", "<resolved-database>"),
+    }
 }
 
 #[cfg(test)]
@@ -133,21 +203,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn profile_preview_is_explicitly_side_effect_free() {
-        let profile = ProfileName::try_from("salt-local").unwrap();
-        let output = profile_add(&profile);
+    fn profile_preview_uses_observed_salt_examples_and_is_side_effect_free() {
+        let profile = ProfileName::try_from("salt-source").unwrap();
+        let output = profile_add(&OutputStyle::plain(), &profile);
 
-        assert!(output.contains("Profile\n  Name        salt-local"));
+        assert!(output.contains("Profile\n  Name        salt-source"));
+        assert!(output.contains("sagatec resolves to salt_sagatec"));
+        assert!(output.contains("polymer resolves to salt_polymer"));
         assert!(output.contains("nothing was saved"));
         assert!(!output.contains("readonly_password"));
     }
 
     #[test]
-    fn fresh_pull_preview_explains_that_cache_is_ignored() {
-        let tenant = TenantLookup::try_from("guerra").unwrap();
-        let output = pull(&tenant, true);
+    fn fresh_pull_preview_resolves_the_observed_sagatec_database() {
+        let tenant = TenantLookup::try_from("sagatec").unwrap();
+        let output = pull(&OutputStyle::plain(), &tenant, true);
 
         assert!(output.contains("Fresh dump requested"));
+        assert!(output.contains("Source DB  salt_sagatec"));
+        assert!(output.contains("Target DB  mysql-8/salt_sagatec"));
         assert!(output.contains("were not accessed"));
+    }
+
+    #[test]
+    fn preview_does_not_invent_a_resolution_for_an_unknown_domain() {
+        let tenant = TenantLookup::try_from("unknown").unwrap();
+        let output = pull(&OutputStyle::plain(), &tenant, false);
+
+        assert!(output.contains("Source DB  <resolved-database>"));
+        assert!(!output.contains("salt_unknown"));
+    }
+
+    #[test]
+    fn colored_preview_keeps_text_indicators_in_addition_to_color() {
+        let output = setup(&OutputStyle::colored());
+
+        assert!(output.contains("\u{1b}["));
+        assert!(output.contains("✓"));
+        assert!(output.contains("Docker is available"));
+        assert!(output.contains("! Port is exposed"));
+        assert!(output.contains("! Preview only"));
     }
 }

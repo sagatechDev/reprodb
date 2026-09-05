@@ -50,14 +50,14 @@ Esse cenário mostra como o futuro `setup` apresentará containers MySQL encontr
 ### 3.2 Cadastrar uma conexão source
 
 ```bash
-$REPRODB profile add salt-local --preview
+$REPRODB profile add salt-source --preview
 ```
 
 Avalie principalmente:
 
 - a ordem de host, porta, usuário e senha;
 - se fica claro que essa conexão é a origem do dump;
-- se a escolha da série do MySQL faz sentido;
+- se a detecção automática da versão e a seleção do client fazem sentido;
 - se a diferença entre resolver tenant e escolher database está compreensível;
 - se o resumo final é suficiente antes de salvar;
 - se a localização da senha está clara sem expor seu valor.
@@ -84,18 +84,40 @@ Observe se a divisão entre configuração, client MySQL, target local e source 
 Fluxo normal, com consulta ao cache:
 
 ```bash
-$REPRODB pull guerra --preview
+$REPRODB pull sagatec --preview
 ```
 
 Fluxo que força um dump novo:
 
 ```bash
-$REPRODB pull guerra --fresh --preview
+$REPRODB pull sagatec --fresh --preview
 ```
 
 Compare as mensagens de cache e confirme se source, target, progresso sem percentual e resultado final ficam claros.
 
-## 4. Passeio completo em um comando
+Repita com outro database observado no ambiente local:
+
+```bash
+$REPRODB pull polymer --preview
+```
+
+As resoluções ilustradas são `sagatec → salt_sagatec` e `polymer → salt_polymer`. Para qualquer outro alias, a prévia mostra placeholders em vez de inventar um nome de database.
+
+## 4. Cores e acessibilidade
+
+Por padrão, cores são usadas somente quando a saída está ligada a um terminal compatível. Os símbolos e textos continuam comunicando o estado sem depender da cor.
+
+Force ou desabilite as cores para comparar:
+
+```bash
+$REPRODB pull sagatec --preview --color always
+$REPRODB pull sagatec --preview --color never
+NO_COLOR=1 $REPRODB pull sagatec --preview
+```
+
+Observe se verde comunica sucesso, amarelo chama atenção sem parecer falha concluída e ciano indica seleção/contexto. O modo sem cor precisa continuar inteiramente compreensível.
+
+## 5. Passeio completo em um comando
 
 O script abaixo compila o binário e executa a sequência de descoberta e os quatro cenários de prévia:
 
@@ -105,7 +127,7 @@ O script abaixo compila o binário e executa a sequência de descoberta e os qua
 
 Ele também para imediatamente se algum cenário retornar erro inesperado.
 
-## 5. Limite atual intencional
+## 6. Limite atual intencional
 
 Sem `--preview`, os handlers ainda falham explicitamente em vez de fingir que fizeram algo:
 
@@ -116,7 +138,7 @@ echo $?
 
 Por enquanto, o resultado esperado é `command 'setup' is not implemented yet` e exit code `1`. Isso mudará conforme RDB-024, RDB-025 e RDB-026 forem concluídas.
 
-## 6. Checklist para feedback
+## 7. Checklist para feedback
 
 Durante o teste, anote:
 

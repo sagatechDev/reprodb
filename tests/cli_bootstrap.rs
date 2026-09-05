@@ -132,7 +132,7 @@ fn profile_add_preview_shows_the_planned_questions() {
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
-        .args(["profile", "add", "salt-local", "--preview"])
+        .args(["profile", "add", "salt-source", "--preview"])
         .assert()
         .success()
         .stdout(
@@ -162,14 +162,41 @@ fn pull_preview_can_show_the_fresh_path() {
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
-        .args(["pull", "guerra", "--fresh", "--preview"])
+        .args(["pull", "sagatec", "--fresh", "--preview"])
         .assert()
         .success()
         .stdout(
             predicate::str::contains("Fresh dump requested")
-                .and(predicate::str::contains("Tenant    guerra"))
+                .and(predicate::str::contains("Domain     sagatec"))
+                .and(predicate::str::contains("Source DB  salt_sagatec"))
                 .and(predicate::str::contains("were not accessed")),
         );
+}
+
+#[test]
+fn explicit_color_mode_adds_semantic_ansi_styles() {
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .args(["pull", "sagatec", "--preview", "--color", "always"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\u{1b}[1;32m✓\u{1b}[0m")
+                .and(predicate::str::contains("! Preview only")),
+        );
+}
+
+#[test]
+fn no_color_environment_keeps_preview_plain() {
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .env("NO_COLOR", "1")
+        .args(["doctor", "--preview"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\u{1b}[").not());
 }
 
 #[test]

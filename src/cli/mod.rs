@@ -1,11 +1,18 @@
 use clap::{Args, Parser, Subcommand};
 
+pub mod output;
 pub mod preview;
+
+pub use output::ColorChoice;
 
 /// Local CLI for reproducing Salt tenant databases.
 #[derive(Debug, Parser)]
 #[command(name = "reprodb", version, about)]
 pub struct Cli {
+    /// Control colored output.
+    #[arg(long, global = true, value_enum, default_value = "auto")]
+    pub color: ColorChoice,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -161,6 +168,14 @@ mod tests {
         assert_eq!(arguments.tenant, "sagatec");
         assert!(arguments.fresh);
         assert!(!arguments.preview);
+        assert_eq!(cli.color, ColorChoice::Auto);
+    }
+
+    #[test]
+    fn parses_a_global_color_choice_after_the_subcommand() {
+        let cli = Cli::try_parse_from(["reprodb", "doctor", "--color", "always"]).unwrap();
+
+        assert_eq!(cli.color, ColorChoice::Always);
     }
 
     #[test]
