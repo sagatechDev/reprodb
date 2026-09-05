@@ -259,14 +259,14 @@ docker_context = "desktop-linux"
 container_name = "mysql-8"
 container_id = "62a9bfe47f1c..."
 username = "root"
-credential_key = "targets/<uuid>"
+credential_key = "target:<uuid>"
 central_database = "salt_central"
 
 [profiles.salt-local]
 host = "127.0.0.1"
 port = 3306
 username = "root"
-credential_key = "profiles/<uuid>"
+credential_key = "source:<uuid>"
 mysql_family = "mysql"
 mysql_series = "8.4"
 production = false
@@ -511,6 +511,8 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 #### RDB-021 — Implementar value objects do domínio
 
 **Labels:** `priority:p0`, `type:feature`, `area:tenant`, `area:security`
+
+**Status:** implementada — value objects não permitem input cru chegar a database, container ou credential key e possuem testes de limites/injection.
 
 **Escopo:** `ProfileName`, `TenantLookup`, `TenantId`, `DomainAlias`, `DatabaseName`, `ContainerName`, `ContainerId`, `CredentialKey` e `MysqlVersion`.
 

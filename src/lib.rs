@@ -5,6 +5,7 @@
 //! composition root for process-level concerns.
 
 pub mod cli;
+pub mod domain;
 pub mod error;
 
 pub use cli::{Cli, Commands};
