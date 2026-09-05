@@ -4,6 +4,7 @@
 //! be tested without spawning the compiled executable. `main.rs` remains the
 //! composition root for process-level concerns.
 
+pub mod application;
 pub mod cli;
 pub mod domain;
 pub mod error;

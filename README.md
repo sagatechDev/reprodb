@@ -13,7 +13,7 @@ O projeto está no início da implementação. O backlog e as decisões técnica
 
 Requisitos atuais:
 
-- Rust 1.85 ou mais recente;
+- Rust 1.88 ou mais recente;
 - macOS ou Linux;
 - Docker para os spikes de integração.
 

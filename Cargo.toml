@@ -2,18 +2,22 @@
 name = "reprodb"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 publish = false
 description = "Local CLI for reproducing Salt tenant databases"
 license = "Proprietary"
 
 [dependencies]
+async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 directories = "6"
 fs4 = "1"
+keyring = "4"
+secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"
 thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

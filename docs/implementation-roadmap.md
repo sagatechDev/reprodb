@@ -453,7 +453,7 @@ Critério da milestone: binário compilável, command tree estável, testes unit
 
 **Labels:** `priority:p0`, `type:feature`, `area:cli`, `area:cross-platform`
 
-**Status:** implementada — crate principal, MSRV 1.85 e CI macOS/Linux adicionados; a primeira execução remota do workflow ainda depende de push.
+**Status:** implementada — crate principal, MSRV 1.88 e CI macOS/Linux adicionados; a primeira execução remota do workflow ainda depende de push. O MSRV foi elevado de 1.85 porque `keyring` 4, adotado na RDB-022, requer Rust 1.88.
 
 **Escopo:**
 
@@ -523,6 +523,8 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 #### RDB-022 — Implementar CredentialStore e option files temporários
 
 **Labels:** `priority:p0`, `type:feature`, `area:credentials`, `area:security`
+
+**Status:** implementação concluída e integração com o Keychain do macOS validada; a execução real contra Secret Service no Linux permanece pendente antes de encerrar o aceite cross-platform.
 
 **Escopo:** `OsCredentialStore`, `MemoryCredentialStore`, `SecretString`, arquivo temporário restrito e rollback de cadastro incompleto.
 

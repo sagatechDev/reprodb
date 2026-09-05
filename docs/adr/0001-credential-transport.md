@@ -144,6 +144,17 @@ secret_in_authentication_error=no
 
 Os testes Rust também verificam `create_new`, modo `0600`, escaping, rejeição de NUL e ausência do segredo em `Debug`/erro.
 
+A implementação incorporada ao crate principal adiciona ainda:
+
+- `OsCredentialStore` sobre `keyring` 4, executado via `spawn_blocking`;
+- `MemoryCredentialStore` sem acesso ao sistema operacional;
+- preflight que impede sobrescrever uma credencial existente;
+- rollback quando a persistência transacional do TOML falha;
+- erro com a chave órfã quando config e rollback falham;
+- guard que remove o diretório privado e o option file no `Drop`.
+
+Em 5 de setembro de 2026, o teste ignorado `native_store_roundtrips_a_temporary_credential` passou localmente no Keychain do macOS, salvando, lendo e apagando uma entrada UUID temporária. O crate também passou em `cargo check` para `x86_64-unknown-linux-gnu` no MSRV; a execução real do mesmo teste permanece pendente em um desktop Linux com Secret Service disponível. Testes comuns usam somente o backend em memória.
+
 ## Alternativas rejeitadas
 
 ### Senha em argumento

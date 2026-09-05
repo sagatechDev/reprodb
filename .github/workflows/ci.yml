@@ -38,14 +38,14 @@ jobs:
         run: cargo test --all-features
 
   msrv:
-    name: Rust 1.85 (MSRV)
+    name: Rust 1.88 (MSRV)
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust 1.85
-        uses: dtolnay/rust-toolchain@1.85.0
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
 
       - name: Test
         run: cargo test --all-features
