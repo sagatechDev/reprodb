@@ -9,9 +9,21 @@ FILE.zst -> async Zstd decode -> dockerized mysql stdin
 
 Não é a estrutura final do reprodb. As decisões aprovadas serão posteriormente movidas para o crate principal.
 
+Para executar todo o aceite automatizado do spike:
+
+```bash
+./run-all.sh
+```
+
 ## E2E local automatizado
 
-Por padrão, o harness utiliza o container local `mysql-8`. Ele recusa executar se os databases reservados do spike já existirem.
+O harness principal sobe dois servidores MySQL efêmeros e independentes, publica portas aleatórias somente em loopback e remove os containers ao sair:
+
+```bash
+./run-ephemeral-e2e.sh
+```
+
+Há também um harness rápido que utiliza o container local `mysql-8`. Ele recusa executar se os databases reservados do spike já existirem:
 
 ```bash
 ./run-local-e2e.sh
@@ -24,7 +36,23 @@ reprodb_spike_source
 reprodb_spike_target
 ```
 
-Ele também verifica dados, UTF-8, NULL, decimal, BLOB, FK, trigger, view, collation, ausência de `.part` e ausência de client container órfão.
+Os dois verificam dados, UTF-8, NULL, decimal, BLOB, FK, trigger, view, collation e ausência de `.part`. O harness efêmero compara snapshots produzidos separadamente pelo source e pelo target.
+
+O cancelamento é exercitado deterministicamente com um adapter Docker fake que mantém os streams bloqueados:
+
+```bash
+./run-cancellation-test.sh
+```
+
+Esse teste espera exit code 130, remove o parcial do dump e preserva um dump completo quando o restore é cancelado.
+
+O comportamento de memória pode ser comparado com streams sintéticos de aproximadamente 5 MiB e 98 MiB:
+
+```bash
+./run-memory-test.sh
+```
+
+O teste usa o RSS máximo reportado pelo sistema e falha se o stream 20 vezes maior consumir mais de três vezes a memória do menor. Ele é uma proteção inicial contra buffering acidental, não um benchmark de produção.
 
 ## Uso
 
@@ -75,9 +103,10 @@ cargo run -- \
 
 ## Limitações deliberadas
 
-- o harness ainda prepara source/target fora do binário;
+- os harnesses ainda preparam source/target fora do binário;
 - a publicação não executa `fsync`;
 - sinais diferentes de Ctrl+C não foram tratados;
 - um `SIGKILL` do processo Rust pode deixar um client container temporário;
 - métricas, checksum e metadata pertencem às issues posteriores;
-- Linux e VPN ainda precisam de validação.
+- o cancelamento determinístico usa um Docker fake; a integração com `docker kill` real ainda terá cobertura própria no runtime final;
+- Linux e VPN ainda precisam de validação nas issues cross-platform.

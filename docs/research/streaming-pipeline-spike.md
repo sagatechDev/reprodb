@@ -1,6 +1,6 @@
 # RDB-003 — Spike end-to-end dump → Zstd → restore
 
-> Status: em andamento. O núcleo do pipeline e o harness local no macOS foram validados em 5 de setembro de 2026.
+> Status: concluído no ambiente macOS em 5 de setembro de 2026. A validação equivalente em Linux permanece nas issues cross-platform RDB-002 e RDB-061.
 
 ## O que foi implementado
 
@@ -28,10 +28,12 @@ O comando reproduzível é:
 
 ```bash
 cd spikes/streaming-pipeline
-./run-local-e2e.sh
+./run-all.sh
 ```
 
-O harness usa nomes reservados, recusa sobrescrever bancos preexistentes e remove os recursos que criou ao sair. A obtenção da senha pelo `docker inspect` pertence somente ao ambiente local do spike; no produto a senha virá do `CredentialStore`.
+O harness E2E principal sobe dois servidores MySQL independentes em containers efêmeros e publica portas aleatórias somente em loopback. Os scripts removem os recursos que criaram ao sair.
+
+Também existe um harness mais curto contra o container local `mysql-8`. Ele usa nomes de database reservados, recusa sobrescrever bancos preexistentes e obtém a senha por `docker inspect` apenas para o teste local; no produto a senha virá do `CredentialStore`.
 
 A fixture cobre:
 
@@ -61,15 +63,36 @@ Ambiente:
 | Client | imagem oficial fixada pelo digest `sha256:1d967f...b01c` |
 | Transporte | TCP por `host.docker.internal:3306` |
 
-Resultado de uma execução limpa:
+Resultado do E2E com os servidores independentes:
 
 ```text
-dump stream completed: 1756325 uncompressed bytes
-restore stream completed: 1756325 uncompressed bytes
+dump stream completed: 1756309 uncompressed bytes
+restore stream completed: 1756309 uncompressed bytes
 validation=ok
-compressed_bytes=89904
-orphan_client_container=no
+source_target_servers=independent
+compressed_bytes=89363
 ```
+
+Resultado dos testes determinísticos de cancelamento:
+
+```text
+dump_cancellation_exit=130
+dump_partial_removed=yes
+restore_cancellation_exit=130
+completed_dump_preserved=yes
+```
+
+O teste de memória comparou streams sintéticos com diferença de 20 vezes:
+
+```text
+small_stream_bytes=5125000
+small_max_rss_bytes=3293184
+large_stream_bytes=102500000
+large_max_rss_bytes=3309568
+memory_validation=ok
+```
+
+O RSS máximo cresceu aproximadamente 16 KiB enquanto o stream aumentou de cerca de 5 MiB para 98 MiB, sustentando a propriedade de memória aproximadamente constante para o pipeline exercitado.
 
 Após o teste também foram confirmados:
 
@@ -86,16 +109,12 @@ O primeiro restore fechava o pipe com `Broken pipe` e stderr vazio. A causa era 
 
 Isso deve virar uma asserção da futura construção de comandos do `DockerCliRuntime`: toda operação que recebe stream precisa incluir `-i`, mas nunca `-t`.
 
-## O que este resultado ainda não prova
+## Limites deste resultado
 
-RDB-003 permanece em andamento porque o aceite completo também exige:
+- o teste determinístico de Ctrl+C usa um Docker fake para manter os streams bloqueados; o runtime final ainda deve testar a chamada real a `docker kill`;
+- Linux e rede/VPN continuam pendentes em RDB-002 e RDB-061;
+- `SIGKILL` não permite cleanup pelo processo e pode deixar um client container até uma limpeza oportunista futura;
+- persistência durável com `fsync`, checksum e metadata pertencem à implementação do cache, não a este spike;
+- a fixture de aproximadamente 1,7 MiB prova compatibilidade funcional, não representa o impacto de um tenant real no source.
 
-- source e target em dois servidores MySQL efêmeros e independentes;
-- execução equivalente no Docker Engine nativo em Linux;
-- medição de memória com dump significativamente maior para sustentar a hipótese de RAM aproximadamente constante;
-- teste automatizado de Ctrl+C durante dump e restore;
-- comprovação automática da remoção de `.part` e client container nos caminhos de erro/cancelamento;
-- tratamento e teste de sinais além do caminho atual de Ctrl+C quando aplicável;
-- persistência durável (`fsync`) antes da publicação atômica, a ser definida na implementação real.
-
-O spike valida a viabilidade do desenho, mas ainda não autoriza encerrar a milestone 0 nem conectar em produção.
+RDB-003 prova a viabilidade técnica do núcleo. Ela não encerra a milestone 0 e não autoriza conexão com produção enquanto RDB-002, RDB-004 e RDB-005 estiverem abertas.
