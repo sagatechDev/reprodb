@@ -453,6 +453,8 @@ Critério da milestone: binário compilável, command tree estável, testes unit
 
 **Labels:** `priority:p0`, `type:feature`, `area:cli`, `area:cross-platform`
 
+**Status:** implementada — crate principal, MSRV 1.85 e CI macOS/Linux adicionados; a primeira execução remota do workflow ainda depende de push.
+
 **Escopo:**
 
 - `Cargo.toml` e `Cargo.lock`;
