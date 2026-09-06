@@ -2,13 +2,16 @@ use thiserror::Error;
 
 use crate::{
     application::{
-        CredentialProvisionError, DoctorFailureKind, ProfileServiceError, SetupServiceError,
-        SourceVerificationError, TargetVerificationError,
+        CredentialProvisionError, DoctorFailureKind, DumpServiceError, ProfileServiceError,
+        SetupServiceError, SourceVerificationError, TargetVerificationError,
     },
     cli::prompt::PromptError,
     domain::{TenantResolutionError, ValueObjectError},
     infrastructure::config::ConfigError,
     infrastructure::docker::DockerDiscoveryError,
+    infrastructure::mysql::{
+        DockerClientError, DumpExecutorError, DumpFailureKind, DumpPreflightError,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,6 +71,9 @@ pub enum AppError {
 
     #[error(transparent)]
     Setup(#[from] SetupServiceError),
+
+    #[error(transparent)]
+    Dump(#[from] DumpServiceError),
 
     #[error("doctor found required problems; review the failed checks above")]
     DoctorChecksFailed { kind: DoctorFailureKind },
@@ -160,6 +166,7 @@ impl AppError {
                 CredentialProvisionError::InvalidCredentialReference
                 | CredentialProvisionError::Config { .. },
             )) => ErrorCategory::Configuration,
+            Self::Dump(error) => dump_error_category(error),
             Self::DoctorChecksFailed { kind } => match kind {
                 DoctorFailureKind::Configuration => ErrorCategory::Configuration,
                 DoctorFailureKind::Credential => ErrorCategory::Credential,
@@ -180,6 +187,68 @@ impl AppError {
 
     pub const fn should_render_on_stderr(&self) -> bool {
         !matches!(self, Self::DoctorChecksFailed { .. })
+    }
+}
+
+const fn dump_error_category(error: &DumpServiceError) -> ErrorCategory {
+    match error {
+        DumpServiceError::Config(_)
+        | DumpServiceError::NoActiveProfile
+        | DumpServiceError::DockerContextMissing => ErrorCategory::Configuration,
+        DumpServiceError::ProductionNotEnabled => ErrorCategory::Dump,
+        DumpServiceError::ClientCatalog(_) => ErrorCategory::Dependency,
+        DumpServiceError::Credential(_) => ErrorCategory::Credential,
+        DumpServiceError::Tenant(error) => match error {
+            TenantResolutionError::SourceUnavailable
+            | TenantResolutionError::AuthenticationFailed => ErrorCategory::SourceConnection,
+            TenantResolutionError::ClientUnavailable => ErrorCategory::Dependency,
+            _ => ErrorCategory::TenantResolution,
+        },
+        DumpServiceError::Preflight(DumpPreflightError::Client(error))
+        | DumpServiceError::Execute(DumpExecutorError::Client(error)) => {
+            docker_client_error_category(error)
+        }
+        DumpServiceError::Execute(DumpExecutorError::Start(_)) => ErrorCategory::Docker,
+        DumpServiceError::Execute(DumpExecutorError::ProcessFailed { kind, .. }) => match kind {
+            DumpFailureKind::Authentication | DumpFailureKind::SourceUnavailable => {
+                ErrorCategory::SourceConnection
+            }
+            DumpFailureKind::DockerUnavailable => ErrorCategory::Docker,
+            DumpFailureKind::Permission
+            | DumpFailureKind::DatabaseUnavailable
+            | DumpFailureKind::Unknown => ErrorCategory::Dump,
+        },
+        DumpServiceError::Lock(_)
+        | DumpServiceError::Artifact(_)
+        | DumpServiceError::Cleanup(_) => ErrorCategory::Cache,
+        DumpServiceError::Preflight(_)
+        | DumpServiceError::Execute(_)
+        | DumpServiceError::Metadata(_) => ErrorCategory::Dump,
+        DumpServiceError::Clock(_) => ErrorCategory::General,
+    }
+}
+
+const fn docker_client_error_category(error: &DockerClientError) -> ErrorCategory {
+    match error {
+        DockerClientError::Catalog(_)
+        | DockerClientError::ImagePullFailed
+        | DockerClientError::ImageUnavailable
+        | DockerClientError::ImageInspectFailed
+        | DockerClientError::InvalidImageMetadata
+        | DockerClientError::ImageDigestMismatch
+        | DockerClientError::VersionProbeFailed
+        | DockerClientError::IncompatibleClientVersion => ErrorCategory::Dependency,
+        DockerClientError::DockerUnavailable
+        | DockerClientError::InvalidDockerContext
+        | DockerClientError::Process(_) => ErrorCategory::Docker,
+        DockerClientError::SourceNetworkUnavailable
+        | DockerClientError::AuthenticationFailed
+        | DockerClientError::ConnectionProbeFailed
+        | DockerClientError::QueryFailed
+        | DockerClientError::InvalidServerMetadata => ErrorCategory::SourceConnection,
+        DockerClientError::OptionFile(_) | DockerClientError::OptionFilePathNotAbsolute => {
+            ErrorCategory::Credential
+        }
     }
 }
 
@@ -277,5 +346,22 @@ mod tests {
             AppError::from(TenantResolutionError::ClientUnavailable).exit_code(),
             20
         );
+    }
+
+    #[test]
+    fn dump_process_failures_keep_actionable_exit_categories() {
+        let failure = |kind| {
+            AppError::from(DumpServiceError::Execute(
+                DumpExecutorError::ProcessFailed {
+                    exit_code: Some(2),
+                    kind,
+                    stderr_truncated: false,
+                },
+            ))
+        };
+
+        assert_eq!(failure(DumpFailureKind::Authentication).exit_code(), 30);
+        assert_eq!(failure(DumpFailureKind::DockerUnavailable).exit_code(), 60);
+        assert_eq!(failure(DumpFailureKind::Unknown).exit_code(), 40);
     }
 }

@@ -715,7 +715,11 @@ Contrato e limites: [`docs/cache-locks-cleanup.md`](cache-locks-cleanup.md).
 
 **Labels:** `priority:p0`, `type:feature`, `area:cli`, `area:mysql`, `area:cache`
 
+**Status:** implementada — o comando resolve o tenant, adquire o lock do source, executa o preflight, transmite `mysqldump` para Zstandard e publica metadata/checksums atomicamente. A UX informa progresso por bytes, throughput e tempo, além do ID/caminho final. Secrets não entram no argv ou nos diagnósticos e profiles de produção permanecem bloqueados até a RDB-071.
+
 **Aceite:** resolve tenant, faz preflight, gera cache e apresenta caminho/ID/metadata sem executar restore.
+
+Contrato operacional e roteiro de falhas: [`docs/dump-command.md`](dump-command.md).
 
 ### Milestone 5 — Restore e pull
 

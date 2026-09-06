@@ -165,6 +165,30 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
             }
             Ok(())
         }
+        Commands::Dump(arguments) => {
+            let tenant = TenantLookup::try_from(arguments.tenant)?;
+            print!("{}", cli::dump::render_start(&style));
+            std::io::stdout().flush().map_err(AppError::Output)?;
+            let repository = ConfigRepository::discover()?;
+            let workflow = infrastructure::mysql::DockerDumpWorkflow::new(
+                infrastructure::process::TokioProcessRunner,
+            );
+            let progress = std::sync::Arc::new(cli::dump::CliDumpProgress::new(style));
+            let service = application::DumpService::new(repository).with_progress(progress.clone());
+            let result = service
+                .create(
+                    &infrastructure::credentials::OsCredentialStore,
+                    &workflow,
+                    &workflow,
+                    &infrastructure::mysql::DockerMysqlDumpExecutor,
+                    tenant,
+                )
+                .await;
+            progress.finish();
+            let created = result?;
+            print!("{}", cli::dump::render_complete(&style, &created));
+            Ok(())
+        }
         Commands::Pull(arguments) if arguments.preview => {
             let tenant = TenantLookup::try_from(arguments.tenant)?;
             print!("{}", cli::preview::pull(&style, &tenant, arguments.fresh));

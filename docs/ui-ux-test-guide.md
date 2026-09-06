@@ -152,7 +152,7 @@ O script abaixo compila o binário e executa a sequência de descoberta e os qua
 
 Ele também para imediatamente se algum cenário retornar erro inesperado.
 
-## 6. Estado funcional atual
+## 6. Testar o dump real
 
 O setup de um container existente e o ciclo de source profiles já são reais:
 
@@ -163,14 +163,41 @@ $REPRODB profile use salt-local
 $REPRODB profile remove salt-local
 ```
 
-Esses comandos podem acessar Docker, MySQL, configuração e Keychain/Secret Service. Use `--preview` quando quiser apenas avaliar a apresentação. `doctor` já executa checks reais somente-leitura. `dump`, `restore`, `pull` e `cache` ainda falham explicitamente em vez de fingir que fizeram algo:
+Esses comandos podem acessar Docker, MySQL, configuração e Keychain/Secret Service. Use `--preview` quando quiser apenas avaliar a apresentação. `doctor` executa checks reais somente-leitura.
+
+Depois de configurar um source MySQL local, o dump já pode ser exercitado de ponta a ponta:
 
 ```bash
+$REPRODB profile use salt-local
+$REPRODB doctor
 $REPRODB dump sagatec
 echo $?
 ```
 
-Por enquanto, o resultado esperado é `command 'dump' is not implemented yet` e exit code `1`. Isso mudará com a milestone de dump.
+Esse comando é uma operação real: ele consulta o source, resolve `sagatec` pelo `salt_central`, lê `salt_sagatec` com `mysqldump` e grava um `.sql.zst` no cache da aplicação. Use somente um profile local nesta fase; profiles marcados como produção são bloqueados.
+
+Uma execução bem-sucedida deve terminar aproximadamente assim:
+
+```text
+✓ Dump ready
+
+  Profile:   salt-local
+  Tenant:    salt_sagatec
+  Database:  salt_sagatec
+  Dump ID:   <uuid>
+  MySQL:     8.4.4 (client 8.4.4)
+  Data:      <tamanho SQL> → <tamanho Zstd>
+  Duration:  <mm:ss>
+  Cache:     <caminho local>
+```
+
+Durante a exportação em um terminal interativo, observe se a linha única de progresso com bytes, taxa e duração é legível e não polui o histórico. Com stdout redirecionado, a saída deve permanecer estável e sem animação.
+
+`restore`, `pull` sem `--preview` e `cache` ainda falham explicitamente até as próximas milestones. A prévia continua disponível para avaliar o fluxo completo sem tocar nos bancos:
+
+```bash
+$REPRODB pull sagatec --preview
+```
 
 ## 7. Checklist para feedback
 

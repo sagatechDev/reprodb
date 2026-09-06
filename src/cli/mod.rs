@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 
 pub mod doctor;
+pub mod dump;
 pub mod output;
 pub mod preview;
 pub mod profile;

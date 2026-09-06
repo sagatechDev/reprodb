@@ -1,6 +1,8 @@
 mod client_catalog;
 mod docker_client;
+mod dump_executor;
 mod dump_preflight;
+mod dump_workflow;
 mod profile_verifier;
 mod salt_central_resolver;
 mod target_verifier;
@@ -11,9 +13,13 @@ pub use client_catalog::{
 pub use docker_client::{
     DockerClientError, DockerMysqlClientRuntime, MysqlServerInfo, PreparedMysqlClient,
 };
+pub use dump_executor::{
+    DockerMysqlDumpExecutor, DumpExecutionRequest, DumpExecutor, DumpExecutorError, DumpFailureKind,
+};
 pub use dump_preflight::{
     ApprovedMysqlDump, DockerMysqlDumpPreflight, DumpPreflightError, DumpPreflightSource,
 };
+pub use dump_workflow::DockerDumpWorkflow;
 pub use profile_verifier::DockerSourceProfileVerifier;
 pub use salt_central_resolver::{DockerSaltCentralTenantResolver, SaltCentralSource};
 pub use target_verifier::DockerLocalTargetVerifier;

@@ -105,12 +105,17 @@ fn valid_but_unimplemented_command_fails_explicitly() {
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
-        .args(["dump", "sagatec"])
+        .args([
+            "restore",
+            "sagatec",
+            "--dump-id",
+            "550e8400-e29b-41d4-a716-446655440000",
+        ])
         .assert()
         .failure()
         .code(1)
         .stderr(predicate::str::contains(
-            "command `dump` is not implemented yet",
+            "command `restore` is not implemented yet",
         ));
 }
 
@@ -219,12 +224,12 @@ fn errors_do_not_repeat_tenant_input() {
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
-        .args(["dump", "sensitive-marker-must-not-leak"])
+        .args(["dump", "sensitive-marker-must-not-leak;"])
         .assert()
         .failure()
-        .code(1)
+        .code(2)
         .stderr(
-            predicate::str::contains("command `dump` is not implemented yet")
+            predicate::str::contains("tenant lookup has an invalid format")
                 .and(predicate::str::contains("sensitive-marker").not()),
         );
 }
@@ -233,14 +238,14 @@ fn errors_do_not_repeat_tenant_input() {
 fn debug_logging_is_opt_in_and_does_not_repeat_arguments() {
     let mut default_command = Command::cargo_bin("reprodb").unwrap();
     default_command
-        .args(["dump", "sensitive-marker-must-not-leak"])
+        .args(["dump", "sensitive-marker-must-not-leak;"])
         .assert()
         .stderr(predicate::str::contains("command received").not());
 
     let mut debug_command = Command::cargo_bin("reprodb").unwrap();
     debug_command
         .env("RUST_LOG", "reprodb=debug")
-        .args(["dump", "sensitive-marker-must-not-leak"])
+        .args(["dump", "sensitive-marker-must-not-leak;"])
         .assert()
         .failure()
         .stderr(

@@ -1,0 +1,67 @@
+# `reprodb dump` — contrato operacional
+
+`reprodb dump TENANT` cria um dump lógico comprimido no cache local e não executa restore.
+
+Exemplo com os nomes usados no Salt:
+
+```bash
+reprodb profile use salt-local
+reprodb doctor
+reprodb dump sagatec
+```
+
+O alias `sagatec` é resolvido pelo `salt_central` para o tenant e database canônicos, por exemplo `salt_sagatec`. O input do terminal nunca é usado diretamente como identificador SQL.
+
+## Fluxo
+
+```text
+config/profile
+    -> credential store
+    -> tenant resolver
+    -> lock local por profile+database
+    -> preflight do source
+    -> mysqldump em client Docker aprovado
+    -> compressão Zstandard streaming
+    -> metadata e checksums
+    -> publicação atômica no cache
+```
+
+O comando mostra bytes processados, throughput e duração quando executado em terminal. Não mostra percentual porque o tamanho total do dump não é conhecido previamente.
+
+Ao concluir, a saída informa o profile, tenant, database, versões do source e client, tamanhos, duração, ID e caminho do artefato. Esse ID será a entrada do futuro `reprodb restore`.
+
+## Segurança e integridade
+
+- O client é uma imagem MySQL aprovada pelo catálogo local e fixada por digest.
+- A senha fica em um option file temporário com permissões restritas, montado read-only no container; ela não aparece no argv, metadata ou logs.
+- Os processos são criados com argumentos estruturados, sem `sh -c` ou interpolação de shell.
+- O SQL segue de `mysqldump stdout` para Zstandard e nunca é persistido cru.
+- O artefato nasce em um diretório UUID com sufixo `.part` e só fica visível depois de checksums, metadata, `fsync` e rename atômico.
+- Falha normal remove o staging. Dumps completos anteriores são preservados.
+- Um lock advisory impede dois dumps do mesmo `profile + database` nesta máquina.
+- Profiles marcados como produção estão temporariamente bloqueados. Eles só serão liberados pela etapa de hardening RDB-071.
+
+O processo usa uma transação consistente para InnoDB, mas ainda gera leitura, I/O e tráfego de rede. Migrações ou outras alterações de schema devem ser evitadas durante a execução.
+
+## Opções de dump aprovadas
+
+Para MySQL 8, o plano atual inclui as opções conservadoras definidas pela dump policy, incluindo:
+
+```text
+--single-transaction
+--quick
+--skip-lock-tables
+--no-tablespaces
+--hex-blob
+--set-gtid-purged=OFF
+```
+
+O preflight valida versão/vendor, charset/collation, engines e objetos relevantes antes de criar o staging. Uma policy incompatível encerra o comando antes do dump.
+
+## Falhas e limitações desta etapa
+
+Erros são classificados em configuração, credencial, dependência, conexão source, resolução do tenant, dump, cache ou Docker, cada categoria com exit code estável. O stderr bruto do `mysqldump` não é repetido para evitar vazar dados retornados pelo client.
+
+O tratamento completo e testado de `Ctrl+C`, incluindo confirmação de encerramento do container efêmero, pertence à RDB-060. Nesta etapa o child possui `kill_on_drop`, o staging é protegido por RAII e operações órfãs continuam invisíveis como `.part`, mas isso ainda não representa o contrato final de cancelamento.
+
+O cache criado já possui o formato, checksums e TTL necessários, mas o consumo automático por `pull` e os comandos de inspeção/limpeza entram nas próximas issues.
