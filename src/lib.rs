@@ -189,6 +189,32 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
             print!("{}", cli::dump::render_complete(&style, &created));
             Ok(())
         }
+        Commands::Restore(arguments) => {
+            let tenant = TenantLookup::try_from(arguments.tenant)?;
+            let dump_id = arguments.dump_id.parse::<domain::DumpId>()?;
+            print!("{}", cli::restore::render_start(&style));
+            std::io::stdout().flush().map_err(AppError::Output)?;
+
+            let repository = ConfigRepository::discover()?;
+            let progress = std::sync::Arc::new(cli::restore::CliRestoreProgress::new(style));
+            let service = application::RestoreService::new(repository).with_progress(progress);
+            let restored = service
+                .restore(
+                    &infrastructure::credentials::OsCredentialStore,
+                    &infrastructure::mysql::DockerLocalTargetAttestor::new(
+                        infrastructure::process::TokioProcessRunner,
+                    ),
+                    infrastructure::mysql::DockerMysqlRestoreExecutor,
+                    infrastructure::mysql::DockerLocalTenantWriter::new(
+                        infrastructure::process::TokioProcessRunner,
+                    ),
+                    tenant,
+                    dump_id,
+                )
+                .await?;
+            print!("{}", cli::restore::render_complete(&style, &restored));
+            Ok(())
+        }
         Commands::Pull(arguments) if arguments.preview => {
             let tenant = TenantLookup::try_from(arguments.tenant)?;
             print!("{}", cli::preview::pull(&style, &tenant, arguments.fresh));

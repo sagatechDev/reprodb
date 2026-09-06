@@ -101,10 +101,12 @@ fn cache_requires_a_subcommand() {
 }
 
 #[test]
-fn valid_but_unimplemented_command_fails_explicitly() {
+fn restore_searches_only_the_isolated_managed_cache() {
+    let home = tempfile::tempdir().unwrap();
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
+        .env("REPRODB_HOME", home.path())
         .args([
             "restore",
             "sagatec",
@@ -113,9 +115,28 @@ fn valid_but_unimplemented_command_fails_explicitly() {
         ])
         .assert()
         .failure()
-        .code(1)
+        .code(50)
+        .stdout(predicate::str::contains(
+            "Locating the managed dump and validating the local target",
+        ))
+        .stderr(
+            predicate::str::contains("managed dump artifact was not found")
+                .and(predicate::str::contains("not implemented").not()),
+        );
+}
+
+#[test]
+fn restore_rejects_a_non_uuid_dump_id_as_usage() {
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .args(["restore", "sagatec", "--dump-id", "../../dump.sql.zst"])
+        .assert()
+        .failure()
+        .code(2)
+        .stdout(predicate::str::is_empty())
         .stderr(predicate::str::contains(
-            "command `restore` is not implemented yet",
+            "dump ID must be a canonical hyphenated UUID",
         ));
 }
 

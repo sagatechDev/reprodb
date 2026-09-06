@@ -7,11 +7,11 @@ use std::{
 };
 
 use reprodb::{
-    application::{LocalTargetGate, LocalTenantRegistrationService, RestoreEngine},
+    application::{LocalTargetGate, RestoreService},
     domain::{
         AppColor, CredentialKey, CredentialScope, DatabaseEncoding, DatabaseName, DomainAlias,
-        DumpArtifactCompletion, DumpArtifactContext, LocalTenantFeatures, LocalTenantRegistration,
-        MysqlTlsMode, MysqlVersion, ProfileName, Sha256Digest, TenantId, TenantLookup,
+        DumpArtifactCompletion, DumpArtifactContext, LocalTenantFeatures, MysqlTlsMode,
+        MysqlVersion, ProfileName, Sha256Digest, TenantId, TenantLookup,
     },
     infrastructure::{
         artifact_store::LocalArtifactStore,
@@ -30,7 +30,6 @@ use reprodb::{
             DockerMysqlRestoreExecutor,
         },
         process::TokioProcessRunner,
-        restore_artifact::{LocalRestoreArtifactValidator, RestoreArtifactRequest},
     },
 };
 use secrecy::{SecretString, zeroize::Zeroize};
@@ -89,7 +88,7 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
         .unwrap();
     let credentials = MemoryCredentialStore::default();
     credentials.set(&key, password.clone()).await.unwrap();
-    let guarded = LocalTargetGate::new(repository)
+    let guarded = LocalTargetGate::new(repository.clone())
         .verify(
             &credentials,
             &DockerLocalTargetAttestor::new(TokioProcessRunner),
@@ -170,33 +169,23 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
     )
     .unwrap();
     stage.publish(&metadata, &metrics).unwrap();
-    let artifact = LocalRestoreArtifactValidator::new(paths.cache_dir())
-        .validate(RestoreArtifactRequest {
-            profile: &profile,
-            tenant_id: &tenant_id,
-            dump_id,
-        })
-        .await
-        .unwrap();
 
-    let restore_result = RestoreEngine::new(
-        DockerMysqlRestoreExecutor,
-        paths.cache_dir(),
-        paths.data_dir(),
-    )
-    .restore(&authorized, &artifact)
-    .await;
+    let lookup = TenantLookup::try_from(local_domain.as_str()).unwrap();
+    let attestor = DockerLocalTargetAttestor::new(TokioProcessRunner);
+    let service = RestoreService::new(repository);
+    let restore_result = service
+        .restore(
+            &credentials,
+            &attestor,
+            DockerMysqlRestoreExecutor,
+            DockerLocalTenantWriter::new(TokioProcessRunner),
+            lookup.clone(),
+            dump_id,
+        )
+        .await;
     let post_restore = match restore_result {
-        Ok(completed) => {
-            let registration = LocalTenantRegistration::from_artifact(&metadata).unwrap();
-            let service = LocalTenantRegistrationService::new(DockerLocalTenantWriter::new(
-                TokioProcessRunner,
-            ));
+        Ok(_) => {
             let tenant_verification = async {
-                service
-                    .register_after_restore(&authorized, &completed, &registration)
-                    .await
-                    .map_err(|error| error.to_string())?;
                 run_mysql_query(
                     &context,
                     authorized.container_id().as_str(),
@@ -209,11 +198,18 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
                         hex_utf8(tenant_id.as_str())
                     ),
                 )?;
-                service
-                    .register_after_restore(&authorized, &completed, &registration)
+                let completed = service
+                    .restore(
+                        &credentials,
+                        &attestor,
+                        DockerMysqlRestoreExecutor,
+                        DockerLocalTenantWriter::new(TokioProcessRunner),
+                        lookup,
+                        dump_id,
+                    )
                     .await
                     .map_err(|error| error.to_string())?;
-                run_mysql_query(
+                let central = run_mysql_query(
                     &context,
                     authorized.container_id().as_str(),
                     client.image(),
@@ -224,14 +220,15 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
                         "SELECT HEX(t.id), HEX(d.domain), JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.tenancy_db_name')), JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.tenancy_app_color')), JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.tenancy_enable_stock_label_control')), JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.reprodb_local_only')), JSON_LENGTH(t.data) FROM tenants t JOIN domains d ON d.tenant_id = t.id WHERE BINARY t.id = BINARY 0x{}",
                         hex_utf8(tenant_id.as_str())
                     ),
-                )
+                )?;
+                Ok::<_, String>((completed, central))
             }
             .await;
-            Some((completed, tenant_verification))
+            Some(tenant_verification)
         }
         Err(_) => None,
     };
-    let data_verification = if post_restore.is_some() {
+    let data_verification = if post_restore.as_ref().is_some_and(Result::is_ok) {
         Some(run_mysql_query(
             &context,
             authorized.container_id().as_str(),
@@ -268,18 +265,16 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
 
     central_cleanup.expect("the unique central tenant fixture must be removed");
     database_cleanup.expect("the unique restore fixture database must be removed");
-    let (completed, tenant_verification) =
-        post_restore.expect("the managed artifact must restore successfully");
-    assert_eq!(completed.database(), &database);
-    assert_eq!(completed.imported_bytes(), sql.len() as u64);
+    let (completed, central) = post_restore
+        .expect("the managed artifact must restore successfully")
+        .expect("the public restore workflow must be safely repeatable");
+    assert_eq!(completed.plan.database, database);
+    assert_eq!(completed.imported_bytes, sql.len() as u64);
     assert_eq!(
         String::from_utf8(data_verification.unwrap().unwrap()).unwrap(),
         "1\t5361676174656320F09FA782\t00FF\n2\t506F6C796D6572\tNULL\n"
     );
-    let central = String::from_utf8(
-        tenant_verification.expect("the local tenant registration must be idempotent"),
-    )
-    .unwrap();
+    let central = String::from_utf8(central).unwrap();
     let columns = central.trim_end().split('\t').collect::<Vec<_>>();
     assert_eq!(columns[0], hex_utf8(tenant_id.as_str()));
     assert!(columns[1].starts_with(&hex_utf8("reprodb-")));

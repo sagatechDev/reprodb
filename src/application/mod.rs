@@ -5,6 +5,7 @@ mod local_target_gate;
 mod local_tenant_registration_service;
 mod profile_service;
 mod restore_engine;
+mod restore_service;
 mod setup_service;
 
 pub use credential_transaction::{CredentialProvisionError, persist_config_with_credential};
@@ -30,6 +31,10 @@ pub use profile_service::{
     ProfileSummary, SourceProfileVerifier, SourceVerificationError, VerifiedSource,
 };
 pub use restore_engine::{RestoreCompleted, RestoreEngine, RestoreEngineError};
+pub use restore_service::{
+    NoRestoreProgress, RestorePlan, RestoreProgress, RestoreProgressObserver, RestoreReady,
+    RestoreService, RestoreServiceError,
+};
 pub use setup_service::{
     LocalTargetConfigured, LocalTargetVerifier, NewLocalTargetInput, SetupService,
     SetupServiceError, TargetVerificationError, VerifiedLocalTarget,

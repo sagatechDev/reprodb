@@ -142,6 +142,93 @@ impl LocalArtifactStore {
         Ok(artifacts)
     }
 
+    pub fn find_complete_by_id(
+        &self,
+        dump_id: DumpId,
+    ) -> Result<Vec<LocatedDumpArtifact>, ArtifactStoreError> {
+        let profiles_path = self.root.join(PROFILES_DIRECTORY);
+        let profiles = match fs::read_dir(&profiles_path) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(source) => {
+                return Err(ArtifactStoreError::Io {
+                    operation: "list artifact profiles",
+                    source,
+                });
+            }
+        };
+        let mut artifacts = Vec::new();
+        for profile_entry in profiles {
+            let profile_entry = profile_entry.map_err(|source| ArtifactStoreError::Io {
+                operation: "read an artifact profile entry",
+                source,
+            })?;
+            if !profile_entry
+                .file_type()
+                .map_err(|source| ArtifactStoreError::Io {
+                    operation: "inspect an artifact profile entry",
+                    source,
+                })?
+                .is_dir()
+            {
+                continue;
+            }
+            let Some(profile_name) = profile_entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let Ok(profile) = ProfileName::try_from(profile_name) else {
+                continue;
+            };
+            let tenants =
+                fs::read_dir(profile_entry.path()).map_err(|source| ArtifactStoreError::Io {
+                    operation: "list artifact tenants",
+                    source,
+                })?;
+            for tenant_entry in tenants {
+                let tenant_entry = tenant_entry.map_err(|source| ArtifactStoreError::Io {
+                    operation: "read an artifact tenant entry",
+                    source,
+                })?;
+                if !tenant_entry
+                    .file_type()
+                    .map_err(|source| ArtifactStoreError::Io {
+                        operation: "inspect an artifact tenant entry",
+                        source,
+                    })?
+                    .is_dir()
+                {
+                    continue;
+                }
+                let Some(tenant_name) = tenant_entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                let Ok(tenant_id) = TenantId::try_from(tenant_name) else {
+                    continue;
+                };
+                let path = tenant_entry.path().join(dump_id.to_string());
+                if !is_regular_directory(&path)? {
+                    continue;
+                }
+                let dump_path = path.join(DUMP_FILE_NAME);
+                let metadata_path = path.join(METADATA_FILE_NAME);
+                if !is_regular_file(&dump_path)? || !is_regular_file(&metadata_path)? {
+                    continue;
+                }
+                artifacts.push(LocatedDumpArtifact {
+                    profile: profile.clone(),
+                    tenant_id,
+                    artifact: PublishedDumpArtifact {
+                        dump_id,
+                        path,
+                        dump_path,
+                        metadata_path,
+                    },
+                });
+            }
+        }
+        Ok(artifacts)
+    }
+
     pub fn try_acquire_lease(
         &self,
         artifact: &PublishedDumpArtifact,
@@ -166,6 +253,28 @@ impl LocalArtifactStore {
                 source,
             }),
         }
+    }
+}
+
+fn is_regular_directory(path: &Path) -> Result<bool, ArtifactStoreError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(metadata.file_type().is_dir()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(ArtifactStoreError::Io {
+            operation: "inspect a managed artifact directory",
+            source,
+        }),
+    }
+}
+
+fn is_regular_file(path: &Path) -> Result<bool, ArtifactStoreError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(metadata.file_type().is_file()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(ArtifactStoreError::Io {
+            operation: "inspect a managed artifact file",
+            source,
+        }),
     }
 }
 
@@ -280,6 +389,31 @@ pub struct PublishedDumpArtifact {
     pub(crate) path: PathBuf,
     pub(crate) dump_path: PathBuf,
     pub(crate) metadata_path: PathBuf,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct LocatedDumpArtifact {
+    profile: ProfileName,
+    tenant_id: TenantId,
+    artifact: PublishedDumpArtifact,
+}
+
+impl LocatedDumpArtifact {
+    pub fn profile(&self) -> &ProfileName {
+        &self.profile
+    }
+
+    pub fn tenant_id(&self) -> &TenantId {
+        &self.tenant_id
+    }
+
+    pub fn artifact(&self) -> &PublishedDumpArtifact {
+        &self.artifact
+    }
+
+    pub(crate) fn into_parts(self) -> (ProfileName, TenantId, PublishedDumpArtifact) {
+        (self.profile, self.tenant_id, self.artifact)
+    }
 }
 
 impl PublishedDumpArtifact {

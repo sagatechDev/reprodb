@@ -2,15 +2,18 @@ use thiserror::Error;
 
 use crate::{
     application::{
-        CredentialProvisionError, DoctorFailureKind, DumpServiceError, ProfileServiceError,
-        SetupServiceError, SourceVerificationError, TargetVerificationError,
+        CredentialProvisionError, DoctorFailureKind, DumpServiceError, LocalTargetAttestationError,
+        LocalTargetGateError, LocalTenantRegistrationServiceError, LocalTenantWriteError,
+        ProfileServiceError, RestoreEngineError, RestoreServiceError, SetupServiceError,
+        SourceVerificationError, TargetVerificationError,
     },
     cli::prompt::PromptError,
-    domain::{TenantResolutionError, ValueObjectError},
+    domain::{DumpMetadataError, TenantResolutionError, ValueObjectError},
     infrastructure::config::ConfigError,
     infrastructure::docker::DockerDiscoveryError,
     infrastructure::mysql::{
         DockerClientError, DumpExecutorError, DumpFailureKind, DumpPreflightError,
+        RestoreExecutorError, RestoreFailureKind,
     },
 };
 
@@ -55,6 +58,9 @@ pub enum AppError {
     InvalidValue(#[from] ValueObjectError),
 
     #[error(transparent)]
+    InvalidDumpId(#[from] DumpMetadataError),
+
+    #[error(transparent)]
     TenantResolution(#[from] TenantResolutionError),
 
     #[error(transparent)]
@@ -75,6 +81,9 @@ pub enum AppError {
     #[error(transparent)]
     Dump(#[from] DumpServiceError),
 
+    #[error(transparent)]
+    Restore(#[from] RestoreServiceError),
+
     #[error("doctor found required problems; review the failed checks above")]
     DoctorChecksFailed { kind: DoctorFailureKind },
 
@@ -92,6 +101,7 @@ impl AppError {
     pub const fn category(&self) -> ErrorCategory {
         match self {
             Self::InvalidValue(..) => ErrorCategory::Usage,
+            Self::InvalidDumpId(..) => ErrorCategory::Usage,
             Self::TenantResolution(
                 TenantResolutionError::InvalidPattern
                 | TenantResolutionError::InvalidTenantId(_)
@@ -167,6 +177,7 @@ impl AppError {
                 | CredentialProvisionError::Config { .. },
             )) => ErrorCategory::Configuration,
             Self::Dump(error) => dump_error_category(error),
+            Self::Restore(error) => restore_error_category(error),
             Self::DoctorChecksFailed { kind } => match kind {
                 DoctorFailureKind::Configuration => ErrorCategory::Configuration,
                 DoctorFailureKind::Credential => ErrorCategory::Credential,
@@ -187,6 +198,90 @@ impl AppError {
 
     pub const fn should_render_on_stderr(&self) -> bool {
         !matches!(self, Self::DoctorChecksFailed { .. })
+    }
+}
+
+const fn restore_error_category(error: &RestoreServiceError) -> ErrorCategory {
+    match error {
+        RestoreServiceError::Artifact(_) => ErrorCategory::Cache,
+        RestoreServiceError::RegistrationData(_) => ErrorCategory::Restore,
+        RestoreServiceError::Target(error) => local_target_error_category(error),
+        RestoreServiceError::Engine(RestoreEngineError::VersionMismatch) => {
+            ErrorCategory::Dependency
+        }
+        RestoreServiceError::Engine(RestoreEngineError::Lock(_) | RestoreEngineError::State(_)) => {
+            ErrorCategory::Cache
+        }
+        RestoreServiceError::Engine(RestoreEngineError::Execution(error)) => {
+            restore_executor_error_category(error)
+        }
+        RestoreServiceError::Engine(
+            RestoreEngineError::DatabaseMismatch | RestoreEngineError::ImportedSizeMismatch,
+        ) => ErrorCategory::Restore,
+        RestoreServiceError::Registration(error) => match error {
+            LocalTenantRegistrationServiceError::RestoreIdentityMismatch => ErrorCategory::Restore,
+            LocalTenantRegistrationServiceError::Write(
+                LocalTenantWriteError::AuthenticationFailed,
+            ) => ErrorCategory::Credential,
+            LocalTenantRegistrationServiceError::Write(
+                LocalTenantWriteError::TargetUnavailable,
+            ) => ErrorCategory::Docker,
+            LocalTenantRegistrationServiceError::Write(_) => ErrorCategory::Restore,
+        },
+    }
+}
+
+const fn local_target_error_category(error: &LocalTargetGateError) -> ErrorCategory {
+    match error {
+        LocalTargetGateError::Config(_)
+        | LocalTargetGateError::NotConfigured
+        | LocalTargetGateError::RuntimeContextMissing
+        | LocalTargetGateError::DatabaseOutsideAllowlist => ErrorCategory::Configuration,
+        LocalTargetGateError::Credential(_) => ErrorCategory::Credential,
+        LocalTargetGateError::Attestation(LocalTargetAttestationError::ClientUnavailable)
+        | LocalTargetGateError::UnsupportedVendor
+        | LocalTargetGateError::UnsupportedServerSeries => ErrorCategory::Dependency,
+        LocalTargetGateError::Attestation(LocalTargetAttestationError::AuthenticationFailed) => {
+            ErrorCategory::Credential
+        }
+        LocalTargetGateError::Attestation(_)
+        | LocalTargetGateError::ContextIdentityChanged
+        | LocalTargetGateError::ContainerIdentityChanged
+        | LocalTargetGateError::ManagedMarkerMissing => ErrorCategory::Docker,
+    }
+}
+
+const fn restore_executor_error_category(error: &RestoreExecutorError) -> ErrorCategory {
+    match error {
+        RestoreExecutorError::OptionFile(_) => ErrorCategory::Credential,
+        RestoreExecutorError::OpenArtifact(_)
+        | RestoreExecutorError::DecodeArtifact(_)
+        | RestoreExecutorError::ArtifactChangedDuringImport => ErrorCategory::Cache,
+        RestoreExecutorError::RecreateFailed { kind, .. }
+        | RestoreExecutorError::ImportFailed { kind, .. } => restore_failure_category(*kind),
+        RestoreExecutorError::Start(_)
+        | RestoreExecutorError::Wait(_)
+        | RestoreExecutorError::MissingStdin
+        | RestoreExecutorError::MissingStderr
+        | RestoreExecutorError::ReadStderr(_)
+        | RestoreExecutorError::StderrTask(_) => ErrorCategory::Docker,
+        RestoreExecutorError::DecoderTask(_)
+        | RestoreExecutorError::ArtifactTooLarge
+        | RestoreExecutorError::MysqlStoppedEarly
+        | RestoreExecutorError::WriteStdin(_)
+        | RestoreExecutorError::CloseStdin(_) => ErrorCategory::Restore,
+    }
+}
+
+const fn restore_failure_category(kind: RestoreFailureKind) -> ErrorCategory {
+    match kind {
+        RestoreFailureKind::Authentication => ErrorCategory::Credential,
+        RestoreFailureKind::TargetUnavailable | RestoreFailureKind::DockerUnavailable => {
+            ErrorCategory::Docker
+        }
+        RestoreFailureKind::Permission | RestoreFailureKind::Sql | RestoreFailureKind::Unknown => {
+            ErrorCategory::Restore
+        }
     }
 }
 
@@ -363,5 +458,22 @@ mod tests {
         assert_eq!(failure(DumpFailureKind::Authentication).exit_code(), 30);
         assert_eq!(failure(DumpFailureKind::DockerUnavailable).exit_code(), 60);
         assert_eq!(failure(DumpFailureKind::Unknown).exit_code(), 40);
+    }
+
+    #[test]
+    fn restore_failures_keep_cache_configuration_and_credential_categories() {
+        let missing = AppError::from(RestoreServiceError::Artifact(
+            crate::infrastructure::restore_artifact::RestoreArtifactError::NotFound,
+        ));
+        let target = AppError::from(RestoreServiceError::Target(
+            LocalTargetGateError::NotConfigured,
+        ));
+        let registration = AppError::from(RestoreServiceError::Registration(
+            LocalTenantRegistrationServiceError::Write(LocalTenantWriteError::AuthenticationFailed),
+        ));
+
+        assert_eq!(missing.exit_code(), 50);
+        assert_eq!(target.exit_code(), 10);
+        assert_eq!(registration.exit_code(), 11);
     }
 }

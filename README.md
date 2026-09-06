@@ -13,6 +13,7 @@ O projeto está no início da implementação. O backlog e as decisões técnica
 - [`docs/doctor.md`](docs/doctor.md), para diagnosticar o ambiente sem alterá-lo;
 - [`docs/tenant-resolution.md`](docs/tenant-resolution.md), para lookup seguro de tenant/database;
 - [`docs/restore-engine.md`](docs/restore-engine.md), para as barreiras e o pipeline streaming de restore;
+- [`docs/restore-command.md`](docs/restore-command.md), para executar um restore gerenciado por dump ID;
 - [`docs/local-tenant-registration.md`](docs/local-tenant-registration.md), para o cadastro seguro pós-restore no `salt_central` local;
 - [`docs/ui-ux-test-guide.md`](docs/ui-ux-test-guide.md), para experimentar a CLI sem alterar a máquina.
 

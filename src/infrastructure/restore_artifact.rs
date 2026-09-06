@@ -9,7 +9,7 @@ use thiserror::Error;
 use tokio::task::JoinError;
 
 use crate::{
-    domain::{DumpArtifactMetadata, DumpId, ProfileName, Sha256Digest, TenantId},
+    domain::{DumpArtifactMetadata, DumpId, ProfileName, Sha256Digest, TenantId, TenantLookup},
     infrastructure::artifact_store::{
         ArtifactLease, ArtifactLeaseError, ArtifactStoreError, LocalArtifactStore,
         PublishedDumpArtifact,
@@ -22,6 +22,11 @@ const VALIDATION_BUFFER_BYTES: usize = 64 * 1024;
 pub struct RestoreArtifactRequest<'a> {
     pub profile: &'a ProfileName,
     pub tenant_id: &'a TenantId,
+    pub dump_id: DumpId,
+}
+
+pub struct RestoreArtifactLookup<'a> {
+    pub tenant: &'a TenantLookup,
     pub dump_id: DumpId,
 }
 
@@ -66,6 +71,40 @@ impl LocalRestoreArtifactValidator {
             .await
             .map_err(RestoreArtifactError::ValidationTask)?
     }
+
+    pub async fn validate_by_id(
+        &self,
+        request: RestoreArtifactLookup<'_>,
+    ) -> Result<ValidatedRestoreArtifact, RestoreArtifactError> {
+        let store = self.store.clone();
+        let tenant = request.tenant.clone();
+        let dump_id = request.dump_id;
+        tokio::task::spawn_blocking(move || validate_by_id_blocking(store, tenant, dump_id))
+            .await
+            .map_err(RestoreArtifactError::ValidationTask)?
+    }
+}
+
+fn validate_by_id_blocking(
+    store: LocalArtifactStore,
+    tenant: TenantLookup,
+    dump_id: DumpId,
+) -> Result<ValidatedRestoreArtifact, RestoreArtifactError> {
+    let mut candidates = store.find_complete_by_id(dump_id)?;
+    if candidates.is_empty() {
+        return Err(RestoreArtifactError::NotFound);
+    }
+    if candidates.len() != 1 {
+        return Err(RestoreArtifactError::DuplicateId);
+    }
+    let (profile, tenant_id, artifact) = candidates.remove(0).into_parts();
+    let validated = validate_artifact(store, profile, tenant_id, dump_id, artifact)?;
+    if validated.metadata.tenant_lookup != tenant
+        && validated.metadata.tenant_id.as_str() != tenant.as_str()
+    {
+        return Err(RestoreArtifactError::TenantMismatch);
+    }
+    Ok(validated)
 }
 
 fn validate_blocking(
@@ -79,6 +118,16 @@ fn validate_blocking(
         .into_iter()
         .find(|artifact| artifact.dump_id() == dump_id)
         .ok_or(RestoreArtifactError::NotFound)?;
+    validate_artifact(store, profile, tenant_id, dump_id, artifact)
+}
+
+fn validate_artifact(
+    store: LocalArtifactStore,
+    profile: ProfileName,
+    tenant_id: TenantId,
+    dump_id: DumpId,
+    artifact: PublishedDumpArtifact,
+) -> Result<ValidatedRestoreArtifact, RestoreArtifactError> {
     let lease = store.try_acquire_lease(&artifact)?;
     let metadata = read_metadata(artifact.metadata_path())?;
     if metadata.dump_id != dump_id || metadata.profile != profile || metadata.tenant_id != tenant_id
@@ -201,6 +250,9 @@ pub enum RestoreArtifactError {
     #[error("the managed dump artifact was not found")]
     NotFound,
 
+    #[error("the managed dump ID exists more than once in the local cache")]
+    DuplicateId,
+
     #[error("could not read managed dump metadata")]
     ReadMetadata(#[source] io::Error),
 
@@ -209,6 +261,9 @@ pub enum RestoreArtifactError {
 
     #[error("managed dump metadata does not match its profile, tenant or ID")]
     IdentityMismatch,
+
+    #[error("the requested tenant does not match the managed dump")]
+    TenantMismatch,
 
     #[error("could not read the managed dump artifact")]
     ReadArtifact(#[source] io::Error),
@@ -311,6 +366,68 @@ mod tests {
 
         assert_eq!(validated.metadata(), &metadata);
         assert!(validated.dump_path().ends_with("dump.sql.zst"));
+    }
+
+    #[tokio::test]
+    async fn locates_a_managed_dump_by_id_without_contacting_the_source() {
+        let directory = tempdir().unwrap();
+        let (_, tenant_id, dump_id, metadata) = artifact(directory.path()).await;
+        let validator = LocalRestoreArtifactValidator::new(directory.path());
+
+        for tenant in ["sagatec", tenant_id.as_str()] {
+            let validated = validator
+                .validate_by_id(RestoreArtifactLookup {
+                    tenant: &TenantLookup::try_from(tenant).unwrap(),
+                    dump_id,
+                })
+                .await
+                .unwrap();
+            assert_eq!(validated.metadata(), &metadata);
+        }
+        assert!(matches!(
+            validator
+                .validate_by_id(RestoreArtifactLookup {
+                    tenant: &TenantLookup::try_from("polymer").unwrap(),
+                    dump_id,
+                })
+                .await,
+            Err(RestoreArtifactError::TenantMismatch)
+        ));
+    }
+
+    #[tokio::test]
+    async fn duplicate_dump_ids_are_rejected_before_reading_either_candidate() {
+        let directory = tempdir().unwrap();
+        let (_, _, dump_id, _) = artifact(directory.path()).await;
+        let original = directory
+            .path()
+            .join("profiles/local-source/salt_sagatec")
+            .join(dump_id.to_string());
+        let duplicate = directory
+            .path()
+            .join("profiles/other-source/salt_polymer")
+            .join(dump_id.to_string());
+        std::fs::create_dir_all(&duplicate).unwrap();
+        std::fs::copy(
+            original.join("dump.sql.zst"),
+            duplicate.join("dump.sql.zst"),
+        )
+        .unwrap();
+        std::fs::copy(
+            original.join("metadata.json"),
+            duplicate.join("metadata.json"),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            LocalRestoreArtifactValidator::new(directory.path())
+                .validate_by_id(RestoreArtifactLookup {
+                    tenant: &TenantLookup::try_from("sagatec").unwrap(),
+                    dump_id,
+                })
+                .await,
+            Err(RestoreArtifactError::DuplicateId)
+        ));
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 # Registro mínimo do tenant no `salt_central` local
 
-> RDB-052 implementa o núcleo pós-restore. A ligação ao comando público `reprodb restore` será feita na RDB-053.
+> RDB-052 implementa o núcleo pós-restore. A RDB-053 o conecta ao comando público documentado em [`restore-command.md`](restore-command.md).
 
 Somente restaurar `salt_sagatec` ou `salt_polymer` não é suficiente para o Salt inicializar a tenancy. O middleware real resolve um registro em `salt_central.tenants`, encontra seu `domain` e então escolhe o database pelo `tenancy_db_name`.
 
@@ -81,7 +81,7 @@ Todos os valores variáveis entram no SQL como hexadecimal UTF-8 convertido pelo
 
 Um lookup por domain válido, como `sagatec`, preserva esse label. Um lookup por tenant ID normaliza `_` para `-`, por exemplo `salt_sagatec -> salt-sagatec`. O value object aceita apenas DNS label lowercase de até 63 caracteres; `localhost` é reservado como domínio central local padrão.
 
-A URL local e uma eventual escolha/alteração interativa do alias pertencem à UX da RDB-053/RDB-054.
+Uma eventual URL local e a escolha/alteração interativa do alias pertencem à UX da RDB-054, quando a configuração HTTP real estiver disponível; `restore` mostra somente o domain que conhece.
 
 ## Evidências
 

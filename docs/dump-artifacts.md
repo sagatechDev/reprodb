@@ -44,6 +44,7 @@ O formato `mysql-sql-zstd-v1` registra:
 - fingerprint do source;
 - versões do source e client;
 - charset e collation;
+- snapshot tipado das features permitidas para o tenant local;
 - versão da DumpPolicy;
 - criação e conclusão em segundos Unix;
 - bytes SQL e comprimidos;

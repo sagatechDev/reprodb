@@ -1,6 +1,6 @@
 # RestoreEngine streaming
 
-> RDB-051 implementa o núcleo; o comando público `reprodb restore` pertence à RDB-053 e ainda não está conectado à CLI.
+> RDB-051 implementa o núcleo; a RDB-053 o conecta ao comando público `reprodb restore` documentado em [`restore-command.md`](restore-command.md).
 
 O restore não aceita caminho de arquivo, host MySQL nem `SourceProfile`. Sua API exige simultaneamente:
 
@@ -23,7 +23,7 @@ metadata estrita
     -> estado ready
 ```
 
-Um arquivo arbitrário não pode ser convertido diretamente em `ValidatedRestoreArtifact`. O validator localiza o dump pelo `profile + tenant ID + dump ID` dentro de `~/.reprodb/cache`, mantém uma lease compartilhada durante todo o restore e recusa metadata divergente, corrupção, truncamento e stream Zstd inválido antes de qualquer operação destrutiva.
+Um arquivo arbitrário não pode ser convertido diretamente em `ValidatedRestoreArtifact`. O comando localiza um UUID único sob `~/.reprodb/cache/profiles`, recupera profile e tenant ID dos diretórios tipados e então valida a identidade completa. O validator mantém uma lease compartilhada durante todo o restore e recusa metadata divergente, corrupção, truncamento e stream Zstd inválido antes de qualquer operação destrutiva.
 
 O checksum do SQL é conferido uma segunda vez durante a importação. Isso detecta uma alteração entre a validação e o consumo, sem carregar o dump na memória.
 
@@ -73,6 +73,6 @@ O teste pode usar `REPRODB_TEST_MYSQL_CONTAINER` para selecionar outro container
 ## Limites mantidos para as próximas issues
 
 - RDB-052 registra o tenant mínimo no `salt_central` local somente após o tenant estar pronto;
-- RDB-053 ligará lookup, dump ID, target gate, engine e UX no comando `restore`;
-- RDB-058 acrescentará cancelamento explícito do client container e tratamento de sinais;
+- RDB-053 liga lookup, dump ID, target gate, engine, registro central e UX no comando `restore`;
+- RDB-060 acrescentará cancelamento explícito do client container e tratamento de sinais;
 - nenhum restore em host arbitrário, source profile ou Docker context remoto é suportado.

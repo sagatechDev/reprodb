@@ -18,6 +18,8 @@ Os códigos abaixo fazem parte da interface da CLI. Novas mensagens podem ser ad
 | 70 | restore | Recriação/importação/validação local falhou |
 | 130 | interrompido | Ctrl+C/SIGINT tratado pela aplicação |
 
+No fluxo de restore, UUID inválido é erro de uso (`2`); artefato ausente, duplicado ou corrompido pertence ao cache (`50`); identidade do target pertence a Docker/configuração (`60`/`10`); e falha depois do início da recriação/importação pertence ao restore (`70`).
+
 ## Regras de mensagem e logging
 
 - mensagens para o usuário vão a stderr e precisam sugerir uma ação quando possível;

@@ -193,7 +193,23 @@ Uma execução bem-sucedida deve terminar aproximadamente assim:
 
 Durante a exportação em um terminal interativo, observe se a linha única de progresso com bytes, taxa e duração é legível e não polui o histórico. Com stdout redirecionado, a saída deve permanecer estável e sem animação.
 
-`restore`, `pull` sem `--preview` e `cache` ainda falham explicitamente até as próximas milestones. A prévia continua disponível para avaliar o fluxo completo sem tocar nos bancos:
+Copie o `Dump ID` retornado e exercite o restore real no target escolhido pelo `setup`:
+
+```bash
+$REPRODB restore sagatec --dump-id <uuid>
+echo $?
+```
+
+Antes de substituir o database local, confira se o plano mostra o profile source gravado no dump, `salt_sagatec`, o container `mysql-8`, o mesmo UUID e o domain `sagatec`. O comando não consulta novamente o source, mas executa `DROP/CREATE` no database tenant local, importa o SQL e atualiza `salt_central`; não use um target que contenha dados locais que você queira preservar.
+
+Repita o mesmo comando para avaliar o retry idempotente. Um UUID inválido deve terminar com exit code `2`, e um UUID válido mas ausente do cache deve terminar com exit code `50`, ambos antes de acessar Docker:
+
+```bash
+$REPRODB restore sagatec --dump-id ../../dump.sql.zst
+$REPRODB restore sagatec --dump-id 550e8400-e29b-41d4-a716-446655440000
+```
+
+`pull` sem `--preview` e `cache` ainda falham explicitamente até as próximas milestones. A prévia continua disponível para avaliar o fluxo completo sem tocar nos bancos:
 
 ```bash
 $REPRODB pull sagatec --preview

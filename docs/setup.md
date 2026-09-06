@@ -19,7 +19,7 @@ O comando:
 9. conecta ao namespace de rede do container pelo ID completo e valida versão/vendor;
 10. salva o ID, nome, context, tipo de confiança, allowlist e chave da credencial no TOML, mantendo a senha no credential store do sistema.
 
-O ID completo é a identidade de segurança. O nome fica salvo para apresentação, mas um restore futuro deverá recusar um container recriado com o mesmo nome e outro ID.
+O ID completo é a identidade de segurança. O nome fica salvo para apresentação, mas `reprodb restore` recusa um container recriado com o mesmo nome e outro ID.
 
 O prefixo sugerido é `salt_`: ele permite `salt_sagatec` e `salt_polymer`, mas a barreira de restore recusa o `salt_central` configurado. Depois do setup, context, identidade, label quando aplicável, conexão, vendor e versão são atestados novamente antes de qualquer operação destrutiva.
 

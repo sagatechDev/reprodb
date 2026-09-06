@@ -765,7 +765,11 @@ Contrato e evidências: [`docs/local-tenant-registration.md`](local-tenant-regis
 
 **Labels:** `priority:p0`, `type:feature`, `area:cli`, `area:restore`
 
+**Status:** implementada — o comando localiza um UUID único no cache sem consultar o source, valida tenant/metadata/Zstd/checksums, atesta e autoriza o target, mostra o plano destrutivo local, executa restore streaming e registra o tenant no `salt_central`. Retry pelo mesmo ID é idempotente e foi validado no `mysql-8` real.
+
 **Aceite:** aceita apenas `dump-id` gerenciado, mostra source/target, restaura e informa claramente o estado final.
+
+Contrato e evidências: [`docs/restore-command.md`](restore-command.md).
 
 #### RDB-054 — Entregar `reprodb pull`
 

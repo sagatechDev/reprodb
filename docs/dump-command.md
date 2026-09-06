@@ -34,7 +34,7 @@ config/profile
 
 O comando mostra bytes processados, throughput e duração quando executado em terminal. Não mostra percentual porque o tamanho total do dump não é conhecido previamente.
 
-Ao concluir, a saída informa o profile, tenant, database, versões do source e client, tamanhos, duração, ID e caminho do artefato. Esse ID será a entrada do futuro `reprodb restore`.
+Ao concluir, a saída informa o profile, tenant, database, versões do source e client, tamanhos, duração, ID e caminho do artefato. Esse ID é a entrada do [`reprodb restore`](restore-command.md).
 
 ## Segurança e integridade
 
