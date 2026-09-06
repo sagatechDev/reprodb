@@ -1,6 +1,18 @@
 # Configuração local
 
-O reprodb usa `directories::ProjectDirs` para localizar os diretórios nativos da aplicação. Isso evita depender de paths específicos de Unix e mantém a mesma abstração no macOS e no Linux. O arquivo principal se chama `reprodb.toml`.
+O reprodb mantém seu estado local sob uma única raiz:
+
+```text
+~/.reprodb/
+├── reprodb.toml
+├── reprodb.lock
+├── cache/
+└── data/
+```
+
+Isso vale para macOS e Linux. Testes, CI ou instalações que precisem de isolamento podem definir um caminho absoluto em `REPRODB_HOME`; por exemplo, `REPRODB_HOME=/tmp/reprodb-test`. O override nunca é aceito como path relativo.
+
+Versões anteriores de desenvolvimento usavam os diretórios nativos retornados por `directories::ProjectDirs`. Quando o novo arquivo ainda não existe, a CLI consegue ler a configuração legada. A próxima alteração de configuração grava o estado em `~/.reprodb/reprodb.toml`; o arquivo antigo é preservado para permitir recuperação manual.
 
 A primeira leitura sem arquivo retorna uma configuração vazia na versão atual sem criar nada no disco. A primeira alteração cria o diretório e persiste o documento.
 
@@ -58,3 +70,5 @@ Os modos TLS iniciais são `required`, `preferred` e `disabled`. Um profile marc
 - erros de parse não repetem o conteúdo potencialmente sensível do TOML.
 
 Leitores veem o documento antigo ou o novo; nunca um arquivo parcialmente escrito pelo fluxo normal do reprodb.
+
+Option files que contêm a senha do MySQL continuam no diretório temporário seguro do sistema operacional e são removidos pelo guard ao final do processo. Eles são deliberadamente excluídos de `~/.reprodb`: um secret transitório não deve se tornar estado navegável ou persistente. Stagings de dumps, por outro lado, ficam em `~/.reprodb/cache` com sufixo `.part` até a publicação atômica.

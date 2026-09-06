@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use directories::ProjectDirs;
+use directories::{BaseDirs, ProjectDirs};
 use fs4::TryLockError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -22,24 +22,42 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 const CONFIG_FILE_NAME: &str = "reprodb.toml";
 const LOCK_FILE_NAME: &str = "reprodb.lock";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
+const REPRODB_HOME_ENV: &str = "REPRODB_HOME";
+const REPRODB_HOME_DIRECTORY: &str = ".reprodb";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppPaths {
     config_dir: PathBuf,
     cache_dir: PathBuf,
     data_dir: PathBuf,
+    legacy_config_file: Option<PathBuf>,
 }
 
 impl AppPaths {
     pub fn discover() -> Result<Self, ConfigError> {
-        let directories = ProjectDirs::from("com", "Sagatech", "reprodb")
-            .ok_or(ConfigError::ProjectDirectoriesUnavailable)?;
+        if let Some(configured) = std::env::var_os(REPRODB_HOME_ENV) {
+            let root = PathBuf::from(configured);
+            if !root.is_absolute() || root.as_os_str().is_empty() {
+                return Err(ConfigError::InvalidHomeOverride);
+            }
+            return Ok(Self::from_root(root));
+        }
 
-        Ok(Self::new(
-            directories.config_dir(),
-            directories.cache_dir(),
-            directories.data_dir(),
-        ))
+        let base = BaseDirs::new().ok_or(ConfigError::HomeDirectoryUnavailable)?;
+        let mut paths = Self::from_root(base.home_dir().join(REPRODB_HOME_DIRECTORY));
+        paths.legacy_config_file = ProjectDirs::from("com", "Sagatech", "reprodb")
+            .map(|directories| directories.config_dir().join(CONFIG_FILE_NAME));
+        Ok(paths)
+    }
+
+    pub fn from_root(root: impl Into<PathBuf>) -> Self {
+        let root = root.into();
+        Self {
+            config_dir: root.clone(),
+            cache_dir: root.join("cache"),
+            data_dir: root.join("data"),
+            legacy_config_file: None,
+        }
     }
 
     pub fn new(
@@ -51,6 +69,7 @@ impl AppPaths {
             config_dir: config_dir.into(),
             cache_dir: cache_dir.into(),
             data_dir: data_dir.into(),
+            legacy_config_file: None,
         }
     }
 
@@ -72,6 +91,18 @@ impl AppPaths {
 
     pub fn config_lock_file(&self) -> PathBuf {
         self.config_dir.join(LOCK_FILE_NAME)
+    }
+
+    fn config_file_for_read(&self) -> PathBuf {
+        let current = self.config_file();
+        if current.exists() {
+            return current;
+        }
+        self.legacy_config_file
+            .as_ref()
+            .filter(|path| path.is_file())
+            .cloned()
+            .unwrap_or(current)
     }
 }
 
@@ -330,8 +361,11 @@ impl TenantResolverConfig {
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("could not determine the operating system directories for reprodb")]
-    ProjectDirectoriesUnavailable,
+    #[error("could not determine the user home directory for reprodb")]
+    HomeDirectoryUnavailable,
+
+    #[error("REPRODB_HOME must be an absolute, non-empty path")]
+    InvalidHomeOverride,
 
     #[error("could not {operation} the reprodb configuration at {path}")]
     Io {
@@ -385,7 +419,7 @@ impl ConfigRepository {
     }
 
     pub fn load(&self) -> Result<AppConfig, ConfigError> {
-        let path = self.paths.config_file();
+        let path = self.paths.config_file_for_read();
         let file = match File::open(&path) {
             Ok(file) => file,
             Err(source) if source.kind() == io::ErrorKind::NotFound => {
@@ -971,6 +1005,48 @@ mod tests {
             paths.config_file(),
             Path::new("config-root").join(CONFIG_FILE_NAME)
         );
+    }
+
+    #[test]
+    fn reprodb_home_keeps_configuration_cache_and_data_under_one_root() {
+        let paths = AppPaths::from_root("/users/developer/.reprodb");
+
+        assert_eq!(
+            paths.config_file(),
+            Path::new("/users/developer/.reprodb/reprodb.toml")
+        );
+        assert_eq!(
+            paths.config_lock_file(),
+            Path::new("/users/developer/.reprodb/reprodb.lock")
+        );
+        assert_eq!(
+            paths.cache_dir(),
+            Path::new("/users/developer/.reprodb/cache")
+        );
+        assert_eq!(
+            paths.data_dir(),
+            Path::new("/users/developer/.reprodb/data")
+        );
+    }
+
+    #[test]
+    fn legacy_native_configuration_is_read_until_the_new_home_is_written() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join(".reprodb");
+        let legacy = temp.path().join("legacy/reprodb.toml");
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, "schema_version = 1\n").unwrap();
+        let mut paths = AppPaths::from_root(&root);
+        paths.legacy_config_file = Some(legacy);
+        let repository = ConfigRepository::new(paths);
+
+        assert_eq!(repository.load().unwrap(), AppConfig::default());
+        assert!(!repository.paths().config_file().exists());
+
+        let config = valid_config();
+        repository.save(&config).unwrap();
+        assert_eq!(repository.load().unwrap(), config);
+        assert!(repository.paths().config_file().exists());
     }
 
     #[cfg(unix)]

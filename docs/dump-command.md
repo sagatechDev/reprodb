@@ -2,6 +2,12 @@
 
 `reprodb dump TENANT` cria um dump lógico comprimido no cache local e não executa restore.
 
+O cache fica em `~/.reprodb/cache`. Um resultado para o profile `local` e tenant `salt_sagatec` é publicado em:
+
+```text
+~/.reprodb/cache/profiles/local/salt_sagatec/<dump-id>/
+```
+
 Exemplo com os nomes usados no Salt:
 
 ```bash
