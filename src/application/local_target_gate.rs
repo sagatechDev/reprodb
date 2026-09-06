@@ -244,6 +244,25 @@ impl AuthorizedLocalTarget {
     pub const fn client(&self) -> ApprovedMysqlClient {
         self.target.client
     }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(database: DatabaseName) -> Self {
+        Self {
+            target: GuardedLocalTarget {
+                docker_context: "desktop-linux".to_owned(),
+                container_name: ContainerName::try_from("mysql-8").unwrap(),
+                container_id: ContainerId::try_from("a".repeat(64)).unwrap(),
+                username: "root".to_owned(),
+                password: SecretString::from("local-test-password"),
+                central_database: DatabaseName::try_from("salt_central").unwrap(),
+                tenant_database_prefix: "salt_".to_owned(),
+                server_version: "8.4.4".parse().unwrap(),
+                vendor: "MySQL Community Server - GPL".to_owned(),
+                client: crate::infrastructure::mysql::ClientCatalog::resolve("8.4").unwrap(),
+            },
+            database,
+        }
+    }
 }
 
 #[derive(Debug, Error)]

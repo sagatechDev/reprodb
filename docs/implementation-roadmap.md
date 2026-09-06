@@ -741,9 +741,13 @@ Contrato e invariantes: [`docs/local-target-safety.md`](local-target-safety.md).
 
 **Labels:** `priority:p0`, `type:feature`, `area:restore`, `area:mysql`
 
+**Status:** implementada — artefato e target são capabilities validadas, o lock é adquirido antes do `DROP/CREATE`, charset/collation são preservados e o Zstd é enviado ao `mysql` com memória constante. Estado `incomplete` é persistido antes da destruição e só muda para `ready` após exit code e integridade finais. Validado no macOS contra o container real `mysql-8`.
+
 **Ordem obrigatória:** validar metadata → verificar checksum/Zstd → validar target → adquirir lock → drop/create com charset/collation original → importar → validar exit code.
 
 **Aceite:** dump corrompido não destrói o database existente; falha no import marca estado incompleto e permite retry sem novo dump.
+
+Contrato e evidências: [`docs/restore-engine.md`](restore-engine.md).
 
 #### RDB-052 — Implementar registro central local mínimo
 
@@ -891,11 +895,11 @@ Não iniciar integração de produção antes de concluir as milestones 0 a 6.
 - [ ] Alias ou tenant ID resolve via `salt_central`.
 - [ ] `tenancy_db_name` é respeitado.
 - [ ] Dump usa flags conservadoras e `--set-gtid-purged=OFF`.
-- [ ] Compressão e restore são streaming.
+- [x] Compressão e restore são streaming.
 - [ ] Nenhum SQL cru é persistido no fluxo normal.
 - [ ] Cache é atômico, possui checksum, TTL e source fingerprint.
-- [ ] Restore valida o artefato antes de dropar o database.
-- [ ] Target Docker remoto ou trocado é bloqueado.
+- [x] Restore valida o artefato antes de dropar o database.
+- [x] Target Docker remoto ou trocado é bloqueado.
 - [ ] Registro central local mínimo é criado sem copiar secrets.
 - [ ] Ctrl+C limpa child, partial, option file e lock.
 - [ ] E2E passa no Linux.

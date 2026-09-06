@@ -1,6 +1,6 @@
 # Barreira de segurança do target local
 
-Nenhuma operação destrutiva deve receber host, porta ou `SourceProfile`. O futuro restore aceitará somente um `AuthorizedLocalTarget`, tipo que não pode ser construído pelo parser da CLI nem pela configuração isoladamente.
+Nenhuma operação destrutiva recebe host, porta ou `SourceProfile`. O `RestoreEngine` aceita somente um `AuthorizedLocalTarget`, tipo que não pode ser construído pelo parser da CLI nem pela configuração isoladamente.
 
 ## Provas exigidas
 
@@ -44,6 +44,8 @@ Os databases administrativos já são impossíveis de representar como `Database
 
 O prefixo pode ser configurado no setup para instalações do Salt com outra convenção. Ele aceita somente 1–32 letras ASCII, dígitos ou `_`; não é um fragmento SQL.
 
-## Limite desta issue
+## Integração com o restore
 
-A RDB-050 produz a identidade autorizada, mas não executa `DROP`, `CREATE` ou import. A RDB-051 será responsável pelo engine de restore e sua API deverá exigir `AuthorizedLocalTarget`. Assim, pular a barreira exigiria alterar deliberadamente a arquitetura, em vez de apenas passar outro profile para uma função genérica.
+A RDB-050 produz a identidade autorizada. A RDB-051 implementa `DROP`, `CREATE` e import numa API que exige esse tipo e também um `ValidatedRestoreArtifact`. Assim, pular uma das barreiras exige alterar deliberadamente a arquitetura, em vez de apenas passar outro profile ou caminho para uma função genérica.
+
+O pipeline completo e seu estado recuperável estão em [`restore-engine.md`](restore-engine.md).

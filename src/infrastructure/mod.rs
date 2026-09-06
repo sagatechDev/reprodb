@@ -9,3 +9,5 @@ pub mod filesystem;
 pub mod mysql;
 pub mod operation_lock;
 pub mod process;
+pub mod restore_artifact;
+pub mod restore_state;
