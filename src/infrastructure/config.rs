@@ -13,7 +13,7 @@ use thiserror::Error;
 
 use crate::domain::{
     ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseName, MysqlTlsMode,
-    ProfileName,
+    PatternTenantResolver, ProfileName,
 };
 use crate::infrastructure::mysql::{ClientCatalog, ClientCatalogError};
 
@@ -277,7 +277,12 @@ impl TenantResolverConfig {
         match self {
             Self::SaltCentral { .. } => Ok(()),
             Self::Pattern { pattern } => {
-                validate_plain_text("profile.tenant_resolver.pattern", pattern, 128)
+                validate_plain_text("profile.tenant_resolver.pattern", pattern, 128)?;
+                PatternTenantResolver::new(pattern).map_err(|_| ConfigError::InvalidField {
+                    field: "profile.tenant_resolver.pattern",
+                    reason: "must contain exactly one `{tenant}` and only database-safe literals",
+                })?;
+                Ok(())
             }
         }
     }
@@ -795,6 +800,28 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn validates_pattern_resolvers_before_persisting_configuration() {
+        let temp = TempDir::new().unwrap();
+        let repository = test_repository(&temp);
+        let mut config = valid_config();
+        config.profiles.values_mut().next().unwrap().tenant_resolver =
+            TenantResolverConfig::Pattern {
+                pattern: "salt_{tenant}_{tenant}".to_owned(),
+            };
+
+        let error = repository.save(&config).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigError::InvalidField {
+                field: "profile.tenant_resolver.pattern",
+                ..
+            }
+        ));
+        assert!(!repository.paths().config_file().exists());
     }
 
     #[test]

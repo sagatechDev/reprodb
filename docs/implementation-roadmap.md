@@ -597,6 +597,8 @@ Critério da milestone: um alias como `sagatec` resolve de modo seguro para tena
 
 **Labels:** `priority:p1`, `type:feature`, `area:tenant`
 
+**Status:** implementada — pattern compilado exige exatamente um `{tenant}`, aceita somente literais seguros para database e sempre reconstrói `TenantId`/`DatabaseName` validados. Configuração inválida é recusada antes da persistência.
+
 **Escopo:** pattern com exatamente um `{tenant}`, validação no carregamento e validação final de `DatabaseName`.
 
 **Aceite:** casos válidos, traversal, SQL injection, pattern inválido e databases administrativos são cobertos.
