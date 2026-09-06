@@ -40,7 +40,7 @@ A query é fixa e roda pelo client MySQL Docker aprovado. O lookup validado entr
 
 O JSON completo de `tenants.data` nunca sai do MySQL. JSON inválido, override com tipo incorreto, metadata malformada, múltiplos matches ou database administrativo bloqueiam a resolução sem repetir a linha recebida em erro/debug.
 
-Overrides de host, porta, usuário ou connection serão bloqueados pela RDB-032 antes que o dump seja habilitado. Até essa barreira existir, o resolver não está conectado a um comando mutável.
+Overrides de host, porta, usuário ou connection incompatíveis com o profile bloqueiam a resolução. A comparação ocorre dentro do MySQL: os valores do profile entram em hex e a query devolve somente um booleano. A presença de `tenancy_db_password` também bloqueia, pois a CLI deliberadamente não lê nem compara esse secret. Nenhum valor de override retorna ao processo.
 
 ## Validação local real
 

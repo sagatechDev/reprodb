@@ -50,6 +50,11 @@ pub enum TenantResolutionError {
 
     #[error("the approved MySQL client is unavailable")]
     ClientUnavailable,
+
+    #[error(
+        "the tenant requires connection overrides that are incompatible with this source profile"
+    )]
+    ConnectionOverride,
 }
 
 #[async_trait]

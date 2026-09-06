@@ -72,7 +72,13 @@ where
                 self.source.tls_mode,
             )
             .map_err(map_client_error)?;
-        let query = resolution_query(lookup, self.allow_domain_lookup);
+        let query = resolution_query(
+            lookup,
+            self.allow_domain_lookup,
+            &self.source.host,
+            self.source.port,
+            &self.source.username,
+        );
         let output = self
             .runtime
             .query_connection(
@@ -88,11 +94,23 @@ where
     }
 }
 
-fn resolution_query(lookup: &TenantLookup, allow_domain_lookup: bool) -> String {
+fn resolution_query(
+    lookup: &TenantLookup,
+    allow_domain_lookup: bool,
+    source_host: &str,
+    source_port: u16,
+    source_username: &str,
+) -> String {
     let lookup = encode_hex(lookup.as_str().as_bytes());
+    let source_host = encode_hex(source_host.as_bytes());
+    let source_port = encode_hex(source_port.to_string().as_bytes());
+    let source_username = encode_hex(source_username.as_bytes());
     let domain_enabled = u8::from(allow_domain_lookup);
     format!(
         "SET @reprodb_lookup = CONVERT(0x{lookup} USING utf8mb4);\
+         SET @reprodb_source_host = CONVERT(0x{source_host} USING utf8mb4);\
+         SET @reprodb_source_port = CONVERT(0x{source_port} USING utf8mb4);\
+         SET @reprodb_source_username = CONVERT(0x{source_username} USING utf8mb4);\
          SELECT HEX(t.id),\
          CASE WHEN t.data IS NULL THEN 0 \
          WHEN JSON_VALID(t.data) THEN \
@@ -105,7 +123,26 @@ fn resolution_query(lookup: &TenantLookup, allow_domain_lookup: bool) -> String 
            CASE WHEN JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_db_name')) = 'STRING' \
                 THEN HEX(JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.tenancy_db_name'))) ELSE '' END \
          ELSE '' END,\
-         IF(BINARY t.id = BINARY @reprodb_lookup, 1, 0) \
+         IF(BINARY t.id = BINARY @reprodb_lookup, 1, 0),\
+         CASE WHEN t.data IS NULL OR NOT JSON_VALID(t.data) THEN 0 \
+         WHEN (\
+           (JSON_EXTRACT(t.data, '$.tenancy_db_connection') IS NOT NULL AND \
+            JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_db_connection')) <> 'NULL') OR \
+           (JSON_EXTRACT(t.data, '$.tenancy_db_password') IS NOT NULL AND \
+            JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_db_password')) <> 'NULL') OR \
+           (JSON_EXTRACT(t.data, '$.tenancy_db_host') IS NOT NULL AND \
+            JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_db_host')) <> 'NULL' AND \
+            (JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_db_host')) <> 'STRING' OR \
+             BINARY JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.tenancy_db_host')) <> BINARY @reprodb_source_host)) OR \
+           (JSON_EXTRACT(t.data, '$.tenancy_db_port') IS NOT NULL AND \
+            JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_db_port')) <> 'NULL' AND \
+            (JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_db_port')) NOT IN ('INTEGER', 'STRING') OR \
+             BINARY JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.tenancy_db_port')) <> BINARY @reprodb_source_port)) OR \
+           (JSON_EXTRACT(t.data, '$.tenancy_db_username') IS NOT NULL AND \
+            JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_db_username')) <> 'NULL' AND \
+            (JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_db_username')) <> 'STRING' OR \
+             BINARY JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.tenancy_db_username')) <> BINARY @reprodb_source_username))\
+         ) THEN 1 ELSE 0 END \
          FROM tenants AS t \
          WHERE BINARY t.id = BINARY @reprodb_lookup \
             OR ({domain_enabled} = 1 AND EXISTS (\
@@ -128,7 +165,7 @@ fn parse_resolution(output: &[u8]) -> Result<ResolvedTenant, TenantResolutionErr
     }
 
     let columns = rows[0].split('\t').collect::<Vec<_>>();
-    if columns.len() != 4 {
+    if columns.len() != 5 {
         return Err(TenantResolutionError::InvalidMetadata);
     }
     let tenant_id = decode_hex(columns[0], 255)
@@ -149,6 +186,11 @@ fn parse_resolution(output: &[u8]) -> Result<ResolvedTenant, TenantResolutionErr
         "1" => TenantMatch::TenantId,
         _ => return Err(TenantResolutionError::InvalidMetadata),
     };
+    match columns[4] {
+        "0" => {}
+        "1" => return Err(TenantResolutionError::ConnectionOverride),
+        _ => return Err(TenantResolutionError::InvalidMetadata),
+    }
 
     Ok(ResolvedTenant {
         tenant_id,
@@ -276,7 +318,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolves_a_domain_without_returning_the_central_json() {
-        let (resolver, commands) = resolver("73616C745F73616761746563\t0\t\t0\n", true);
+        let (resolver, commands) = resolver("73616C745F73616761746563\t0\t\t0\t0\n", true);
         let lookup = TenantLookup::try_from("sagatec").unwrap();
 
         let resolved = resolver.resolve(&lookup).await.unwrap();
@@ -289,6 +331,7 @@ mod tests {
         let query = arguments.last().unwrap().to_string_lossy();
         assert!(query.contains("0x73616761746563"));
         assert!(!query.contains("sagatec"));
+        assert!(!query.contains("readonly"));
         assert!(
             arguments
                 .iter()
@@ -304,7 +347,7 @@ mod tests {
     #[tokio::test]
     async fn respects_a_valid_database_override() {
         let (resolver, _) = resolver(
-            "73616C745F706F6C796D6572\t1\t73616C745F706F6C796D65725F64617461\t1\n",
+            "73616C745F706F6C796D6572\t1\t73616C745F706F6C796D65725F64617461\t1\t0\n",
             true,
         );
 
@@ -330,14 +373,14 @@ mod tests {
             TenantResolutionError::NotFound
         );
         assert_eq!(
-            resolver("73616C745F61\t0\t\t0\n73616C745F62\t0\t\t0\n", true)
+            resolver("73616C745F61\t0\t\t0\t0\n73616C745F62\t0\t\t0\t0\n", true)
                 .0
                 .resolve(&lookup)
                 .await
                 .unwrap_err(),
             TenantResolutionError::Ambiguous
         );
-        let error = resolver("73616C745F73616761746563\t3\t\t0\n", true)
+        let error = resolver("73616C745F73616761746563\t3\t\t0\t0\n", true)
             .0
             .resolve(&lookup)
             .await
@@ -350,7 +393,7 @@ mod tests {
     async fn rejects_invalid_and_administrative_database_overrides() {
         let lookup = TenantLookup::try_from("sagatec").unwrap();
         for database_hex in ["2E2E2F78", "6D7973716C"] {
-            let output = format!("73616C745F73616761746563\t1\t{database_hex}\t0\n");
+            let output = format!("73616C745F73616761746563\t1\t{database_hex}\t0\t0\n");
             assert!(matches!(
                 resolver(output, true).0.resolve(&lookup).await,
                 Err(TenantResolutionError::InvalidDatabase(_))
@@ -362,8 +405,27 @@ mod tests {
     fn domain_lookup_is_explicitly_switchable_in_the_fixed_query() {
         let lookup = TenantLookup::try_from("sagatec").unwrap();
 
-        assert!(resolution_query(&lookup, true).contains("OR (1 = 1"));
-        assert!(resolution_query(&lookup, false).contains("OR (0 = 1"));
+        assert!(
+            resolution_query(&lookup, true, "127.0.0.1", 3306, "readonly").contains("OR (1 = 1")
+        );
+        assert!(
+            resolution_query(&lookup, false, "127.0.0.1", 3306, "readonly").contains("OR (0 = 1")
+        );
+    }
+
+    #[tokio::test]
+    async fn blocks_connection_overrides_without_returning_their_values() {
+        let marker = "production-password-marker";
+        let lookup = TenantLookup::try_from("sagatec").unwrap();
+        let error = resolver("73616C745F73616761746563\t0\t\t0\t1\n", true)
+            .0
+            .resolve(&lookup)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, TenantResolutionError::ConnectionOverride);
+        assert!(!error.to_string().contains(marker));
+        assert!(!format!("{error:?}").contains(marker));
     }
 
     #[test]

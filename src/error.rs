@@ -92,7 +92,8 @@ impl AppError {
                 | TenantResolutionError::InvalidDatabase(_)
                 | TenantResolutionError::NotFound
                 | TenantResolutionError::Ambiguous
-                | TenantResolutionError::InvalidMetadata,
+                | TenantResolutionError::InvalidMetadata
+                | TenantResolutionError::ConnectionOverride,
             ) => ErrorCategory::TenantResolution,
             Self::TenantResolution(
                 TenantResolutionError::SourceUnavailable

@@ -619,6 +619,8 @@ Critério da milestone: um alias como `sagatec` resolve de modo seguro para tena
 
 **Labels:** `priority:p1`, `type:hardening`, `area:tenant`, `area:security`
 
+**Status:** implementada — a query retorna apenas um booleano calculado no source. Host, porta e usuário são comparados no MySQL com o profile; connection/password presentes bloqueiam. Nenhum valor de override retorna ao processo.
+
 **Escopo:** detectar `tenancy_db_host`, `port`, `username` ou `connection` diferentes do profile sem retornar passwords.
 
 **Aceite:** resolver bloqueia a operação e informa que o tenant requer outro source profile; nunca segue configuração central silenciosamente.
