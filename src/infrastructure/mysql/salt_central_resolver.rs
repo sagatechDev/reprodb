@@ -258,13 +258,22 @@ fn map_client_error(error: DockerClientError) -> TenantResolutionError {
 mod tests {
     use std::{
         collections::VecDeque,
+        process::{Command, Stdio},
         sync::{Arc, Mutex},
     };
 
-    use crate::infrastructure::{
-        mysql::ClientCatalog,
-        process::{ProcessError, ProcessOutput, ProcessSpec},
+    use crate::{
+        domain::ValueObjectError,
+        infrastructure::{
+            docker::DockerTargetDiscovery,
+            mysql::ClientCatalog,
+            process::{
+                ProcessError, ProcessOutput, ProcessRunner, ProcessSpec, TokioProcessRunner,
+            },
+        },
     };
+    use secrecy::zeroize::Zeroize;
+    use uuid::Uuid;
 
     use super::*;
 
@@ -434,5 +443,214 @@ mod tests {
             map_client_error(DockerClientError::QueryFailed),
             TenantResolutionError::InvalidMetadata
         );
+    }
+
+    #[test]
+    fn central_fixture_contains_only_explicitly_synthetic_sensitive_values() {
+        let fixture = include_str!("../../../tests/fixtures/salt_central/tenant_resolution.sql");
+
+        for required_case in [
+            "salt_by_id",
+            "salt_sagatec",
+            "salt_polymer_data",
+            "salt_sensitive",
+            "salt_admin_override",
+            "salt_collision_domain",
+            "tenant_links",
+        ] {
+            assert!(fixture.contains(required_case));
+        }
+        assert!(fixture.contains("production.fixture.invalid"));
+        assert!(fixture.contains("fixture-only-password-do-not-use"));
+        assert!(fixture.contains("fixture-only-token-do-not-use"));
+    }
+
+    #[tokio::test]
+    #[ignore = "creates and removes a unique fixture database in the local mysql-8 container"]
+    async fn resolves_the_sanitized_central_fixture_end_to_end() {
+        let expected =
+            std::env::var("REPRODB_TEST_MYSQL_CONTAINER").unwrap_or_else(|_| "mysql-8".to_owned());
+        let discovery = DockerTargetDiscovery::new(TokioProcessRunner);
+        let (context, candidates) = discovery.discover().await.unwrap();
+        let candidate = candidates
+            .into_iter()
+            .find(|candidate| candidate.name.as_str() == expected)
+            .expect("the expected local MySQL container was not discovered");
+        let host_port = candidate
+            .published_ports
+            .first()
+            .expect("the fixture container must publish MySQL")
+            .host_port;
+        let password = local_container_root_password(&context, &expected);
+        let client = ClientCatalog::resolve("8.4").unwrap();
+        let runtime = DockerMysqlClientRuntime::new(TokioProcessRunner);
+        let prepared = runtime
+            .prepare_existing(&context, client.series(), client.image())
+            .await
+            .unwrap();
+        let option_file = runtime
+            .create_option_file(
+                "127.0.0.1",
+                host_port,
+                "root",
+                &password,
+                MysqlTlsMode::Required,
+            )
+            .unwrap();
+        let control_database = DatabaseName::try_from("salt_central").unwrap();
+        let fixture_database =
+            DatabaseName::try_from(format!("reprodb_fixture_{}", Uuid::new_v4().simple())).unwrap();
+        let create = format!(
+            "CREATE DATABASE `{}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
+            fixture_database.as_str()
+        );
+        runtime
+            .query_connection(&prepared, &option_file, &control_database, &create)
+            .await
+            .unwrap();
+
+        let fixture_result = runtime
+            .query_connection(
+                &prepared,
+                &option_file,
+                &fixture_database,
+                include_str!("../../../tests/fixtures/salt_central/tenant_resolution.sql"),
+            )
+            .await;
+        let results = if fixture_result.is_ok() {
+            let resolver = DockerSaltCentralTenantResolver::new(
+                TokioProcessRunner,
+                SaltCentralSource {
+                    docker_context: context,
+                    host: "127.0.0.1".to_owned(),
+                    port: host_port,
+                    username: "root".to_owned(),
+                    password: password.clone(),
+                    tls_mode: MysqlTlsMode::Required,
+                    central_database: fixture_database.clone(),
+                    client,
+                },
+                true,
+            );
+            Some((
+                runtime
+                    .query_connection(
+                        &prepared,
+                        &option_file,
+                        &fixture_database,
+                        "SELECT COUNT(*) FROM tenant_links",
+                    )
+                    .await,
+                resolver
+                    .resolve(&TenantLookup::try_from("salt_by_id").unwrap())
+                    .await,
+                resolver
+                    .resolve(&TenantLookup::try_from("sagatec").unwrap())
+                    .await,
+                resolver
+                    .resolve(&TenantLookup::try_from("polymer").unwrap())
+                    .await,
+                resolver
+                    .resolve(&TenantLookup::try_from("sensitive").unwrap())
+                    .await,
+                resolver
+                    .resolve(&TenantLookup::try_from("admin-override").unwrap())
+                    .await,
+                resolver
+                    .resolve(&TenantLookup::try_from("collision").unwrap())
+                    .await,
+            ))
+        } else {
+            None
+        };
+
+        let drop = format!("DROP DATABASE `{}`", fixture_database.as_str());
+        let cleanup_result = runtime
+            .query_connection(&prepared, &option_file, &control_database, &drop)
+            .await;
+        cleanup_result.expect("the unique fixture database must be removed");
+        fixture_result.expect("the sanitized central fixture must load");
+
+        let (
+            tenant_link_count,
+            by_id,
+            by_domain,
+            override_database,
+            sensitive,
+            administrative,
+            collision,
+        ) = results.unwrap();
+        assert_eq!(tenant_link_count.unwrap(), b"1\n");
+        assert_resolution(
+            by_id.unwrap(),
+            "salt_by_id",
+            "salt_by_id",
+            TenantMatch::TenantId,
+        );
+        assert_resolution(
+            by_domain.unwrap(),
+            "salt_sagatec",
+            "salt_sagatec",
+            TenantMatch::Domain,
+        );
+        assert_resolution(
+            override_database.unwrap(),
+            "salt_polymer",
+            "salt_polymer_data",
+            TenantMatch::Domain,
+        );
+        let public_results = format!("{sensitive:?}{administrative:?}{collision:?}");
+        assert_eq!(
+            sensitive.unwrap_err(),
+            TenantResolutionError::ConnectionOverride
+        );
+        assert!(matches!(
+            administrative.unwrap_err(),
+            TenantResolutionError::InvalidDatabase(ValueObjectError::Reserved { .. })
+        ));
+        assert_eq!(collision.unwrap_err(), TenantResolutionError::Ambiguous);
+
+        assert!(!public_results.contains("fixture-only-password-do-not-use"));
+        assert!(!public_results.contains("fixture-only-token-do-not-use"));
+    }
+
+    fn assert_resolution(
+        resolution: ResolvedTenant,
+        tenant_id: &str,
+        database: &str,
+        matched_by: TenantMatch,
+    ) {
+        assert_eq!(resolution.tenant_id.as_str(), tenant_id);
+        assert_eq!(resolution.database.as_str(), database);
+        assert_eq!(resolution.matched_by, matched_by);
+    }
+
+    fn local_container_root_password(context: &str, container: &str) -> SecretString {
+        let output = Command::new("docker")
+            .args([
+                "--context",
+                context,
+                "container",
+                "inspect",
+                "--format",
+                "{{range .Config.Env}}{{println .}}{{end}}",
+                container,
+            ])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .expect("Docker must be available for this ignored integration test");
+        assert!(output.status.success(), "could not inspect test container");
+
+        let mut environment = String::from_utf8(output.stdout)
+            .expect("the test container environment must be valid UTF-8");
+        let password = environment
+            .lines()
+            .find_map(|line| line.strip_prefix("MYSQL_ROOT_PASSWORD="))
+            .map(str::to_owned)
+            .expect("test container does not expose MYSQL_ROOT_PASSWORD");
+        environment.zeroize();
+
+        SecretString::from(password)
     }
 }

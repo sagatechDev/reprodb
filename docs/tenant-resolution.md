@@ -51,3 +51,11 @@ cargo test --test salt_central_resolver_integration -- --ignored --nocapture
 ```
 
 É possível escolher outro container de fixture com `REPRODB_TEST_MYSQL_CONTAINER`.
+
+A fixture determinística está em [`tests/fixtures/salt_central/tenant_resolution.sql`](../tests/fixtures/salt_central/tenant_resolution.sql). Para exercitá-la ponta a ponta num database temporário com UUID:
+
+```bash
+cargo test --lib resolves_the_sanitized_central_fixture_end_to_end -- --ignored --nocapture
+```
+
+O harness nunca modifica o `salt_central` existente e remove o database temporário antes das asserções finais. Interrupção forçada do processo ainda pode deixar um database com prefixo `reprodb_fixture_`; cleanup oportunista desses artefatos de teste não faz parte da CLI.

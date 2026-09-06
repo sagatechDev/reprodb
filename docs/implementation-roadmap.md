@@ -629,6 +629,8 @@ Critério da milestone: um alias como `sagatec` resolve de modo seguro para tena
 
 **Labels:** `priority:p1`, `type:test`, `area:tenant`
 
+**Status:** implementada — fixture SQL mínima e inteiramente sintética cobre ID, domains reais de desenvolvimento, override de database, colisão, database bloqueado, connection overrides, secrets fictícios e tenant link. O teste cria/remove um database UUID no `mysql-8` sem escrever no `salt_central` existente.
+
 **Escopo:** tenants por ID, domains, override de database, tenant links e JSON contendo chaves sensíveis fictícias.
 
 **Aceite:** testes provam resolução e ausência de secrets em snapshot/output.
