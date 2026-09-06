@@ -220,6 +220,46 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
             print!("{}", cli::preview::pull(&style, &tenant, arguments.fresh));
             Ok(())
         }
+        Commands::Pull(arguments) => {
+            let tenant = TenantLookup::try_from(arguments.tenant)?;
+            print!("{}", cli::pull::render_start(&style));
+            std::io::stdout().flush().map_err(AppError::Output)?;
+
+            let repository = ConfigRepository::discover()?;
+            let workflow = infrastructure::mysql::DockerDumpWorkflow::new(
+                infrastructure::process::TokioProcessRunner,
+            );
+            let progress = std::sync::Arc::new(cli::pull::CliPullProgress::new(style));
+            let service = application::PullService::new(repository)
+                .with_progress(progress.clone())
+                .with_compression_progress(progress.clone())
+                .with_restore_progress(progress.clone());
+            let result = service
+                .pull(
+                    &infrastructure::credentials::OsCredentialStore,
+                    application::PullDumpDependencies {
+                        tenant_resolver: &workflow,
+                        preflight: &workflow,
+                        executor: &infrastructure::mysql::DockerMysqlDumpExecutor,
+                    },
+                    application::PullRestoreDependencies {
+                        target_attestor: &infrastructure::mysql::DockerLocalTargetAttestor::new(
+                            infrastructure::process::TokioProcessRunner,
+                        ),
+                        executor: infrastructure::mysql::DockerMysqlRestoreExecutor,
+                        tenant_writer: infrastructure::mysql::DockerLocalTenantWriter::new(
+                            infrastructure::process::TokioProcessRunner,
+                        ),
+                    },
+                    tenant,
+                    arguments.fresh,
+                )
+                .await;
+            progress.finish();
+            let ready = result?;
+            print!("{}", cli::pull::render_complete(&style, &ready));
+            Ok(())
+        }
         command => Err(AppError::CommandNotImplemented {
             command: command.name(),
         }),

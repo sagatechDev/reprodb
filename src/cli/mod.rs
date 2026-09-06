@@ -6,6 +6,7 @@ pub mod output;
 pub mod preview;
 pub mod profile;
 pub mod prompt;
+pub mod pull;
 pub mod restore;
 pub mod setup;
 

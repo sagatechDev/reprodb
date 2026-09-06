@@ -4,6 +4,7 @@ mod dump_service;
 mod local_target_gate;
 mod local_tenant_registration_service;
 mod profile_service;
+mod pull_service;
 mod restore_engine;
 mod restore_service;
 mod setup_service;
@@ -29,6 +30,10 @@ pub use local_tenant_registration_service::{
 pub use profile_service::{
     NewProfileInput, ProfileCreated, ProfileRemoval, ProfileService, ProfileServiceError,
     ProfileSummary, SourceProfileVerifier, SourceVerificationError, VerifiedSource,
+};
+pub use pull_service::{
+    NoPullProgress, PullCacheUse, PullDumpDependencies, PullProgress, PullProgressObserver,
+    PullReady, PullRestoreDependencies, PullService, PullServiceError,
 };
 pub use restore_engine::{RestoreCompleted, RestoreEngine, RestoreEngineError};
 pub use restore_service::{

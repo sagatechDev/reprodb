@@ -81,7 +81,7 @@ Todos os valores variáveis entram no SQL como hexadecimal UTF-8 convertido pelo
 
 Um lookup por domain válido, como `sagatec`, preserva esse label. Um lookup por tenant ID normaliza `_` para `-`, por exemplo `salt_sagatec -> salt-sagatec`. O value object aceita apenas DNS label lowercase de até 63 caracteres; `localhost` é reservado como domínio central local padrão.
 
-Uma eventual URL local e a escolha/alteração interativa do alias pertencem à UX da RDB-054, quando a configuração HTTP real estiver disponível; `restore` mostra somente o domain que conhece.
+`restore` e `pull` mostram somente o domain que conhecem. Uma eventual URL local e a escolha/alteração interativa do alias dependem primeiro de uma configuração HTTP explícita; a CLI não inventa porta nem sufixo local.
 
 ## Evidências
 

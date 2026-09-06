@@ -7,7 +7,9 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-    domain::{DatabaseName, DumpArtifactMetadata, ProfileName, Sha256Digest, TenantId},
+    domain::{
+        DatabaseName, DumpArtifactMetadata, ProfileName, Sha256Digest, TenantId, TenantLookup,
+    },
     infrastructure::artifact_store::{
         ArtifactLease, ArtifactLeaseError, ArtifactStoreError, LocalArtifactStore,
         PublishedDumpArtifact,
@@ -22,6 +24,16 @@ pub struct CacheLookup<'a> {
     pub profile: &'a ProfileName,
     pub tenant_id: &'a TenantId,
     pub database: &'a DatabaseName,
+    pub source_fingerprint: Sha256Digest,
+    pub policy_version: u32,
+    pub now_unix_seconds: u64,
+    pub ttl_seconds: u64,
+    pub fresh: bool,
+}
+
+pub struct CacheTenantLookup<'a> {
+    pub profile: &'a ProfileName,
+    pub tenant: &'a TenantLookup,
     pub source_fingerprint: Sha256Digest,
     pub policy_version: u32,
     pub now_unix_seconds: u64,
@@ -123,6 +135,84 @@ impl LocalCacheValidator {
         let mut newest_invalid = None;
         for (artifact, metadata, lease) in candidates {
             match validate_candidate(request, artifact, &metadata, lease)? {
+                Ok(hit) => return Ok(CacheLookupResult::Hit(Box::new(hit))),
+                Err(reason) => {
+                    newest_invalid.get_or_insert(reason);
+                }
+            }
+        }
+        Ok(CacheLookupResult::Miss(
+            newest_invalid
+                .or(unreadable_metadata)
+                .unwrap_or(CacheMissReason::NotFound),
+        ))
+    }
+
+    pub fn lookup_by_tenant(
+        &self,
+        request: &CacheTenantLookup<'_>,
+    ) -> Result<CacheLookupResult, CacheError> {
+        if request.fresh {
+            return Ok(CacheLookupResult::Miss(CacheMissReason::FreshRequested));
+        }
+
+        let artifacts = self.store.list_complete_for_profile(request.profile)?;
+        if artifacts.is_empty() {
+            return Ok(CacheLookupResult::Miss(CacheMissReason::NotFound));
+        }
+        let mut candidates = Vec::new();
+        let mut unreadable_metadata = None;
+        for located in artifacts {
+            let (profile, tenant_id, artifact) = located.into_parts();
+            let lease = match self.store.try_acquire_lease(&artifact) {
+                Ok(lease) => lease,
+                Err(ArtifactLeaseError::NotFound) => {
+                    unreadable_metadata.get_or_insert(CacheMissReason::NotFound);
+                    continue;
+                }
+                Err(ArtifactLeaseError::Busy) => {
+                    unreadable_metadata.get_or_insert(CacheMissReason::InUse);
+                    continue;
+                }
+                Err(ArtifactLeaseError::Io { source, .. }) => {
+                    return Err(CacheError::Io(source));
+                }
+            };
+            let metadata = match read_metadata(&artifact)? {
+                Ok(metadata) => metadata,
+                Err(reason) => {
+                    unreadable_metadata.get_or_insert(reason);
+                    continue;
+                }
+            };
+            if profile != *request.profile || tenant_id != metadata.tenant_id {
+                unreadable_metadata.get_or_insert(CacheMissReason::IdentityChanged);
+                continue;
+            }
+            if metadata.tenant_lookup != *request.tenant
+                && metadata.tenant_id.as_str() != request.tenant.as_str()
+            {
+                continue;
+            }
+            candidates.push((artifact, metadata, tenant_id, lease));
+        }
+        candidates.sort_by_key(|(_, metadata, _, _)| {
+            std::cmp::Reverse(metadata.completed_at_unix_seconds)
+        });
+
+        let mut newest_invalid = None;
+        for (artifact, metadata, tenant_id, lease) in candidates {
+            let candidate_request = CacheLookup {
+                profile: request.profile,
+                tenant_id: &tenant_id,
+                database: &metadata.database,
+                source_fingerprint: request.source_fingerprint,
+                policy_version: request.policy_version,
+                now_unix_seconds: request.now_unix_seconds,
+                ttl_seconds: request.ttl_seconds,
+                fresh: false,
+            };
+            match validate_candidate(&candidate_request, artifact, &metadata, lease)? {
                 Ok(hit) => return Ok(CacheLookupResult::Hit(Box::new(hit))),
                 Err(reason) => {
                     newest_invalid.get_or_insert(reason);
@@ -362,6 +452,48 @@ mod tests {
         };
         assert_eq!(hit.artifact().dump_id(), dump_id);
         assert_eq!(hit.age_seconds(), 100);
+    }
+
+    #[test]
+    fn tenant_lookup_finds_the_same_artifact_by_original_alias_or_canonical_id() {
+        let directory = tempdir().unwrap();
+        let (dump_id, _) = write_artifact(directory.path(), 9_900);
+        let validator = LocalCacheValidator::new(LocalArtifactStore::new(directory.path()));
+        let profile = profile();
+
+        for tenant in ["sagatec", "salt_sagatec"] {
+            let result = validator
+                .lookup_by_tenant(&CacheTenantLookup {
+                    profile: &profile,
+                    tenant: &TenantLookup::try_from(tenant).unwrap(),
+                    source_fingerprint: fingerprint(1),
+                    policy_version: 1,
+                    now_unix_seconds: 10_000,
+                    ttl_seconds: DEFAULT_CACHE_TTL_SECONDS,
+                    fresh: false,
+                })
+                .unwrap();
+            let CacheLookupResult::Hit(hit) = result else {
+                panic!("expected cache hit for {tenant}")
+            };
+            assert_eq!(hit.metadata().dump_id, dump_id);
+            assert_eq!(hit.age_seconds(), 100);
+        }
+
+        assert_miss(
+            validator
+                .lookup_by_tenant(&CacheTenantLookup {
+                    profile: &profile,
+                    tenant: &TenantLookup::try_from("polymer").unwrap(),
+                    source_fingerprint: fingerprint(1),
+                    policy_version: 1,
+                    now_unix_seconds: 10_000,
+                    ttl_seconds: DEFAULT_CACHE_TTL_SECONDS,
+                    fresh: false,
+                })
+                .unwrap(),
+            CacheMissReason::NotFound,
+        );
     }
 
     #[test]

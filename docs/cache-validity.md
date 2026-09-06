@@ -4,7 +4,7 @@ Um diretório publicado só é considerado cache hit depois de passar por todas 
 
 ## Chave e identidade
 
-A busca parte de `profile + tenant ID`. A metadata ainda precisa coincidir com:
+A busca direta parte de `profile + tenant ID`. Para decidir um `pull` sem consultar o source, existe também uma busca sob o profile ativo pelo lookup original ou tenant ID canônico gravado na metadata. Em ambos os casos, a identidade do diretório precisa coincidir com a metadata, que ainda precisa conter:
 
 - dump ID do diretório;
 - profile solicitado;
@@ -38,7 +38,7 @@ Arquivo removido durante a consulta vira miss, não falha geral do comando. Outr
 
 ## Motivos de miss
 
-O domínio diferencia: `fresh`, ausente, em uso, metadata corrompida, identidade alterada, source alterado, política alterada, relógio futuro, expirado, tamanho divergente e checksum divergente. A CLI poderá transformar esses motivos em mensagens úteis sem depender do texto de erros internos.
+O domínio diferencia: `fresh`, ausente, em uso, metadata corrompida, identidade alterada, source alterado, política alterada, relógio futuro, expirado, tamanho divergente e checksum divergente. A CLI transforma esses motivos em mensagens estáveis sem depender do texto de erros internos.
 
 Um hit mantém uma lease compartilhada desde a leitura da metadata/checksum até o consumidor descartá-lo, impedindo que o cleanup remova o arquivo antes do restore. Os locks e a remoção segura estão detalhados em [`cache-locks-cleanup.md`](cache-locks-cleanup.md).
 

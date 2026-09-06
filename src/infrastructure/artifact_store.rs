@@ -229,6 +229,54 @@ impl LocalArtifactStore {
         Ok(artifacts)
     }
 
+    pub fn list_complete_for_profile(
+        &self,
+        profile: &ProfileName,
+    ) -> Result<Vec<LocatedDumpArtifact>, ArtifactStoreError> {
+        let profile_path = self.root.join(PROFILES_DIRECTORY).join(profile.as_str());
+        let tenants = match fs::read_dir(&profile_path) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(source) => {
+                return Err(ArtifactStoreError::Io {
+                    operation: "list artifact tenants for a profile",
+                    source,
+                });
+            }
+        };
+        let mut artifacts = Vec::new();
+        for tenant_entry in tenants {
+            let tenant_entry = tenant_entry.map_err(|source| ArtifactStoreError::Io {
+                operation: "read an artifact tenant entry",
+                source,
+            })?;
+            if !tenant_entry
+                .file_type()
+                .map_err(|source| ArtifactStoreError::Io {
+                    operation: "inspect an artifact tenant entry",
+                    source,
+                })?
+                .is_dir()
+            {
+                continue;
+            }
+            let Some(tenant_name) = tenant_entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let Ok(tenant_id) = TenantId::try_from(tenant_name) else {
+                continue;
+            };
+            artifacts.extend(self.list_complete(profile, &tenant_id)?.into_iter().map(
+                |artifact| LocatedDumpArtifact {
+                    profile: profile.clone(),
+                    tenant_id: tenant_id.clone(),
+                    artifact,
+                },
+            ));
+        }
+        Ok(artifacts)
+    }
+
     pub fn try_acquire_lease(
         &self,
         artifact: &PublishedDumpArtifact,

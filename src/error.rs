@@ -4,8 +4,8 @@ use crate::{
     application::{
         CredentialProvisionError, DoctorFailureKind, DumpServiceError, LocalTargetAttestationError,
         LocalTargetGateError, LocalTenantRegistrationServiceError, LocalTenantWriteError,
-        ProfileServiceError, RestoreEngineError, RestoreServiceError, SetupServiceError,
-        SourceVerificationError, TargetVerificationError,
+        ProfileServiceError, PullServiceError, RestoreEngineError, RestoreServiceError,
+        SetupServiceError, SourceVerificationError, TargetVerificationError,
     },
     cli::prompt::PromptError,
     domain::{DumpMetadataError, TenantResolutionError, ValueObjectError},
@@ -83,6 +83,9 @@ pub enum AppError {
 
     #[error(transparent)]
     Restore(#[from] RestoreServiceError),
+
+    #[error(transparent)]
+    Pull(#[from] PullServiceError),
 
     #[error("doctor found required problems; review the failed checks above")]
     DoctorChecksFailed { kind: DoctorFailureKind },
@@ -178,6 +181,7 @@ impl AppError {
             )) => ErrorCategory::Configuration,
             Self::Dump(error) => dump_error_category(error),
             Self::Restore(error) => restore_error_category(error),
+            Self::Pull(error) => pull_error_category(error),
             Self::DoctorChecksFailed { kind } => match kind {
                 DoctorFailureKind::Configuration => ErrorCategory::Configuration,
                 DoctorFailureKind::Credential => ErrorCategory::Credential,
@@ -198,6 +202,18 @@ impl AppError {
 
     pub const fn should_render_on_stderr(&self) -> bool {
         !matches!(self, Self::DoctorChecksFailed { .. })
+    }
+}
+
+const fn pull_error_category(error: &PullServiceError) -> ErrorCategory {
+    match error {
+        PullServiceError::Config(_) | PullServiceError::NoActiveProfile => {
+            ErrorCategory::Configuration
+        }
+        PullServiceError::Clock(_) => ErrorCategory::General,
+        PullServiceError::Cache(_) => ErrorCategory::Cache,
+        PullServiceError::Dump(error) => dump_error_category(error),
+        PullServiceError::Restore(error) => restore_error_category(error),
     }
 }
 
@@ -381,9 +397,9 @@ mod tests {
 
     #[test]
     fn not_implemented_error_contains_only_the_static_command_name() {
-        let error = AppError::CommandNotImplemented { command: "pull" };
+        let error = AppError::CommandNotImplemented { command: "cache" };
 
-        assert_eq!(error.to_string(), "command `pull` is not implemented yet");
+        assert_eq!(error.to_string(), "command `cache` is not implemented yet");
         assert_eq!(error.exit_code(), 1);
     }
 
@@ -475,5 +491,20 @@ mod tests {
         assert_eq!(missing.exit_code(), 50);
         assert_eq!(target.exit_code(), 10);
         assert_eq!(registration.exit_code(), 11);
+    }
+
+    #[test]
+    fn pull_preserves_the_category_of_its_failed_phase() {
+        let configuration = AppError::from(PullServiceError::NoActiveProfile);
+        let cache = AppError::from(PullServiceError::Restore(RestoreServiceError::Artifact(
+            crate::infrastructure::restore_artifact::RestoreArtifactError::NotFound,
+        )));
+        let source = AppError::from(PullServiceError::Dump(DumpServiceError::Tenant(
+            TenantResolutionError::SourceUnavailable,
+        )));
+
+        assert_eq!(configuration.exit_code(), 10);
+        assert_eq!(cache.exit_code(), 50);
+        assert_eq!(source.exit_code(), 30);
     }
 }

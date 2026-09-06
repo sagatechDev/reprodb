@@ -200,6 +200,21 @@ fn pull_preview_can_show_the_fresh_path() {
 }
 
 #[test]
+fn pull_without_an_active_profile_fails_before_source_or_docker_access() {
+    let home = tempfile::tempdir().unwrap();
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .env("REPRODB_HOME", home.path())
+        .args(["pull", "sagatec"])
+        .assert()
+        .failure()
+        .code(10)
+        .stdout(predicate::str::contains("reprodb pull"))
+        .stderr(predicate::str::contains("no active source profile"));
+}
+
+#[test]
 fn explicit_color_mode_adds_semantic_ansi_styles() {
     let mut command = Command::cargo_bin("reprodb").unwrap();
 

@@ -775,9 +775,13 @@ Contrato e evidências: [`docs/restore-command.md`](restore-command.md).
 
 **Labels:** `priority:p0`, `type:feature`, `area:cli`
 
-**Fluxo:** config → resolver → credencial → cache → dump se necessário → target gate → restore → registro central → success.
+**Status:** implementada — o profile ativo e a metadata local permitem decidir o cache antes de qualquer credencial/conexão source. Hit reutiliza o UUID pelo RestoreService; miss e `--fresh` usam o DumpService e depois o mesmo restore. A UX diferencia os caminhos e o teste real no `mysql-8` remove a credencial source antes do segundo pull para provar o hit offline.
+
+**Fluxo:** config → cache → resolver/credencial/dump somente no miss → target gate → restore → registro central → success.
 
 **Aceite:** cache hit não acessa o source; `--fresh` sempre produz novo dump; retry de restore reutiliza o artefato.
+
+Contrato e evidências: [`docs/pull-command.md`](pull-command.md).
 
 #### RDB-055 — Implementar comandos de cache
 

@@ -209,7 +209,17 @@ $REPRODB restore sagatec --dump-id ../../dump.sql.zst
 $REPRODB restore sagatec --dump-id 550e8400-e29b-41d4-a716-446655440000
 ```
 
-`pull` sem `--preview` e `cache` ainda falham explicitamente até as próximas milestones. A prévia continua disponível para avaliar o fluxo completo sem tocar nos bancos:
+O fluxo completo também está disponível. A primeira chamada normalmente cria um dump e a segunda deve mostrar um cache hit com o mesmo UUID:
+
+```bash
+$REPRODB pull sagatec
+$REPRODB pull sagatec
+$REPRODB pull sagatec --fresh
+```
+
+Compare a indicação `new dump`/`reused`, a idade do cache e o aviso antes da substituição local. `--fresh` deve gerar outro UUID. Esses comandos alteram `salt_sagatec` e o registro correspondente no `salt_central` do target configurado.
+
+Somente os comandos de `cache` ainda falham explicitamente até a próxima issue. A prévia continua disponível para avaliar o fluxo sem tocar nos bancos:
 
 ```bash
 $REPRODB pull sagatec --preview
