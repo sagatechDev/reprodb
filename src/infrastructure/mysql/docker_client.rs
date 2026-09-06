@@ -4,7 +4,7 @@ use secrecy::SecretString;
 use thiserror::Error;
 
 use crate::{
-    domain::{ContainerId, MysqlTlsMode, MysqlVersion},
+    domain::{ContainerId, DatabaseName, MysqlTlsMode, MysqlVersion},
     infrastructure::{
         credentials::{MYSQL_OPTION_FILE_CONTAINER_PATH, MysqlOptionFile, OptionFileError},
         mysql::{ApprovedMysqlClient, ClientCatalog, ClientCatalogError},
@@ -187,6 +187,34 @@ where
         parse_server_info(&output.stdout)
     }
 
+    pub(super) async fn query_connection(
+        &self,
+        client: &PreparedMysqlClient,
+        option_file: &MysqlOptionFile,
+        database: &DatabaseName,
+        query: &str,
+    ) -> Result<Vec<u8>, DockerClientError> {
+        if !option_file.path().is_absolute() {
+            return Err(DockerClientError::OptionFilePathNotAbsolute);
+        }
+
+        let output = self
+            .runner
+            .output(&connection_query_spec(
+                client.docker_context(),
+                client.approved(),
+                option_file.path(),
+                database,
+                query,
+            ))
+            .await?;
+        if !output.success {
+            return Err(classify_query_failure(&output));
+        }
+
+        Ok(output.stdout)
+    }
+
     async fn ensure_image(
         &self,
         docker_context: &str,
@@ -306,6 +334,9 @@ pub enum DockerClientError {
     #[error("the MySQL connection probe failed; run `reprodb doctor` for diagnostics")]
     ConnectionProbeFailed,
 
+    #[error("the MySQL read-only query failed; verify the expected source schema")]
+    QueryFailed,
+
     #[error("the MySQL source returned invalid version metadata")]
     InvalidServerMetadata,
 }
@@ -387,6 +418,38 @@ fn connection_probe_spec(
     ])
 }
 
+fn connection_query_spec(
+    context: &str,
+    client: ApprovedMysqlClient,
+    option_file: &Path,
+    database: &DatabaseName,
+    query: &str,
+) -> ProcessSpec {
+    let mut mount = OsString::from("type=bind,src=");
+    mount.push(option_file.as_os_str());
+    mount.push(format!(",dst={MYSQL_OPTION_FILE_CONTAINER_PATH},readonly"));
+
+    docker_spec(context).args([
+        OsString::from("run"),
+        OsString::from("--rm"),
+        OsString::from("--pull=never"),
+        OsString::from("--add-host=host.docker.internal:host-gateway"),
+        OsString::from("--mount"),
+        mount,
+        OsString::from(client.image()),
+        OsString::from("mysql"),
+        OsString::from(format!(
+            "--defaults-file={MYSQL_OPTION_FILE_CONTAINER_PATH}"
+        )),
+        OsString::from("--no-login-paths"),
+        OsString::from("--batch"),
+        OsString::from("--skip-column-names"),
+        OsString::from(format!("--database={}", database.as_str())),
+        OsString::from("--execute"),
+        OsString::from(query),
+    ])
+}
+
 fn container_connection_probe_spec(
     context: &str,
     client: ApprovedMysqlClient,
@@ -456,6 +519,13 @@ fn classify_connection_failure(output: &ProcessOutput) -> DockerClientError {
         DockerClientError::SourceNetworkUnavailable
     } else {
         DockerClientError::ConnectionProbeFailed
+    }
+}
+
+fn classify_query_failure(output: &ProcessOutput) -> DockerClientError {
+    match classify_connection_failure(output) {
+        DockerClientError::ConnectionProbeFailed => DockerClientError::QueryFailed,
+        error => error,
     }
 }
 

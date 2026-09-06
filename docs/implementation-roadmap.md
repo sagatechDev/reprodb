@@ -607,6 +607,8 @@ Critério da milestone: um alias como `sagatec` resolve de modo seguro para tena
 
 **Labels:** `priority:p0`, `type:feature`, `area:tenant`, `area:mysql`
 
+**Status:** implementada e validada contra o `salt_central` local — lookup binário por tenant ID/domain, fallback/override de `tenancy_db_name`, saída mínima em hex, ambiguidade e metadata inválida possuem cobertura. Os aliases reais `sagatec` e `polymer` resolveram para `salt_sagatec` e `salt_polymer` sem transportar o JSON central.
+
 **Escopo:** lookup por `tenants.id` ou `domains.domain`, resolução de `tenancy_db_name`, output estruturado e validação final.
 
 **Aceite:** cobre tenants locais observados, alias inexistente, ambiguidade, JSON inválido e database bloqueado; não expõe o JSON `data` em logs.

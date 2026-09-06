@@ -1,6 +1,7 @@
 mod client_catalog;
 mod docker_client;
 mod profile_verifier;
+mod salt_central_resolver;
 mod target_verifier;
 
 pub use client_catalog::{
@@ -10,4 +11,5 @@ pub use docker_client::{
     DockerClientError, DockerMysqlClientRuntime, MysqlServerInfo, PreparedMysqlClient,
 };
 pub use profile_verifier::DockerSourceProfileVerifier;
+pub use salt_central_resolver::{DockerSaltCentralTenantResolver, SaltCentralSource};
 pub use target_verifier::DockerLocalTargetVerifier;

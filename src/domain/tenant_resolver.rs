@@ -32,6 +32,24 @@ pub enum TenantResolutionError {
 
     #[error("resolved database name is invalid or reserved")]
     InvalidDatabase(#[source] ValueObjectError),
+
+    #[error("no tenant matched the supplied ID or domain")]
+    NotFound,
+
+    #[error("the supplied ID or domain matched more than one tenant")]
+    Ambiguous,
+
+    #[error("the tenant catalog returned invalid or unsupported metadata")]
+    InvalidMetadata,
+
+    #[error("the tenant catalog source could not be reached")]
+    SourceUnavailable,
+
+    #[error("the tenant catalog source rejected the configured credential")]
+    AuthenticationFailed,
+
+    #[error("the approved MySQL client is unavailable")]
+    ClientUnavailable,
 }
 
 #[async_trait]

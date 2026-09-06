@@ -109,7 +109,8 @@ fn map_runtime_error(error: DockerClientError) -> SourceVerificationError {
         DockerClientError::Process(_)
         | DockerClientError::OptionFile(_)
         | DockerClientError::OptionFilePathNotAbsolute
-        | DockerClientError::ConnectionProbeFailed => SourceVerificationError::InvalidMetadata,
+        | DockerClientError::ConnectionProbeFailed
+        | DockerClientError::QueryFailed => SourceVerificationError::InvalidMetadata,
     }
 }
 

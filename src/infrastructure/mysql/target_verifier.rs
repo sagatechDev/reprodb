@@ -153,9 +153,8 @@ fn map_runtime_error(error: DockerClientError) -> TargetVerificationError {
         DockerClientError::Process(_)
         | DockerClientError::DockerUnavailable
         | DockerClientError::InvalidDockerContext
-        | DockerClientError::ConnectionProbeFailed => {
-            TargetVerificationError::ConnectionUnavailable
-        }
+        | DockerClientError::ConnectionProbeFailed
+        | DockerClientError::QueryFailed => TargetVerificationError::ConnectionUnavailable,
         DockerClientError::OptionFile(_)
         | DockerClientError::OptionFilePathNotAbsolute
         | DockerClientError::InvalidServerMetadata => TargetVerificationError::InvalidMetadata,

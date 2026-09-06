@@ -6,7 +6,7 @@ use crate::{
         SourceVerificationError, TargetVerificationError,
     },
     cli::prompt::PromptError,
-    domain::ValueObjectError,
+    domain::{TenantResolutionError, ValueObjectError},
     infrastructure::config::ConfigError,
     infrastructure::docker::DockerDiscoveryError,
 };
@@ -52,6 +52,9 @@ pub enum AppError {
     InvalidValue(#[from] ValueObjectError),
 
     #[error(transparent)]
+    TenantResolution(#[from] TenantResolutionError),
+
+    #[error(transparent)]
     Profile(#[from] ProfileServiceError),
 
     #[error(transparent)]
@@ -83,6 +86,21 @@ impl AppError {
     pub const fn category(&self) -> ErrorCategory {
         match self {
             Self::InvalidValue(..) => ErrorCategory::Usage,
+            Self::TenantResolution(
+                TenantResolutionError::InvalidPattern
+                | TenantResolutionError::InvalidTenantId(_)
+                | TenantResolutionError::InvalidDatabase(_)
+                | TenantResolutionError::NotFound
+                | TenantResolutionError::Ambiguous
+                | TenantResolutionError::InvalidMetadata,
+            ) => ErrorCategory::TenantResolution,
+            Self::TenantResolution(
+                TenantResolutionError::SourceUnavailable
+                | TenantResolutionError::AuthenticationFailed,
+            ) => ErrorCategory::SourceConnection,
+            Self::TenantResolution(TenantResolutionError::ClientUnavailable) => {
+                ErrorCategory::Dependency
+            }
             Self::Profile(ProfileServiceError::Config(_))
             | Self::Profile(ProfileServiceError::NotFound)
             | Self::Profile(ProfileServiceError::AlreadyExists) => ErrorCategory::Configuration,
@@ -242,5 +260,21 @@ mod tests {
 
         assert!(!error.should_render_on_stderr());
         assert_eq!(error.exit_code(), 60);
+    }
+
+    #[test]
+    fn tenant_resolution_preserves_actionable_failure_categories() {
+        assert_eq!(
+            AppError::from(TenantResolutionError::NotFound).exit_code(),
+            31
+        );
+        assert_eq!(
+            AppError::from(TenantResolutionError::SourceUnavailable).exit_code(),
+            30
+        );
+        assert_eq!(
+            AppError::from(TenantResolutionError::ClientUnavailable).exit_code(),
+            20
+        );
     }
 }
