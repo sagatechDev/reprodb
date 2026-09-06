@@ -3,6 +3,7 @@ mod docker_client;
 mod dump_executor;
 mod dump_preflight;
 mod dump_workflow;
+mod local_target_attestor;
 mod profile_verifier;
 mod salt_central_resolver;
 mod target_verifier;
@@ -20,6 +21,7 @@ pub use dump_preflight::{
     ApprovedMysqlDump, DockerMysqlDumpPreflight, DumpPreflightError, DumpPreflightSource,
 };
 pub use dump_workflow::DockerDumpWorkflow;
+pub use local_target_attestor::DockerLocalTargetAttestor;
 pub use profile_verifier::DockerSourceProfileVerifier;
 pub use salt_central_resolver::{DockerSaltCentralTenantResolver, SaltCentralSource};
 pub use target_verifier::DockerLocalTargetVerifier;

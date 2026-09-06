@@ -225,8 +225,19 @@ impl DoctorService {
                 DoctorSection::Target,
                 "local target configuration",
                 format!(
-                    "{} · context {} · central database {}",
-                    target.container_name, target.docker_context, target.central_database
+                    "{} · context {} · central database {} · allowlist {}* · {}",
+                    target.container_name,
+                    target.docker_context,
+                    target.central_database,
+                    target.tenant_database_prefix,
+                    match target.trust {
+                        crate::infrastructure::config::LocalTargetTrust::ReprodbManaged => {
+                            "reprodb-managed"
+                        }
+                        crate::infrastructure::config::LocalTargetTrust::UserConfirmed => {
+                            "user-confirmed"
+                        }
+                    },
                 ),
             ),
             None => failed(
@@ -535,6 +546,11 @@ impl DoctorService {
             username: target.username,
             password,
             central_database: target.central_database,
+            tenant_database_prefix: target.tenant_database_prefix,
+            managed_by_reprodb: matches!(
+                target.trust,
+                crate::infrastructure::config::LocalTargetTrust::ReprodbManaged
+            ),
         };
         match verifier.verify(&input).await {
             Ok(verified) => {
@@ -806,6 +822,8 @@ mod tests {
                 username: "root".to_owned(),
                 credential_key: target_key,
                 central_database: DatabaseName::try_from("salt_central").unwrap(),
+                trust: crate::infrastructure::config::LocalTargetTrust::UserConfirmed,
+                tenant_database_prefix: "salt_".to_owned(),
             }),
             profiles: BTreeMap::from([(
                 profile_name,

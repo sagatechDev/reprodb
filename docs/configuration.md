@@ -33,6 +33,8 @@ container_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 username = "root"
 credential_key = "target:550e8400-e29b-41d4-a716-446655440001"
 central_database = "salt_central"
+trust = "user-confirmed"
+tenant_database_prefix = "salt_"
 
 [profiles.salt-local]
 host = "127.0.0.1"
@@ -56,6 +58,8 @@ allow_domain_lookup = true
 Senha não é um campo válido do schema. O TOML armazena apenas chaves opacas com escopo `source` ou `target`; a credencial é persistida pelo credential store do sistema operacional.
 
 O Docker context detectado durante o cadastro fica em `client_runtime.docker_context`. O `setup` seleciona um target no mesmo context, impedindo que verificação, dump e restore sejam executados acidentalmente em Engines diferentes.
+
+`local_target.trust` registra se o container foi criado/rotulado pelo reprodb ou se um container existente foi explicitamente confirmado. `tenant_database_prefix` é a allowlist inicial para restores de tenant; o database central fica sempre fora dela, mesmo quando compartilha o prefixo.
 
 Os modos TLS iniciais são `required`, `preferred` e `disabled`. Um profile marcado como `production = true` somente é válido com `tls_mode = "required"`. O modo padrão de novos profiles é `required`; `preferred` e `disabled` precisam ser escolhidos explicitamente para fontes que não sejam de produção.
 

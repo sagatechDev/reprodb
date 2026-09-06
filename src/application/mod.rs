@@ -1,6 +1,7 @@
 mod credential_transaction;
 mod doctor_service;
 mod dump_service;
+mod local_target_gate;
 mod profile_service;
 mod setup_service;
 
@@ -13,6 +14,10 @@ pub use doctor_service::{
 pub use dump_service::{
     Clock, ClockError, DumpCreated, DumpPreflightGateway, DumpService, DumpServiceError,
     DumpSource, DumpTenantResolver, SystemClock,
+};
+pub use local_target_gate::{
+    AuthorizedLocalTarget, GuardedLocalTarget, LocalTargetAttestation, LocalTargetAttestationError,
+    LocalTargetAttestationRequest, LocalTargetAttestor, LocalTargetGate, LocalTargetGateError,
 };
 pub use profile_service::{
     NewProfileInput, ProfileCreated, ProfileRemoval, ProfileService, ProfileServiceError,

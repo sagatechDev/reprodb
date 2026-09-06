@@ -14,12 +14,16 @@ O comando:
 4. mostra imagem, estado, healthcheck e portas publicadas;
 5. alerta quando a porta está publicada em `0.0.0.0` ou `::`;
 6. permite escolher o target interativamente;
-7. pede usuário, senha mascarada por `*` e database central local;
+7. pede usuário, senha mascarada por `*`, database central local e prefixo permitido para databases de tenant;
 8. prepara o client MySQL aprovado;
 9. conecta ao namespace de rede do container pelo ID completo e valida versão/vendor;
-10. salva o ID, nome, context e chave da credencial no TOML, mantendo a senha no credential store do sistema.
+10. salva o ID, nome, context, tipo de confiança, allowlist e chave da credencial no TOML, mantendo a senha no credential store do sistema.
 
 O ID completo é a identidade de segurança. O nome fica salvo para apresentação, mas um restore futuro deverá recusar um container recriado com o mesmo nome e outro ID.
+
+O prefixo sugerido é `salt_`: ele permite `salt_sagatec` e `salt_polymer`, mas a barreira de restore recusa o `salt_central` configurado. Depois do setup, context, identidade, label quando aplicável, conexão, vendor e versão são atestados novamente antes de qualquer operação destrutiva.
+
+Contrato completo: [`docs/local-target-safety.md`](local-target-safety.md).
 
 Containers parados aparecem na lista. Se um deles for escolhido, a CLI pede confirmação, inicia exatamente o ID selecionado e tenta a conexão por até 10 segundos enquanto o MySQL fica pronto. A criação de um container dedicado pelo próprio reprodb continua pendente na RDB-025.
 

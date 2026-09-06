@@ -31,6 +31,8 @@ pub fn setup(style: &OutputStyle) -> String {
 ? Use mysql-8 as the local restore target?  {yes}
 ? Local MySQL username                   {root}
 ? Local MySQL password                   ********
+? Local central database                 salt_central
+? Tenant database prefix                 salt_
 
 {review}
   Container   mysql-8

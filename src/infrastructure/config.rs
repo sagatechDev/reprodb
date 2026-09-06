@@ -19,6 +19,7 @@ use crate::domain::{
 use crate::infrastructure::mysql::{ClientCatalog, ClientCatalogError};
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const DEFAULT_TENANT_DATABASE_PREFIX: &str = "salt_";
 const CONFIG_FILE_NAME: &str = "reprodb.toml";
 const LOCK_FILE_NAME: &str = "reprodb.lock";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -201,6 +202,10 @@ pub struct LocalTargetConfig {
     pub username: String,
     pub credential_key: CredentialKey,
     pub central_database: DatabaseName,
+    #[serde(default)]
+    pub trust: LocalTargetTrust,
+    #[serde(default = "default_tenant_database_prefix")]
+    pub tenant_database_prefix: String,
 }
 
 impl LocalTargetConfig {
@@ -211,8 +216,21 @@ impl LocalTargetConfig {
             "local_target.credential_key",
             self.credential_key,
             CredentialScope::Target,
-        )
+        )?;
+        validate_database_prefix(&self.tenant_database_prefix)
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LocalTargetTrust {
+    ReprodbManaged,
+    #[default]
+    UserConfirmed,
+}
+
+fn default_tenant_database_prefix() -> String {
+    DEFAULT_TENANT_DATABASE_PREFIX.to_owned()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -604,6 +622,21 @@ fn validate_docker_context(field: &'static str, value: &str) -> Result<(), Confi
     Ok(())
 }
 
+fn validate_database_prefix(value: &str) -> Result<(), ConfigError> {
+    let valid = !value.is_empty()
+        && value.len() <= 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+    if !valid {
+        return Err(ConfigError::InvalidField {
+            field: "local_target.tenant_database_prefix",
+            reason: "must contain 1-32 ASCII letters, digits or `_`",
+        });
+    }
+    Ok(())
+}
+
 fn validate_mysql_series(series: &str) -> Result<(), ConfigError> {
     validate_plain_text("profile.mysql_series", series, 16)?;
     let mut components = series.split('.');
@@ -732,6 +765,8 @@ mod tests {
                     .parse()
                     .unwrap(),
                 central_database: DatabaseName::try_from("salt_central").unwrap(),
+                trust: LocalTargetTrust::UserConfirmed,
+                tenant_database_prefix: DEFAULT_TENANT_DATABASE_PREFIX.to_owned(),
             }),
             profiles,
             ..AppConfig::default()
@@ -787,6 +822,30 @@ mod tests {
         let contents = fs::read_to_string(repository.paths().config_file()).unwrap();
         assert!(contents.contains("schema_version = 1"));
         assert!(!contents.contains("password"));
+    }
+
+    #[test]
+    fn older_local_target_config_gets_safe_allowlist_and_trust_defaults() {
+        let temp = TempDir::new().unwrap();
+        let repository = test_repository(&temp);
+        let mut serialized = toml::to_string_pretty(&valid_config()).unwrap();
+        serialized = serialized
+            .lines()
+            .filter(|line| {
+                !line.starts_with("trust = ") && !line.starts_with("tenant_database_prefix = ")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::create_dir_all(repository.paths().config_dir()).unwrap();
+        fs::write(repository.paths().config_file(), serialized).unwrap();
+
+        let target = repository.load().unwrap().local_target.unwrap();
+
+        assert_eq!(target.trust, LocalTargetTrust::UserConfirmed);
+        assert_eq!(
+            target.tenant_database_prefix,
+            DEFAULT_TENANT_DATABASE_PREFIX
+        );
     }
 
     #[test]

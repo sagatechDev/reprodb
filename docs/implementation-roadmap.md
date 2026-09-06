@@ -729,9 +729,13 @@ Critério da milestone: um comando restaura o tenant no target selecionado e dei
 
 **Labels:** `priority:p0`, `type:hardening`, `area:docker`, `area:restore`, `area:security`
 
+**Status:** implementada — `LocalTargetGate` só produz um `AuthorizedLocalTarget` após credencial, context Unix local, identidade exata ID+nome, estado do container, trust/label, conexão real e compatibilidade vendor/versão. O database central e nomes fora do prefixo configurado (`salt_` por padrão) não podem ser autorizados. Nenhum comando destrutivo foi adicionado nesta issue.
+
 **Escopo:** context local, container ID, vendor/version, credencial, allowlist do database e container dedicado/confirmado.
 
 **Aceite:** context remoto, ID trocado, database administrativo, target incompatível e ausência de setup bloqueiam antes de qualquer `DROP`.
+
+Contrato e invariantes: [`docs/local-target-safety.md`](local-target-safety.md).
 
 #### RDB-051 — Implementar RestoreEngine streaming
 

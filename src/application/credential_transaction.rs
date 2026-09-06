@@ -127,6 +127,8 @@ mod tests {
                 username: "root".to_owned(),
                 credential_key: key,
                 central_database: DatabaseName::try_from("salt_central").unwrap(),
+                trust: crate::infrastructure::config::LocalTargetTrust::UserConfirmed,
+                tenant_database_prefix: "salt_".to_owned(),
             }),
             ..AppConfig::default()
         }

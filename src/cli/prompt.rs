@@ -175,6 +175,23 @@ pub fn collect_local_target(
         })
         .interact_text()
         .map_err(unavailable)?;
+    let tenant_database_prefix = Input::<String>::with_theme(&theme)
+        .with_prompt("Tenant database prefix")
+        .default("salt_".to_owned())
+        .validate_with(|value: &String| -> Result<(), &str> {
+            if value.is_empty()
+                || value.len() > 32
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            {
+                Err("enter 1-32 ASCII letters, digits or `_`")
+            } else {
+                Ok(())
+            }
+        })
+        .interact_text()
+        .map_err(unavailable)?;
 
     Ok(NewLocalTargetInput {
         docker_context,
@@ -184,6 +201,8 @@ pub fn collect_local_target(
         password,
         central_database: DatabaseName::try_from(central_database)
             .map_err(|_| PromptError::InvalidCentralDatabase)?,
+        tenant_database_prefix,
+        managed_by_reprodb: candidate.managed_by_reprodb,
     })
 }
 

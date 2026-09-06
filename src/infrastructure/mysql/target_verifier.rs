@@ -229,6 +229,8 @@ mod tests {
             username: "root".to_owned(),
             password: SecretString::from("secret"),
             central_database: DatabaseName::try_from("salt_central").unwrap(),
+            tenant_database_prefix: "salt_".to_owned(),
+            managed_by_reprodb: false,
         };
 
         let verified = verifier.verify(&input).await.unwrap();

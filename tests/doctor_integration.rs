@@ -66,6 +66,8 @@ async fn doctor_validates_the_real_environment_without_changing_configuration() 
                 username: "root".to_owned(),
                 password: local_container_root_password_from_current_context(&expected),
                 central_database: DatabaseName::try_from("salt_central").unwrap(),
+                tenant_database_prefix: "salt_".to_owned(),
+                managed_by_reprodb: candidate.managed_by_reprodb,
             },
         )
         .await
