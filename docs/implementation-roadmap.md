@@ -667,9 +667,13 @@ Detalhes e limites: [`docs/dump-policy.md`](dump-policy.md).
 
 **Labels:** `priority:p0`, `type:feature`, `area:cache`
 
+**Status:** implementada — blocos fixos de 64 KiB passam por canal limitado para um encoder em tarefa bloqueante; o resultado contém bytes, tempo, throughput/ratio e SHA-256 do SQL e do Zstd. Roundtrip, input sintético de 32 MiB, escrita parcial, falha de input e comparação reproduzível dos níveis 1/3 estão testados. Nível 1 é o default provisório e será reavaliado com SQL real antes de produção.
+
 **Escopo:** `AsyncRead` → contador/hash → encoder → arquivo; nível inicial medido; bytes, tempo e throughput sem percentual falso.
 
 **Aceite:** roundtrip, dump grande e falha de encoder são testados; memória não cresce proporcionalmente ao input.
+
+Detalhes e medição inicial: [`docs/compression.md`](compression.md).
 
 #### RDB-043 — Implementar artefato e metadata atômicos
 
