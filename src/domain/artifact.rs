@@ -61,7 +61,7 @@ impl<'de> Deserialize<'de> for DumpId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DumpArtifactFormat {
     MysqlSqlZstdV1,
@@ -87,6 +87,66 @@ pub struct DumpArtifactMetadata {
     pub compressed_bytes: u64,
     pub sql_sha256: Sha256Digest,
     pub artifact_sha256: Sha256Digest,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DumpArtifactMetadataWire {
+    format: DumpArtifactFormat,
+    dump_id: DumpId,
+    tenant_lookup: TenantLookup,
+    tenant_id: TenantId,
+    database: DatabaseName,
+    profile: ProfileName,
+    source_fingerprint: Sha256Digest,
+    source_version: MysqlVersion,
+    client_version: MysqlVersion,
+    database_charset: String,
+    database_collation: String,
+    policy_version: u32,
+    created_at_unix_seconds: u64,
+    completed_at_unix_seconds: u64,
+    uncompressed_bytes: u64,
+    compressed_bytes: u64,
+    sql_sha256: Sha256Digest,
+    artifact_sha256: Sha256Digest,
+}
+
+impl<'de> Deserialize<'de> for DumpArtifactMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = DumpArtifactMetadataWire::deserialize(deserializer)?;
+        if wire.format != DumpArtifactFormat::MysqlSqlZstdV1 {
+            return Err(de::Error::custom("unsupported dump artifact format"));
+        }
+        let encoding = DatabaseEncoding::try_new(wire.database_charset, wire.database_collation)
+            .map_err(de::Error::custom)?;
+        Self::try_new(
+            wire.dump_id,
+            DumpArtifactContext {
+                tenant_lookup: wire.tenant_lookup,
+                tenant_id: wire.tenant_id,
+                database: wire.database,
+                profile: wire.profile,
+                source_fingerprint: wire.source_fingerprint,
+                source_version: wire.source_version,
+                client_version: wire.client_version,
+                database_encoding: encoding,
+                policy_version: wire.policy_version,
+            },
+            DumpArtifactCompletion {
+                created_at_unix_seconds: wire.created_at_unix_seconds,
+                completed_at_unix_seconds: wire.completed_at_unix_seconds,
+                uncompressed_bytes: wire.uncompressed_bytes,
+                compressed_bytes: wire.compressed_bytes,
+                sql_sha256: wire.sql_sha256,
+                artifact_sha256: wire.artifact_sha256,
+            },
+        )
+        .map_err(de::Error::custom)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -218,6 +278,10 @@ mod tests {
         assert_eq!(json["database_charset"], "utf8mb4");
         assert_eq!(json["artifact_sha256"].as_str().unwrap().len(), 64);
         assert!(json.get("password").is_none());
+        assert_eq!(
+            serde_json::from_value::<DumpArtifactMetadata>(json).unwrap(),
+            metadata
+        );
     }
 
     #[test]
@@ -238,5 +302,17 @@ mod tests {
         assert_eq!(id.to_string().parse::<DumpId>().unwrap(), id);
         assert!(id.to_string().replace('-', "").parse::<DumpId>().is_err());
         assert!(id.to_string().to_uppercase().parse::<DumpId>().is_err());
+    }
+
+    #[test]
+    fn metadata_deserialization_rejects_unknown_fields_and_invalid_encoding() {
+        let valid_metadata = metadata(101, 512).unwrap();
+        let mut json = serde_json::to_value(valid_metadata).unwrap();
+        json["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<DumpArtifactMetadata>(json).is_err());
+
+        let mut json = serde_json::to_value(metadata(101, 512).unwrap()).unwrap();
+        json["database_collation"] = serde_json::json!("latin1_bin");
+        assert!(serde_json::from_value::<DumpArtifactMetadata>(json).is_err());
     }
 }

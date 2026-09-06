@@ -8,12 +8,13 @@ use std::{
 use directories::ProjectDirs;
 use fs4::TryLockError;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
 use crate::domain::{
     ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseName, MysqlTlsMode,
-    PatternTenantResolver, ProfileName,
+    PatternTenantResolver, ProfileName, Sha256Digest,
 };
 use crate::infrastructure::mysql::{ClientCatalog, ClientCatalogError};
 
@@ -245,6 +246,45 @@ impl SourceProfileConfig {
         }
         self.tenant_resolver.validate()
     }
+}
+
+pub fn source_profile_fingerprint(
+    name: &ProfileName,
+    profile: &SourceProfileConfig,
+) -> Sha256Digest {
+    let mut hasher = Sha256::new();
+    hasher.update(b"reprodb-source-profile-v1");
+    hash_field(&mut hasher, name.as_str().as_bytes());
+    hash_field(&mut hasher, profile.host.as_bytes());
+    hash_field(&mut hasher, &profile.port.to_be_bytes());
+    hash_field(&mut hasher, profile.username.as_bytes());
+    match profile.mysql_family {
+        MysqlFamily::Mysql => hash_field(&mut hasher, b"mysql"),
+    }
+    hash_field(&mut hasher, profile.mysql_series.as_bytes());
+    hash_field(&mut hasher, profile.tls_mode.option_value().as_bytes());
+    hash_field(&mut hasher, profile.client.image.as_bytes());
+    hash_field(&mut hasher, &[u8::from(profile.production)]);
+    match &profile.tenant_resolver {
+        TenantResolverConfig::SaltCentral {
+            central_database,
+            allow_domain_lookup,
+        } => {
+            hash_field(&mut hasher, b"salt-central");
+            hash_field(&mut hasher, central_database.as_str().as_bytes());
+            hash_field(&mut hasher, &[u8::from(*allow_domain_lookup)]);
+        }
+        TenantResolverConfig::Pattern { pattern } => {
+            hash_field(&mut hasher, b"pattern");
+            hash_field(&mut hasher, pattern.as_bytes());
+        }
+    }
+    Sha256Digest::from_bytes(hasher.finalize().into())
+}
+
+fn hash_field(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -662,6 +702,34 @@ mod tests {
             profiles,
             ..AppConfig::default()
         }
+    }
+
+    #[test]
+    fn source_fingerprint_tracks_connection_and_resolution_but_not_credentials() {
+        let config = valid_config();
+        let name = config.active_profile.as_ref().unwrap();
+        let profile = config.profiles.get(name).unwrap();
+        let original = source_profile_fingerprint(name, profile);
+
+        let mut credential_changed = profile.clone();
+        credential_changed.credential_key = CredentialKey::new(CredentialScope::Source);
+        assert_eq!(
+            source_profile_fingerprint(name, &credential_changed),
+            original
+        );
+
+        let mut host_changed = profile.clone();
+        host_changed.host = "db.internal".to_owned();
+        assert_ne!(source_profile_fingerprint(name, &host_changed), original);
+
+        let mut resolver_changed = profile.clone();
+        resolver_changed.tenant_resolver = TenantResolverConfig::Pattern {
+            pattern: "{tenant}_data".to_owned(),
+        };
+        assert_ne!(
+            source_profile_fingerprint(name, &resolver_changed),
+            original
+        );
     }
 
     #[test]

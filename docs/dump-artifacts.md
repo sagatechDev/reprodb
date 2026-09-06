@@ -51,4 +51,4 @@ O formato `mysql-sql-zstd-v1` registra:
 
 Identificadores, versões e hashes são value objects validados. A metadata não possui host, username, credential key, senha, nomes de objetos SQL ou valores de `DEFINER`.
 
-O store exige o `CompressionMetrics` que produziu o arquivo e confere bytes e os dois SHA-256 contra a metadata, sem reler um artefato possivelmente enorme. Ele também confere o tamanho efetivo em disco depois do `fsync`. A validação independente do checksum na leitura, TTL, fingerprint e tratamento de relógio pertencem à RDB-044.
+O store exige o `CompressionMetrics` que produziu o arquivo e confere bytes e os dois SHA-256 contra a metadata, sem reler um artefato possivelmente enorme. Ele também confere o tamanho efetivo em disco depois do `fsync`. Na leitura, o cache volta a validar identidade, TTL, fingerprint, tamanho e checksum conforme [`cache-validity.md`](cache-validity.md).
