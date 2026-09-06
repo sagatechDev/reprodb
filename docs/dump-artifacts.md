@@ -12,7 +12,7 @@ cache/
                 └── metadata.json
 ```
 
-Durante a criação, o último diretório possui o sufixo `.part`. A listagem do cache ignora nomes parciais e também ignora diretórios publicados que não tenham simultaneamente `dump.sql.zst` e `metadata.json`.
+Durante a criação, o último diretório possui o sufixo `.part`. A listagem do cache ignora nomes parciais e também ignora diretórios publicados que não tenham simultaneamente `dump.sql.zst` e `metadata.json`. Um `.artifact.lock` interno protege tanto o staging quanto readers de artefatos completos.
 
 ## Publicação
 
@@ -30,7 +30,7 @@ A ordem implementada é:
 10. renomear atomicamente o diretório para o UUID final;
 11. sincronizar o diretório pai nos sistemas Unix.
 
-Falhas normais removem o staging por `Drop`. Uma interrupção abrupta do processo pode deixar o diretório `*.part`, que permanece invisível até o cleanup oportunista da RDB-045. Depois do rename final, os dois arquivos já estão completos.
+Falhas normais removem o staging por `Drop`. Uma interrupção abrupta do processo pode deixar o diretório `*.part`, que permanece invisível até o cleanup oportunista. Depois do rename final, os dois arquivos já estão completos. As regras de lock e isolamento antes da remoção estão em [`cache-locks-cleanup.md`](cache-locks-cleanup.md).
 
 No Unix, diretórios recebem modo `0700` e arquivos `0600`. macOS e Linux seguem o mesmo fluxo; a sincronização explícita de diretório é condicional a Unix para manter a implementação portável.
 

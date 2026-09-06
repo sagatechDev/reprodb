@@ -4,15 +4,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use fs4::TryLockError;
 use thiserror::Error;
 
 use crate::domain::{DumpArtifactMetadata, DumpId, ProfileName, TenantId};
 use crate::infrastructure::compression::CompressionMetrics;
 
-const PROFILES_DIRECTORY: &str = "profiles";
-const PART_SUFFIX: &str = ".part";
-const DUMP_FILE_NAME: &str = "dump.sql.zst";
-const METADATA_FILE_NAME: &str = "metadata.json";
+pub(crate) const PROFILES_DIRECTORY: &str = "profiles";
+pub(crate) const PART_SUFFIX: &str = ".part";
+pub(crate) const DUMP_FILE_NAME: &str = "dump.sql.zst";
+pub(crate) const METADATA_FILE_NAME: &str = "metadata.json";
+pub(crate) const ARTIFACT_LOCK_FILE_NAME: &str = ".artifact.lock";
 const METADATA_PART_FILE_NAME: &str = "metadata.json.part";
 
 #[derive(Clone, Debug)]
@@ -58,6 +60,17 @@ impl LocalArtifactStore {
                 source,
             }
         })?;
+        let activity_lock = match try_acquire_exclusive_artifact_lock(&stage_path) {
+            Ok(Some(lock)) => lock,
+            Ok(None) => {
+                let _ = fs::remove_dir_all(&stage_path);
+                return Err(ArtifactStoreError::ArtifactBusy);
+            }
+            Err(error) => {
+                let _ = fs::remove_dir_all(&stage_path);
+                return Err(error);
+            }
+        };
 
         Ok(StagedDumpArtifact {
             dump_id,
@@ -66,6 +79,7 @@ impl LocalArtifactStore {
             parent,
             stage_path,
             published_path,
+            activity_lock: Some(activity_lock),
             published: false,
         })
     }
@@ -127,6 +141,32 @@ impl LocalArtifactStore {
         artifacts.sort_by_key(|artifact| artifact.dump_id.to_string());
         Ok(artifacts)
     }
+
+    pub fn try_acquire_lease(
+        &self,
+        artifact: &PublishedDumpArtifact,
+    ) -> Result<ArtifactLease, ArtifactLeaseError> {
+        let file = match open_artifact_lock_file(&artifact.path.join(ARTIFACT_LOCK_FILE_NAME)) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(ArtifactLeaseError::NotFound);
+            }
+            Err(source) => {
+                return Err(ArtifactLeaseError::Io {
+                    operation: "open an artifact lease",
+                    source,
+                });
+            }
+        };
+        match fs4::FileExt::try_lock_shared(&file) {
+            Ok(()) => Ok(ArtifactLease { _file: file }),
+            Err(TryLockError::WouldBlock) => Err(ArtifactLeaseError::Busy),
+            Err(TryLockError::Error(source)) => Err(ArtifactLeaseError::Io {
+                operation: "acquire an artifact lease",
+                source,
+            }),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -137,6 +177,7 @@ pub struct StagedDumpArtifact {
     parent: PathBuf,
     stage_path: PathBuf,
     published_path: PathBuf,
+    activity_lock: Option<File>,
     published: bool,
 }
 
@@ -207,6 +248,7 @@ impl StagedDumpArtifact {
             }
         })?;
         self.published = true;
+        drop(self.activity_lock.take());
         sync_directory(&self.parent)?;
 
         Ok(PublishedDumpArtifact {
@@ -218,7 +260,7 @@ impl StagedDumpArtifact {
     }
 
     #[cfg(test)]
-    fn stage_path(&self) -> &Path {
+    pub(crate) fn stage_path(&self) -> &Path {
         &self.stage_path
     }
 }
@@ -226,17 +268,57 @@ impl StagedDumpArtifact {
 impl Drop for StagedDumpArtifact {
     fn drop(&mut self) {
         if !self.published {
+            drop(self.activity_lock.take());
             let _ = fs::remove_dir_all(&self.stage_path);
         }
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct PublishedDumpArtifact {
-    pub dump_id: DumpId,
-    pub path: PathBuf,
-    pub dump_path: PathBuf,
-    pub metadata_path: PathBuf,
+    pub(crate) dump_id: DumpId,
+    pub(crate) path: PathBuf,
+    pub(crate) dump_path: PathBuf,
+    pub(crate) metadata_path: PathBuf,
+}
+
+impl PublishedDumpArtifact {
+    pub const fn dump_id(&self) -> DumpId {
+        self.dump_id
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn dump_path(&self) -> &Path {
+        &self.dump_path
+    }
+
+    pub fn metadata_path(&self) -> &Path {
+        &self.metadata_path
+    }
+}
+
+#[derive(Debug)]
+pub struct ArtifactLease {
+    _file: File,
+}
+
+#[derive(Debug, Error)]
+pub enum ArtifactLeaseError {
+    #[error("the local dump artifact no longer exists")]
+    NotFound,
+
+    #[error("the local dump artifact is currently being modified")]
+    Busy,
+
+    #[error("could not {operation}")]
+    Io {
+        operation: &'static str,
+        #[source]
+        source: io::Error,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -259,6 +341,29 @@ pub enum ArtifactStoreError {
 
     #[error("compressed artifact size differs from metadata: expected {expected}, found {actual}")]
     CompressedSizeMismatch { expected: u64, actual: u64 },
+
+    #[error("the local dump artifact is currently in use")]
+    ArtifactBusy,
+}
+
+pub(crate) fn try_acquire_exclusive_artifact_lock(
+    directory: &Path,
+) -> Result<Option<File>, ArtifactStoreError> {
+    let file =
+        open_artifact_lock_file(&directory.join(ARTIFACT_LOCK_FILE_NAME)).map_err(|source| {
+            ArtifactStoreError::Io {
+                operation: "open an artifact lock",
+                source,
+            }
+        })?;
+    match fs4::FileExt::try_lock(&file) {
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(source)) => Err(ArtifactStoreError::Io {
+            operation: "acquire an artifact lock",
+            source,
+        }),
+    }
 }
 
 fn write_metadata(
@@ -319,6 +424,19 @@ fn create_private_directories(root: &Path, leaf: &Path) -> Result<(), ArtifactSt
 fn create_private_file(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    set_private_file_permissions(&file)?;
+    Ok(file)
+}
+
+fn open_artifact_lock_file(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;

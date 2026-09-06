@@ -219,7 +219,7 @@ Não haverá buffer proporcional ao dump. O crate síncrono `zstd` não será co
 A unidade de publicação será um diretório:
 
 ```text
-cache/profiles/<source-fingerprint>/<database>/<dump-id>.part/
+cache/profiles/<profile>/<tenant-id>/<dump-id>.part/
   dump.sql.zst
   metadata.json
 ```
@@ -230,7 +230,7 @@ Após sucesso completo:
 rename <dump-id>.part -> <dump-id>
 ```
 
-`current.json` não será fonte de verdade. O cache selecionará o artefato completo mais recente e poderá reconstruir índices derivados.
+Fingerprint e database resolvido ficam na metadata e são revalidados em todo hit. Mantê-los fora do path permite que uma configuração alterada ainda encontre e limpe artefatos antigos com segurança. `current.json` não será fonte de verdade. O cache selecionará o artefato completo mais recente e poderá reconstruir índices derivados.
 
 ### 3.11 Restore somente de artefato gerenciado
 
@@ -703,9 +703,13 @@ Regras e custos de validação: [`docs/cache-validity.md`](cache-validity.md).
 
 **Labels:** `priority:p0`, `type:feature`, `area:cache`
 
+**Status:** implementada — locks advisory possuem namespaces separados para source/target e chaves canônicas por recurso/database. Stagings mantêm lock exclusivo; cache hits carregam lease compartilhada; cleanup exige exclusividade, isola por rename e recupera deleções interrompidas. Concorrência real entre processos e liberação após término forçado são testadas.
+
 **Escopo:** advisory lock por source+database, lock separado por target+database, cleanup de expirados e partials órfãos sem remover operação ativa.
 
 **Aceite:** concorrência entre processos, crash e liberação de lock são testados no SO.
+
+Contrato e limites: [`docs/cache-locks-cleanup.md`](cache-locks-cleanup.md).
 
 #### RDB-046 — Entregar `reprodb dump`
 

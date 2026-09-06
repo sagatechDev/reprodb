@@ -9,7 +9,8 @@ use thiserror::Error;
 use crate::{
     domain::{DatabaseName, DumpArtifactMetadata, ProfileName, Sha256Digest, TenantId},
     infrastructure::artifact_store::{
-        ArtifactStoreError, LocalArtifactStore, PublishedDumpArtifact,
+        ArtifactLease, ArtifactLeaseError, ArtifactStoreError, LocalArtifactStore,
+        PublishedDumpArtifact,
     },
 };
 
@@ -28,11 +29,26 @@ pub struct CacheLookup<'a> {
     pub fresh: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct ValidatedCacheHit {
-    pub artifact: PublishedDumpArtifact,
-    pub metadata: DumpArtifactMetadata,
-    pub age_seconds: u64,
+    artifact: PublishedDumpArtifact,
+    metadata: DumpArtifactMetadata,
+    age_seconds: u64,
+    _lease: ArtifactLease,
+}
+
+impl ValidatedCacheHit {
+    pub fn artifact(&self) -> &PublishedDumpArtifact {
+        &self.artifact
+    }
+
+    pub fn metadata(&self) -> &DumpArtifactMetadata {
+        &self.metadata
+    }
+
+    pub const fn age_seconds(&self) -> u64 {
+        self.age_seconds
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,9 +63,10 @@ pub enum CacheMissReason {
     Expired,
     SizeMismatch,
     ChecksumMismatch,
+    InUse,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum CacheLookupResult {
     Hit(Box<ValidatedCacheHit>),
     Miss(CacheMissReason),
@@ -79,19 +96,33 @@ impl LocalCacheValidator {
         let mut candidates = Vec::new();
         let mut unreadable_metadata = None;
         for artifact in artifacts {
+            let lease = match self.store.try_acquire_lease(&artifact) {
+                Ok(lease) => lease,
+                Err(ArtifactLeaseError::NotFound) => {
+                    unreadable_metadata.get_or_insert(CacheMissReason::NotFound);
+                    continue;
+                }
+                Err(ArtifactLeaseError::Busy) => {
+                    unreadable_metadata.get_or_insert(CacheMissReason::InUse);
+                    continue;
+                }
+                Err(ArtifactLeaseError::Io { source, .. }) => {
+                    return Err(CacheError::Io(source));
+                }
+            };
             match read_metadata(&artifact)? {
-                Ok(metadata) => candidates.push((artifact, metadata)),
+                Ok(metadata) => candidates.push((artifact, metadata, lease)),
                 Err(reason) => {
                     unreadable_metadata.get_or_insert(reason);
                 }
             }
         }
         candidates
-            .sort_by_key(|(_, metadata)| std::cmp::Reverse(metadata.completed_at_unix_seconds));
+            .sort_by_key(|(_, metadata, _)| std::cmp::Reverse(metadata.completed_at_unix_seconds));
 
         let mut newest_invalid = None;
-        for (artifact, metadata) in candidates {
-            match validate_candidate(request, &artifact, &metadata)? {
+        for (artifact, metadata, lease) in candidates {
+            match validate_candidate(request, artifact, &metadata, lease)? {
                 Ok(hit) => return Ok(CacheLookupResult::Hit(Box::new(hit))),
                 Err(reason) => {
                     newest_invalid.get_or_insert(reason);
@@ -140,8 +171,9 @@ fn read_metadata(
 
 fn validate_candidate(
     request: &CacheLookup<'_>,
-    artifact: &PublishedDumpArtifact,
+    artifact: PublishedDumpArtifact,
     metadata: &DumpArtifactMetadata,
+    lease: ArtifactLease,
 ) -> Result<Result<ValidatedCacheHit, CacheMissReason>, CacheError> {
     if metadata.dump_id != artifact.dump_id
         || &metadata.profile != request.profile
@@ -180,9 +212,10 @@ fn validate_candidate(
     }
 
     Ok(Ok(ValidatedCacheHit {
-        artifact: artifact.clone(),
+        artifact,
         metadata: metadata.clone(),
         age_seconds: request.now_unix_seconds - metadata.completed_at_unix_seconds,
+        _lease: lease,
     }))
 }
 
@@ -305,6 +338,13 @@ mod tests {
         }
     }
 
+    fn assert_miss(result: CacheLookupResult, expected: CacheMissReason) {
+        let CacheLookupResult::Miss(actual) = result else {
+            panic!("expected cache miss")
+        };
+        assert_eq!(actual, expected);
+    }
+
     #[test]
     fn valid_artifact_is_a_hit_with_age() {
         let directory = tempdir().unwrap();
@@ -319,8 +359,8 @@ mod tests {
         let CacheLookupResult::Hit(hit) = result else {
             panic!("expected hit")
         };
-        assert_eq!(hit.artifact.dump_id, dump_id);
-        assert_eq!(hit.age_seconds, 100);
+        assert_eq!(hit.artifact().dump_id(), dump_id);
+        assert_eq!(hit.age_seconds(), 100);
     }
 
     #[test]
@@ -332,9 +372,9 @@ mod tests {
         let mut lookup = request(&profile, &tenant, &database);
         lookup.fresh = true;
 
-        assert_eq!(
+        assert_miss(
             validator.lookup(&lookup).unwrap(),
-            CacheLookupResult::Miss(CacheMissReason::FreshRequested)
+            CacheMissReason::FreshRequested,
         );
     }
 
@@ -346,15 +386,12 @@ mod tests {
         let (profile, tenant, database) = (profile(), tenant_id(), database());
         let mut lookup = request(&profile, &tenant, &database);
         lookup.ttl_seconds = 100;
-        assert_eq!(
-            validator.lookup(&lookup).unwrap(),
-            CacheLookupResult::Miss(CacheMissReason::Expired)
-        );
+        assert_miss(validator.lookup(&lookup).unwrap(), CacheMissReason::Expired);
 
         lookup.now_unix_seconds = 9_899;
-        assert_eq!(
+        assert_miss(
             validator.lookup(&lookup).unwrap(),
-            CacheLookupResult::Miss(CacheMissReason::ClockInFuture)
+            CacheMissReason::ClockInFuture,
         );
     }
 
@@ -367,23 +404,23 @@ mod tests {
 
         let mut changed = request(&profile, &tenant, &database);
         changed.source_fingerprint = fingerprint(9);
-        assert_eq!(
+        assert_miss(
             validator.lookup(&changed).unwrap(),
-            CacheLookupResult::Miss(CacheMissReason::SourceChanged)
+            CacheMissReason::SourceChanged,
         );
 
         let mut changed = request(&profile, &tenant, &database);
         changed.policy_version = 2;
-        assert_eq!(
+        assert_miss(
             validator.lookup(&changed).unwrap(),
-            CacheLookupResult::Miss(CacheMissReason::PolicyChanged)
+            CacheMissReason::PolicyChanged,
         );
 
         let other_database = DatabaseName::try_from("salt_polymer").unwrap();
         let changed = request(&profile, &tenant, &other_database);
-        assert_eq!(
+        assert_miss(
             validator.lookup(&changed).unwrap(),
-            CacheLookupResult::Miss(CacheMissReason::IdentityChanged)
+            CacheMissReason::IdentityChanged,
         );
     }
 
@@ -412,8 +449,8 @@ mod tests {
             panic!("expected the older artifact to be reused")
         };
 
-        assert_eq!(hit.artifact.dump_id, older_id);
-        assert_eq!(hit.age_seconds, 200);
+        assert_eq!(hit.artifact().dump_id(), older_id);
+        assert_eq!(hit.age_seconds(), 200);
     }
 
     #[test]
@@ -457,11 +494,11 @@ mod tests {
                 _ => unreachable!(),
             }
             let validator = LocalCacheValidator::new(LocalArtifactStore::new(directory.path()));
-            assert_eq!(
+            assert_miss(
                 validator
                     .lookup(&request(&profile, &tenant, &database))
                     .unwrap(),
-                CacheLookupResult::Miss(expected)
+                expected,
             );
         }
     }

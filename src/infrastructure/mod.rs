@@ -1,9 +1,11 @@
 pub mod artifact_store;
 pub mod cache;
+pub mod cache_cleanup;
 pub mod compression;
 pub mod config;
 pub mod credentials;
 pub mod docker;
 pub mod filesystem;
 pub mod mysql;
+pub mod operation_lock;
 pub mod process;

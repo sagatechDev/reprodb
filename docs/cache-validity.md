@@ -38,6 +38,8 @@ Arquivo removido durante a consulta vira miss, não falha geral do comando. Outr
 
 ## Motivos de miss
 
-O domínio diferencia: `fresh`, ausente, metadata corrompida, identidade alterada, source alterado, política alterada, relógio futuro, expirado, tamanho divergente e checksum divergente. A CLI poderá transformar esses motivos em mensagens úteis sem depender do texto de erros internos.
+O domínio diferencia: `fresh`, ausente, em uso, metadata corrompida, identidade alterada, source alterado, política alterada, relógio futuro, expirado, tamanho divergente e checksum divergente. A CLI poderá transformar esses motivos em mensagens úteis sem depender do texto de erros internos.
 
-O cache continua estritamente local. Não há coordenação ou lock entre máquinas; locks por operação e limpeza oportunista pertencem à RDB-045.
+Um hit mantém uma lease compartilhada desde a leitura da metadata/checksum até o consumidor descartá-lo, impedindo que o cleanup remova o arquivo antes do restore. Os locks e a remoção segura estão detalhados em [`cache-locks-cleanup.md`](cache-locks-cleanup.md).
+
+O cache continua estritamente local. Não há coordenação ou lock entre máquinas.
