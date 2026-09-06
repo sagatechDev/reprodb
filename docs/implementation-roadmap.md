@@ -753,9 +753,13 @@ Contrato e evidências: [`docs/restore-engine.md`](restore-engine.md).
 
 **Labels:** `priority:p0`, `type:feature`, `area:tenant`, `area:restore`, `area:security`
 
+**Status:** implementada — o snapshot fechado de features permitidas acompanha a metadata do dump; o serviço exige target autorizado e capability de restore concluído com o mesmo tenant/database; o writer valida o schema central, bloqueia domain conflitante e overrides de conexão e faz upsert transacional idempotente sem substituir os demais dados que já eram locais. Validado no `salt_central` real do container `mysql-8` sem deixar fixtures.
+
 **Escopo:** implementar o contrato da RDB-005 e fazer upsert seguro no `salt_central` local após o restore tenant.
 
 **Aceite:** Salt inicializa o tenant pelo domain/ID local; nenhum secret central do source é copiado.
+
+Contrato e evidências: [`docs/local-tenant-registration.md`](local-tenant-registration.md).
 
 #### RDB-053 — Entregar `reprodb restore`
 
@@ -892,15 +896,15 @@ Não iniciar integração de produção antes de concluir as milestones 0 a 6.
 - [ ] A versão do MySQL é detectada por consulta, não inferida de `mysql:8`.
 - [ ] O client é uma imagem conhecida, fixada e compatível.
 - [x] `reprodb doctor` valida o ambiente implementado antes do dump, com os checks específicos do dump adicionados nas issues da milestone 4.
-- [ ] Alias ou tenant ID resolve via `salt_central`.
-- [ ] `tenancy_db_name` é respeitado.
+- [x] Alias ou tenant ID resolve via `salt_central`.
+- [x] `tenancy_db_name` é respeitado.
 - [ ] Dump usa flags conservadoras e `--set-gtid-purged=OFF`.
 - [x] Compressão e restore são streaming.
 - [ ] Nenhum SQL cru é persistido no fluxo normal.
 - [ ] Cache é atômico, possui checksum, TTL e source fingerprint.
 - [x] Restore valida o artefato antes de dropar o database.
 - [x] Target Docker remoto ou trocado é bloqueado.
-- [ ] Registro central local mínimo é criado sem copiar secrets.
+- [x] Registro central local mínimo é criado sem copiar secrets.
 - [ ] Ctrl+C limpa child, partial, option file e lock.
 - [ ] E2E passa no Linux.
 - [ ] Smoke suite passa no macOS usado pela equipe.

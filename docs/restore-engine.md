@@ -72,7 +72,7 @@ O teste pode usar `REPRODB_TEST_MYSQL_CONTAINER` para selecionar outro container
 
 ## Limites mantidos para as próximas issues
 
-- RDB-052 fará somente o registro mínimo no `salt_central` local após o tenant estar pronto;
+- RDB-052 registra o tenant mínimo no `salt_central` local somente após o tenant estar pronto;
 - RDB-053 ligará lookup, dump ID, target gate, engine e UX no comando `restore`;
 - RDB-058 acrescentará cancelamento explícito do client container e tratamento de sinais;
 - nenhum restore em host arbitrário, source profile ou Docker context remoto é suportado.

@@ -5,7 +5,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::domain::{
-    DatabaseEncoding, DatabaseName, MysqlVersion, ProfileName, Sha256Digest, TenantId, TenantLookup,
+    DatabaseEncoding, DatabaseName, LocalTenantFeatures, MysqlVersion, ProfileName, Sha256Digest,
+    TenantId, TenantLookup,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -80,6 +81,7 @@ pub struct DumpArtifactMetadata {
     pub client_version: MysqlVersion,
     pub database_charset: String,
     pub database_collation: String,
+    pub local_tenant_features: LocalTenantFeatures,
     pub policy_version: u32,
     pub created_at_unix_seconds: u64,
     pub completed_at_unix_seconds: u64,
@@ -103,6 +105,8 @@ struct DumpArtifactMetadataWire {
     client_version: MysqlVersion,
     database_charset: String,
     database_collation: String,
+    #[serde(default)]
+    local_tenant_features: LocalTenantFeatures,
     policy_version: u32,
     created_at_unix_seconds: u64,
     completed_at_unix_seconds: u64,
@@ -134,6 +138,7 @@ impl<'de> Deserialize<'de> for DumpArtifactMetadata {
                 source_version: wire.source_version,
                 client_version: wire.client_version,
                 database_encoding: encoding,
+                local_tenant_features: wire.local_tenant_features,
                 policy_version: wire.policy_version,
             },
             DumpArtifactCompletion {
@@ -159,6 +164,7 @@ pub struct DumpArtifactContext {
     pub source_version: MysqlVersion,
     pub client_version: MysqlVersion,
     pub database_encoding: DatabaseEncoding,
+    pub local_tenant_features: LocalTenantFeatures,
     pub policy_version: u32,
 }
 
@@ -200,6 +206,7 @@ impl DumpArtifactMetadata {
             client_version: context.client_version,
             database_charset: context.database_encoding.charset().to_owned(),
             database_collation: context.database_encoding.collation().to_owned(),
+            local_tenant_features: context.local_tenant_features,
             policy_version: context.policy_version,
             created_at_unix_seconds: completion.created_at_unix_seconds,
             completed_at_unix_seconds: completion.completed_at_unix_seconds,
@@ -253,6 +260,7 @@ mod tests {
                     "utf8mb4_0900_ai_ci".to_owned(),
                 )
                 .unwrap(),
+                local_tenant_features: LocalTenantFeatures::default(),
                 policy_version: 1,
             },
             DumpArtifactCompletion {
@@ -268,7 +276,8 @@ mod tests {
 
     #[test]
     fn metadata_serializes_only_canonical_typed_values() {
-        let metadata = metadata(101, 512).unwrap();
+        let mut metadata = metadata(101, 512).unwrap();
+        metadata.local_tenant_features.enable_beta = Some(true);
         let json = serde_json::to_value(&metadata).unwrap();
 
         assert_eq!(json["format"], "mysql-sql-zstd-v1");
@@ -276,6 +285,12 @@ mod tests {
         assert_eq!(json["tenant_id"], "salt_sagatec");
         assert_eq!(json["database"], "salt_sagatec");
         assert_eq!(json["database_charset"], "utf8mb4");
+        assert_eq!(json["local_tenant_features"]["enable_beta"], true);
+        assert!(
+            json["local_tenant_features"]
+                .get("tenancy_api_token")
+                .is_none()
+        );
         assert_eq!(json["artifact_sha256"].as_str().unwrap().len(), 64);
         assert!(json.get("password").is_none());
         assert_eq!(
@@ -314,5 +329,17 @@ mod tests {
         let mut json = serde_json::to_value(metadata(101, 512).unwrap()).unwrap();
         json["database_collation"] = serde_json::json!("latin1_bin");
         assert!(serde_json::from_value::<DumpArtifactMetadata>(json).is_err());
+
+        let mut older = serde_json::to_value(metadata(101, 512).unwrap()).unwrap();
+        older
+            .as_object_mut()
+            .unwrap()
+            .remove("local_tenant_features");
+        assert_eq!(
+            serde_json::from_value::<DumpArtifactMetadata>(older)
+                .unwrap()
+                .local_tenant_features,
+            LocalTenantFeatures::default()
+        );
     }
 }

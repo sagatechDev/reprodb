@@ -241,6 +241,10 @@ impl AuthorizedLocalTarget {
         &self.target.password
     }
 
+    pub fn central_database(&self) -> &DatabaseName {
+        &self.target.central_database
+    }
+
     pub const fn client(&self) -> ApprovedMysqlClient {
         self.target.client
     }

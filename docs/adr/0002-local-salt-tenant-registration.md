@@ -195,3 +195,7 @@ Rejeitada no MVP porque produziria relações quebradas ou exigiria restauraçã
 - reproduções que dependam de integrações externas ou hierarquia entre tenants continuam fora do MVP;
 - schema drift de `salt_central` precisa ser detectado pelo `setup`/`doctor` antes do upsert;
 - o registro é idempotente, mas conflitos de domain ou target são erros deliberados.
+
+## Implementação
+
+A decisão foi implementada na RDB-052. O contrato, a allowlist efetiva, as barreiras de schema/conflito e os testes reais estão em [`local-tenant-registration.md`](../local-tenant-registration.md).

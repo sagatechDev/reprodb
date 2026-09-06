@@ -525,6 +525,7 @@ mod tests {
                     "utf8mb4_0900_ai_ci".to_owned(),
                 )
                 .unwrap(),
+                local_tenant_features: Default::default(),
                 policy_version: 1,
             },
             DumpArtifactCompletion {
@@ -569,6 +570,7 @@ mod tests {
                     "utf8mb4_0900_ai_ci".to_owned(),
                 )
                 .unwrap(),
+                local_tenant_features: Default::default(),
                 policy_version: 1,
             },
             DumpArtifactCompletion {

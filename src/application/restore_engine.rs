@@ -65,6 +65,7 @@ where
             .save(target, metadata.dump_id, RestoreStatus::Ready)?;
 
         Ok(RestoreCompleted {
+            tenant_id: metadata.tenant_id.clone(),
             database: metadata.database.clone(),
             dump_id: metadata.dump_id,
             imported_bytes: metrics.imported_bytes(),
@@ -78,9 +79,38 @@ fn mysql_series(version: crate::domain::MysqlVersion) -> (u16, u16) {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RestoreCompleted {
-    pub database: DatabaseName,
-    pub dump_id: DumpId,
-    pub imported_bytes: u64,
+    tenant_id: crate::domain::TenantId,
+    database: DatabaseName,
+    dump_id: DumpId,
+    imported_bytes: u64,
+}
+
+impl RestoreCompleted {
+    pub fn tenant_id(&self) -> &crate::domain::TenantId {
+        &self.tenant_id
+    }
+
+    pub fn database(&self) -> &DatabaseName {
+        &self.database
+    }
+
+    pub const fn dump_id(&self) -> DumpId {
+        self.dump_id
+    }
+
+    pub const fn imported_bytes(&self) -> u64 {
+        self.imported_bytes
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(database: DatabaseName) -> Self {
+        Self {
+            tenant_id: crate::domain::TenantId::try_from("salt_sagatec").unwrap(),
+            database,
+            dump_id: DumpId::new(),
+            imported_bytes: 100,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -185,6 +215,7 @@ mod tests {
                     "utf8mb4_0900_ai_ci".to_owned(),
                 )
                 .unwrap(),
+                local_tenant_features: Default::default(),
                 policy_version: 1,
             },
             DumpArtifactCompletion {
@@ -227,7 +258,7 @@ mod tests {
         let completed = engine.restore(&target, &artifact).await.unwrap();
 
         assert_eq!(*calls.lock().unwrap(), ["recreate", "import"]);
-        assert_eq!(completed.database.as_str(), "salt_sagatec");
+        assert_eq!(completed.database().as_str(), "salt_sagatec");
         assert_eq!(
             engine.states.load(&target).unwrap().status,
             RestoreStatus::Ready

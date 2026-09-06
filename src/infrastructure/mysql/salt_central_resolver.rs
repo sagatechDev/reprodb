@@ -3,8 +3,8 @@ use secrecy::SecretString;
 
 use crate::{
     domain::{
-        DatabaseName, MysqlTlsMode, ResolvedTenant, TenantId, TenantLookup, TenantMatch,
-        TenantResolutionError, TenantResolver,
+        AppColor, DatabaseName, LocalTenantFeatures, MysqlTlsMode, ResolvedTenant, TenantId,
+        TenantLookup, TenantMatch, TenantResolutionError, TenantResolver,
     },
     infrastructure::{
         mysql::{ApprovedMysqlClient, DockerClientError, DockerMysqlClientRuntime},
@@ -142,14 +142,52 @@ fn resolution_query(
             JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_db_username')) <> 'NULL' AND \
             (JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_db_username')) <> 'STRING' OR \
              BINARY JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.tenancy_db_username')) <> BINARY @reprodb_source_username))\
-         ) THEN 1 ELSE 0 END \
+         ) THEN 1 ELSE 0 END,\
+         {features} \
          FROM tenants AS t \
          WHERE BINARY t.id = BINARY @reprodb_lookup \
             OR ({domain_enabled} = 1 AND EXISTS (\
                 SELECT 1 FROM domains AS d \
                 WHERE d.tenant_id = t.id AND BINARY d.domain = BINARY @reprodb_lookup)) \
-         ORDER BY HEX(t.id) LIMIT 2"
+         ORDER BY HEX(t.id) LIMIT 2",
+        features = feature_projection(),
     )
+}
+
+fn feature_projection() -> String {
+    let mut columns = vec![
+        "CASE \
+         WHEN JSON_EXTRACT(t.data, '$.tenancy_app_color') IS NULL \
+           OR JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_app_color')) = 'NULL' THEN 'N' \
+         WHEN JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_app_color')) = 'STRING' \
+           THEN CONCAT('S', HEX(JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.tenancy_app_color')))) \
+         ELSE 'X' END"
+            .to_owned(),
+    ];
+    columns.extend(
+        [
+            "tenancy_annotation_atm",
+            "tenancy_enable_stock_label_control",
+            "tenancy_enable_sped_contrib",
+            "tenancy_enable_beta",
+            "tenancy_has_cyclic_counting",
+            "tenancy_new_production",
+        ]
+        .into_iter()
+        .map(|key| {
+            format!(
+                "CASE \
+                 WHEN JSON_EXTRACT(t.data, '$.{key}') IS NULL \
+                   OR JSON_TYPE(JSON_EXTRACT(t.data, '$.{key}')) = 'NULL' THEN 'N' \
+                 WHEN JSON_TYPE(JSON_EXTRACT(t.data, '$.{key}')) = 'BOOLEAN' \
+                   AND JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.{key}')) = 'true' THEN 'T' \
+                 WHEN JSON_TYPE(JSON_EXTRACT(t.data, '$.{key}')) = 'BOOLEAN' \
+                   AND JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.{key}')) = 'false' THEN 'F' \
+                 ELSE 'X' END"
+            )
+        }),
+    );
+    columns.join(",")
 }
 
 fn parse_resolution(output: &[u8]) -> Result<ResolvedTenant, TenantResolutionError> {
@@ -165,7 +203,7 @@ fn parse_resolution(output: &[u8]) -> Result<ResolvedTenant, TenantResolutionErr
     }
 
     let columns = rows[0].split('\t').collect::<Vec<_>>();
-    if columns.len() != 5 {
+    if columns.len() != 12 {
         return Err(TenantResolutionError::InvalidMetadata);
     }
     let tenant_id = decode_hex(columns[0], 255)
@@ -191,12 +229,44 @@ fn parse_resolution(output: &[u8]) -> Result<ResolvedTenant, TenantResolutionErr
         "1" => return Err(TenantResolutionError::ConnectionOverride),
         _ => return Err(TenantResolutionError::InvalidMetadata),
     }
+    let features = LocalTenantFeatures {
+        app_color: parse_app_color(columns[5])?,
+        annotation_atm: parse_optional_bool(columns[6])?,
+        enable_stock_label_control: parse_optional_bool(columns[7])?,
+        enable_sped_contrib: parse_optional_bool(columns[8])?,
+        enable_beta: parse_optional_bool(columns[9])?,
+        has_cyclic_counting: parse_optional_bool(columns[10])?,
+        new_production: parse_optional_bool(columns[11])?,
+    };
 
     Ok(ResolvedTenant {
         tenant_id,
         database,
         matched_by,
+        features,
     })
+}
+
+fn parse_app_color(value: &str) -> Result<Option<AppColor>, TenantResolutionError> {
+    if value == "N" {
+        return Ok(None);
+    }
+    let encoded = value
+        .strip_prefix('S')
+        .ok_or(TenantResolutionError::InvalidMetadata)?;
+    let decoded = decode_hex(encoded, 32).ok_or(TenantResolutionError::InvalidMetadata)?;
+    AppColor::try_from(decoded)
+        .map(Some)
+        .map_err(|_| TenantResolutionError::InvalidMetadata)
+}
+
+fn parse_optional_bool(value: &str) -> Result<Option<bool>, TenantResolutionError> {
+    match value {
+        "N" => Ok(None),
+        "T" => Ok(Some(true)),
+        "F" => Ok(Some(false)),
+        _ => Err(TenantResolutionError::InvalidMetadata),
+    }
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -277,6 +347,8 @@ mod tests {
 
     use super::*;
 
+    const NO_FEATURES: &str = "\tN\tN\tN\tN\tN\tN\tN";
+
     struct FakeRunner {
         outputs: Mutex<VecDeque<ProcessOutput>>,
         commands: Arc<Mutex<Vec<ProcessSpec>>>,
@@ -327,7 +399,10 @@ mod tests {
 
     #[tokio::test]
     async fn resolves_a_domain_without_returning_the_central_json() {
-        let (resolver, commands) = resolver("73616C745F73616761746563\t0\t\t0\t0\n", true);
+        let (resolver, commands) = resolver(
+            format!("73616C745F73616761746563\t0\t\t0\t0{NO_FEATURES}\n"),
+            true,
+        );
         let lookup = TenantLookup::try_from("sagatec").unwrap();
 
         let resolved = resolver.resolve(&lookup).await.unwrap();
@@ -356,7 +431,9 @@ mod tests {
     #[tokio::test]
     async fn respects_a_valid_database_override() {
         let (resolver, _) = resolver(
-            "73616C745F706F6C796D6572\t1\t73616C745F706F6C796D65725F64617461\t1\t0\n",
+            format!(
+                "73616C745F706F6C796D6572\t1\t73616C745F706F6C796D65725F64617461\t1\t0{NO_FEATURES}\n"
+            ),
             true,
         );
 
@@ -382,18 +459,26 @@ mod tests {
             TenantResolutionError::NotFound
         );
         assert_eq!(
-            resolver("73616C745F61\t0\t\t0\t0\n73616C745F62\t0\t\t0\t0\n", true)
-                .0
-                .resolve(&lookup)
-                .await
-                .unwrap_err(),
-            TenantResolutionError::Ambiguous
-        );
-        let error = resolver("73616C745F73616761746563\t3\t\t0\t0\n", true)
+            resolver(
+                format!(
+                    "73616C745F61\t0\t\t0\t0{NO_FEATURES}\n73616C745F62\t0\t\t0\t0{NO_FEATURES}\n"
+                ),
+                true,
+            )
             .0
             .resolve(&lookup)
             .await
-            .unwrap_err();
+            .unwrap_err(),
+            TenantResolutionError::Ambiguous
+        );
+        let error = resolver(
+            format!("73616C745F73616761746563\t3\t\t0\t0{NO_FEATURES}\n"),
+            true,
+        )
+        .0
+        .resolve(&lookup)
+        .await
+        .unwrap_err();
         assert_eq!(error, TenantResolutionError::InvalidMetadata);
         assert!(!error.to_string().contains("salt_sagatec"));
     }
@@ -402,7 +487,8 @@ mod tests {
     async fn rejects_invalid_and_administrative_database_overrides() {
         let lookup = TenantLookup::try_from("sagatec").unwrap();
         for database_hex in ["2E2E2F78", "6D7973716C"] {
-            let output = format!("73616C745F73616761746563\t1\t{database_hex}\t0\t0\n");
+            let output =
+                format!("73616C745F73616761746563\t1\t{database_hex}\t0\t0{NO_FEATURES}\n");
             assert!(matches!(
                 resolver(output, true).0.resolve(&lookup).await,
                 Err(TenantResolutionError::InvalidDatabase(_))
@@ -426,11 +512,14 @@ mod tests {
     async fn blocks_connection_overrides_without_returning_their_values() {
         let marker = "production-password-marker";
         let lookup = TenantLookup::try_from("sagatec").unwrap();
-        let error = resolver("73616C745F73616761746563\t0\t\t0\t1\n", true)
-            .0
-            .resolve(&lookup)
-            .await
-            .unwrap_err();
+        let error = resolver(
+            format!("73616C745F73616761746563\t0\t\t0\t1{NO_FEATURES}\n"),
+            true,
+        )
+        .0
+        .resolve(&lookup)
+        .await
+        .unwrap_err();
 
         assert_eq!(error, TenantResolutionError::ConnectionOverride);
         assert!(!error.to_string().contains(marker));
@@ -443,6 +532,27 @@ mod tests {
             map_client_error(DockerClientError::QueryFailed),
             TenantResolutionError::InvalidMetadata
         );
+    }
+
+    #[tokio::test]
+    async fn returns_only_allowlisted_typed_features() {
+        let (resolver, _) = resolver(
+            "73616C745F73616761746563\t0\t\t0\t0\tS677265656E\tT\tF\tN\tT\tF\tN\n",
+            true,
+        );
+
+        let resolved = resolver
+            .resolve(&TenantLookup::try_from("sagatec").unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(resolved.features.app_color.unwrap().as_str(), "green");
+        assert_eq!(resolved.features.annotation_atm, Some(true));
+        assert_eq!(resolved.features.enable_stock_label_control, Some(false));
+        assert_eq!(resolved.features.enable_sped_contrib, None);
+        assert_eq!(resolved.features.enable_beta, Some(true));
+        assert_eq!(resolved.features.has_cyclic_counting, Some(false));
+        assert_eq!(resolved.features.new_production, None);
     }
 
     #[test]

@@ -178,6 +178,7 @@ where
                 source_version: approved.server.version,
                 client_version: client.version(),
                 database_encoding: approved.preflight.encoding.clone(),
+                local_tenant_features: resolved.features.clone(),
                 policy_version: approved.plan.policy_version(),
             },
             DumpArtifactCompletion {
@@ -284,8 +285,9 @@ mod tests {
 
     use crate::{
         domain::{
-            DatabaseEncoding, DatabaseObjectCounts, DefinerObjectCounts, DumpPreflight, GtidMode,
-            Mysql8DumpPolicy, MysqlTlsMode, StorageEngineUsage, TenantId, TenantMatch,
+            AppColor, DatabaseEncoding, DatabaseObjectCounts, DefinerObjectCounts, DumpPreflight,
+            GtidMode, LocalTenantFeatures, Mysql8DumpPolicy, MysqlTlsMode, StorageEngineUsage,
+            TenantId, TenantMatch,
         },
         infrastructure::{
             compression::ZstdCompressor,
@@ -332,6 +334,11 @@ mod tests {
                 tenant_id: TenantId::try_from("salt_sagatec").unwrap(),
                 database: DatabaseName::try_from("salt_sagatec").unwrap(),
                 matched_by: TenantMatch::TenantId,
+                features: LocalTenantFeatures {
+                    app_color: Some(AppColor::try_from("green".to_owned()).unwrap()),
+                    enable_beta: Some(true),
+                    ..LocalTenantFeatures::default()
+                },
             })
         }
     }
@@ -496,6 +503,14 @@ mod tests {
         let sql = zstd::stream::decode_all(std::fs::File::open(artifacts[0].dump_path()).unwrap())
             .unwrap();
         assert_eq!(sql, b"CREATE TABLE example (id BIGINT);\n");
+        let metadata: crate::domain::DumpArtifactMetadata =
+            serde_json::from_reader(std::fs::File::open(artifacts[0].metadata_path()).unwrap())
+                .unwrap();
+        assert_eq!(metadata.local_tenant_features.enable_beta, Some(true));
+        assert_eq!(
+            metadata.local_tenant_features.app_color.unwrap().as_str(),
+            "green"
+        );
 
         let lock = OperationLockManager::new(cache_root).try_acquire(OperationLockKey::source(
             &created.profile,

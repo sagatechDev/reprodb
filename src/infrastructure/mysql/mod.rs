@@ -4,6 +4,7 @@ mod dump_executor;
 mod dump_preflight;
 mod dump_workflow;
 mod local_target_attestor;
+mod local_tenant_writer;
 mod profile_verifier;
 mod restore_executor;
 mod salt_central_resolver;
@@ -23,6 +24,7 @@ pub use dump_preflight::{
 };
 pub use dump_workflow::DockerDumpWorkflow;
 pub use local_target_attestor::DockerLocalTargetAttestor;
+pub use local_tenant_writer::DockerLocalTenantWriter;
 pub use profile_verifier::DockerSourceProfileVerifier;
 pub use restore_executor::{
     DockerMysqlRestoreExecutor, RestoreExecutor, RestoreExecutorError, RestoreFailureKind,

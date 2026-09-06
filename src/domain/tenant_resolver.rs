@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use super::{DatabaseName, TenantId, TenantLookup, ValueObjectError};
+use super::{DatabaseName, LocalTenantFeatures, TenantId, TenantLookup, ValueObjectError};
 
 const TENANT_PLACEHOLDER: &str = "{tenant}";
 const MAX_PATTERN_CHARACTERS: usize = 128;
@@ -18,6 +18,7 @@ pub struct ResolvedTenant {
     pub tenant_id: TenantId,
     pub database: DatabaseName,
     pub matched_by: TenantMatch,
+    pub features: LocalTenantFeatures,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -111,6 +112,7 @@ impl TenantResolver for PatternTenantResolver {
             tenant_id,
             database,
             matched_by: TenantMatch::Pattern,
+            features: LocalTenantFeatures::default(),
         })
     }
 }

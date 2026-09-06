@@ -2,6 +2,7 @@ mod credential_transaction;
 mod doctor_service;
 mod dump_service;
 mod local_target_gate;
+mod local_tenant_registration_service;
 mod profile_service;
 mod restore_engine;
 mod setup_service;
@@ -19,6 +20,10 @@ pub use dump_service::{
 pub use local_target_gate::{
     AuthorizedLocalTarget, GuardedLocalTarget, LocalTargetAttestation, LocalTargetAttestationError,
     LocalTargetAttestationRequest, LocalTargetAttestor, LocalTargetGate, LocalTargetGateError,
+};
+pub use local_tenant_registration_service::{
+    LocalTenantRegistered, LocalTenantRegistrationService, LocalTenantRegistrationServiceError,
+    LocalTenantWriteError, LocalTenantWriter,
 };
 pub use profile_service::{
     NewProfileInput, ProfileCreated, ProfileRemoval, ProfileService, ProfileServiceError,
