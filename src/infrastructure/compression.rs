@@ -12,20 +12,42 @@ use tokio::{
     task,
 };
 
+use crate::domain::Sha256Digest;
+
 pub const DEFAULT_ZSTD_LEVEL: i32 = 1;
 const STREAM_BUFFER_BYTES: usize = 64 * 1024;
 const BUFFERED_CHUNKS: usize = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompressionMetrics {
-    pub input_bytes: u64,
-    pub compressed_bytes: u64,
-    pub input_sha256: String,
-    pub compressed_sha256: String,
-    pub elapsed: Duration,
+    pub(crate) input_bytes: u64,
+    pub(crate) compressed_bytes: u64,
+    pub(crate) input_sha256: Sha256Digest,
+    pub(crate) compressed_sha256: Sha256Digest,
+    pub(crate) elapsed: Duration,
 }
 
 impl CompressionMetrics {
+    pub const fn input_bytes(&self) -> u64 {
+        self.input_bytes
+    }
+
+    pub const fn compressed_bytes(&self) -> u64 {
+        self.compressed_bytes
+    }
+
+    pub const fn input_sha256(&self) -> Sha256Digest {
+        self.input_sha256
+    }
+
+    pub const fn compressed_sha256(&self) -> Sha256Digest {
+        self.compressed_sha256
+    }
+
+    pub const fn elapsed(&self) -> Duration {
+        self.elapsed
+    }
+
     pub fn average_input_bytes_per_second(&self) -> f64 {
         rate(self.input_bytes, self.elapsed)
     }
@@ -152,8 +174,8 @@ pub enum CompressionError {
 
 struct EncodedOutput {
     compressed_bytes: u64,
-    input_sha256: String,
-    compressed_sha256: String,
+    input_sha256: Sha256Digest,
+    compressed_sha256: Sha256Digest,
 }
 
 fn encode_chunks<W>(
@@ -180,7 +202,7 @@ where
     let (compressed_bytes, compressed_sha256) = output.finish();
     Ok(EncodedOutput {
         compressed_bytes,
-        input_sha256: digest_hex(input_hasher.finalize()),
+        input_sha256: digest(input_hasher.finalize()),
         compressed_sha256,
     })
 }
@@ -200,8 +222,8 @@ impl<W> CountingHashWriter<W> {
         }
     }
 
-    fn finish(self) -> (u64, String) {
-        (self.bytes, digest_hex(self.hasher.finalize()))
+    fn finish(self) -> (u64, Sha256Digest) {
+        (self.bytes, digest(self.hasher.finalize()))
     }
 }
 
@@ -224,15 +246,8 @@ where
     }
 }
 
-fn digest_hex(digest: impl AsRef<[u8]>) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let bytes = digest.as_ref();
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(DIGITS[(byte >> 4) as usize] as char);
-        output.push(DIGITS[(byte & 0x0f) as usize] as char);
-    }
-    output
+fn digest(digest: impl Into<[u8; 32]>) -> Sha256Digest {
+    Sha256Digest::from_bytes(digest.into())
 }
 
 fn rate(bytes: u64, elapsed: Duration) -> f64 {
@@ -289,10 +304,10 @@ mod tests {
         assert_eq!(decoded, input);
         assert_eq!(metrics.input_bytes, input.len() as u64);
         assert_eq!(metrics.compressed_bytes, compressed.len() as u64);
-        assert_eq!(metrics.input_sha256, digest_hex(Sha256::digest(&input)));
+        assert_eq!(metrics.input_sha256, digest(Sha256::digest(&input)));
         assert_eq!(
             metrics.compressed_sha256,
-            digest_hex(Sha256::digest(&compressed))
+            digest(Sha256::digest(&compressed))
         );
         assert!(metrics.average_input_bytes_per_second().is_finite());
         assert!(metrics.compression_ratio() > 0.0);
@@ -386,7 +401,7 @@ mod tests {
 
         assert_eq!(bytes, 6);
         assert_eq!(
-            checksum,
+            checksum.to_string(),
             "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721"
         );
     }
@@ -405,8 +420,8 @@ mod tests {
             CompressionMetrics {
                 input_bytes: 0,
                 compressed_bytes: 0,
-                input_sha256: String::new(),
-                compressed_sha256: String::new(),
+                input_sha256: Sha256Digest::from_bytes([0; 32]),
+                compressed_sha256: Sha256Digest::from_bytes([0; 32]),
                 elapsed: Duration::ZERO,
             }
             .compression_ratio(),

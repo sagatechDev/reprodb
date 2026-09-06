@@ -679,9 +679,13 @@ Detalhes e medição inicial: [`docs/compression.md`](compression.md).
 
 **Labels:** `priority:p0`, `type:feature`, `area:cache`, `area:security`
 
+**Status:** implementada — staging UUID em diretório `.part`, arquivos privados, `fsync`, metadata tipada e rename atômico do diretório completo. A publicação exige o resultado tipado da compressão, confere bytes/hashes e o tamanho em disco sem uma segunda leitura completa; falhas normais removem o staging e crash simulado deixa somente `.part` invisível para a listagem.
+
 **Metadata:** tenant lookup, tenant ID, database, profile, source fingerprint, source/client version, charset/collation, policy version, timestamps, bytes, checksum e formato.
 
 **Aceite:** somente diretórios completos são visíveis como cache; crash em cada etapa deixa no máximo `.part` recuperável.
+
+Formato e ordem de publicação: [`docs/dump-artifacts.md`](dump-artifacts.md).
 
 #### RDB-044 — Implementar validade, TTL e fingerprint do cache
 

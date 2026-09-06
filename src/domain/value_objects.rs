@@ -40,6 +40,7 @@ pub enum ValueKind {
     ContainerId,
     CredentialKey,
     MysqlVersion,
+    Sha256Digest,
 }
 
 impl fmt::Display for ValueKind {
@@ -54,6 +55,7 @@ impl fmt::Display for ValueKind {
             Self::ContainerId => "container ID",
             Self::CredentialKey => "credential key",
             Self::MysqlVersion => "MySQL version",
+            Self::Sha256Digest => "SHA-256 digest",
         };
         formatter.write_str(name)
     }
@@ -75,6 +77,89 @@ pub enum ValueObjectError {
 
     #[error("{kind} is reserved and cannot be used")]
     Reserved { kind: ValueKind },
+}
+
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+pub struct Sha256Digest([u8; 32]);
+
+impl Sha256Digest {
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Sha256Digest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("Sha256Digest")
+            .field(&self.to_string())
+            .finish()
+    }
+}
+
+impl fmt::Display for Sha256Digest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(formatter, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl FromStr for Sha256Digest {
+    type Err = ValueObjectError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let invalid = || ValueObjectError::InvalidFormat {
+            kind: ValueKind::Sha256Digest,
+            expected: "exactly 64 lowercase hexadecimal characters",
+        };
+        if value.len() != 64
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(invalid());
+        }
+        let mut bytes = [0_u8; 32];
+        for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+            bytes[index] = (lowercase_hex_digit(pair[0]).ok_or_else(invalid)? << 4)
+                | lowercase_hex_digit(pair[1]).ok_or_else(invalid)?;
+        }
+        Ok(Self(bytes))
+    }
+}
+
+impl Serialize for Sha256Digest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Sha256Digest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(de::Error::custom)
+    }
+}
+
+fn lowercase_hex_digit(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
 }
 
 macro_rules! validated_string {
@@ -570,6 +655,32 @@ mod tests {
 
         for invalid in ["8.4", "8.4.4.1", "8.4.x", "8.4.4-commercial", ""] {
             assert!(invalid.parse::<MysqlVersion>().is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn sha256_digest_has_a_canonical_validated_representation() {
+        let value = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let digest: Sha256Digest = value.parse().unwrap();
+
+        assert_eq!(digest.to_string(), value);
+        assert_eq!(digest.as_bytes().len(), 32);
+        assert_eq!(
+            serde_json::to_string(&digest).unwrap(),
+            format!("\"{value}\"")
+        );
+        assert_eq!(
+            serde_json::from_str::<Sha256Digest>(&format!("\"{value}\"")).unwrap(),
+            digest
+        );
+
+        for invalid in [
+            "",
+            "0123",
+            "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef",
+            "g123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ] {
+            assert!(invalid.parse::<Sha256Digest>().is_err(), "{invalid:?}");
         }
     }
 

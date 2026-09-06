@@ -1,3 +1,4 @@
+pub mod artifact_store;
 pub mod compression;
 pub mod config;
 pub mod credentials;

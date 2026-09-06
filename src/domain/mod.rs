@@ -1,3 +1,4 @@
+mod artifact;
 mod dump;
 mod tenant_resolver;
 mod value_objects;
@@ -12,7 +13,12 @@ pub use tenant_resolver::{
     PatternTenantResolver, ResolvedTenant, TenantMatch, TenantResolutionError, TenantResolver,
 };
 
+pub use artifact::{
+    DumpArtifactCompletion, DumpArtifactContext, DumpArtifactFormat, DumpArtifactMetadata, DumpId,
+    DumpMetadataError,
+};
 pub use value_objects::{
     ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseName, DomainAlias,
-    MysqlTlsMode, MysqlVersion, ProfileName, TenantId, TenantLookup, ValueKind, ValueObjectError,
+    MysqlTlsMode, MysqlVersion, ProfileName, Sha256Digest, TenantId, TenantLookup, ValueKind,
+    ValueObjectError,
 };
