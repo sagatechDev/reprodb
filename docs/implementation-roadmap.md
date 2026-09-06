@@ -643,6 +643,8 @@ Critério da milestone: `reprodb dump TENANT` gera um artefato `.sql.zst` atômi
 
 **Labels:** `priority:p0`, `type:feature`, `area:mysql`, `area:security`
 
+**Status:** implementada — preflight somente leitura retorna apenas agregados, valida charset/collation/GTID e inventaria engines/objetos/definers. A policy v1 exige MySQL 8.4 com client da mesma série, aceita somente InnoDB, bloqueia routines/events e produz argumentos ordenados sem shell. Views/triggers com definer e risco de DDL concorrente viram avisos estruturados. A visibilidade integral de metadata pela credencial continua como gate explícito para produção.
+
 **Flags iniciais:**
 
 ```text
@@ -658,6 +660,8 @@ Critério da milestone: `reprodb dump TENANT` gera um artefato `.sql.zst` atômi
 **Escopo adicional:** versão/vendor, engines não InnoDB, DDL concorrente documentado, routines/events, definers e charset/collation do database.
 
 **Aceite:** argumentos são testados como lista ordenada; nenhuma shell string; policy incompatível bloqueia antes do dump.
+
+Detalhes e limites: [`docs/dump-policy.md`](dump-policy.md).
 
 #### RDB-042 — Implementar compressão Zstd streaming e progresso
 
