@@ -52,7 +52,7 @@ O nome escolhido ainda precisa estar dentro da allowlist `salt_*` do target conf
 
 ## Saída
 
-Um miss mostra que o source será exportado e acompanha bytes, taxa e duração sem inventar percentual. Um hit mostra a idade e o UUID encontrados. Ambos apresentam o plano de restore antes da primeira operação destrutiva e terminam aproximadamente assim:
+Um miss mostra que o source será exportado e acompanha bytes, taxa, duração e, após amostra suficiente, `ETA ~mm:ss`, sem inventar percentual. A previsão é omitida se a estimativa do MySQL for insuficiente ou já tiver sido ultrapassada. Um hit mostra a idade e o UUID encontrados. Ambos apresentam o plano de restore antes da primeira operação destrutiva e terminam aproximadamente assim:
 
 ```text
 ✓ Tenant ready

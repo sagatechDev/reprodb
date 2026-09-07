@@ -415,6 +415,7 @@ mod tests {
                     "utf8mb4_0900_ai_ci".to_owned(),
                 )
                 .unwrap(),
+                estimated_data_bytes: 1024,
                 engines: vec![StorageEngineUsage::try_new("InnoDB".to_owned(), 1).unwrap()],
                 objects: DatabaseObjectCounts::default(),
                 definers: DefinerObjectCounts::default(),

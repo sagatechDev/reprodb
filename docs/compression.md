@@ -12,7 +12,9 @@ O resultado contém:
 - throughput médio calculável;
 - razão de compressão calculável.
 
-O observer de progresso recebe somente bytes lidos e tempo decorrido. A UI pode mostrar tamanho, throughput e duração, mas não um percentual, pois o tamanho total do `mysqldump` não é conhecido.
+O observer de progresso recebe bytes lidos e tempo decorrido, além de uma estimativa opcional informada antes do stream. A estimativa vem da soma de `information_schema.tables.data_length` observada no preflight; ela descreve páginas/dados estimados pelo MySQL, não o tamanho exato do SQL textual.
+
+A UI mostra tamanho, throughput e duração. Depois de dois segundos de amostragem, pode acrescentar `ETA ~mm:ss`, recalculado pela vazão desde o início. O `~` é deliberado: escaping, BLOBs, statements e estatísticas do InnoDB fazem o stream divergir da estimativa. Não existe percentual. Se a estimativa for zero, a amostra ainda for insuficiente ou o SQL já tiver ultrapassado o total estimado, o ETA é omitido em vez de apresentar um prazo enganoso.
 
 ## Nível inicial
 

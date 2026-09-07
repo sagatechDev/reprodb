@@ -809,6 +809,8 @@ Contrato e evidências: [`docs/cache-commands.md`](cache-commands.md).
 
 **Labels:** `priority:p1`, `type:feature`, `area:cli`, `area:mysql`, `area:performance`
 
+**Status:** implementada — o preflight soma `information_schema.tables.data_length`; o observer recebe a estimativa antes do stream; dump/pull exibem `ETA ~mm:ss` somente após dois segundos e escondem a previsão quando a base é zero ou já foi ultrapassada.
+
 **Escopo:** coletar no preflight uma estimativa lógica com `information_schema.tables`, combinar o total estimado com os bytes SQL realmente recebidos e recalcular a duração restante depois de uma janela mínima de amostragem.
 
 **UX:** mostrar `ETA ~mm:ss` e identificar visualmente que é uma estimativa. Não prometer percentual exato: BLOBs, escaping, índices e estatísticas do MySQL fazem o tamanho do dump textual divergir do tamanho das tabelas.

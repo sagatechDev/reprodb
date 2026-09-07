@@ -173,6 +173,10 @@ impl PullProgressObserver for CliPullProgress {
 }
 
 impl CompressionProgressObserver for CliPullProgress {
+    fn set_estimated_input_bytes(&self, estimated_input_bytes: u64) {
+        self.dump.set_estimated_input_bytes(estimated_input_bytes);
+    }
+
     fn update(&self, progress: CompressionProgress) {
         self.dump.update(progress);
     }

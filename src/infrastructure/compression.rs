@@ -73,6 +73,8 @@ impl CompressionProgress {
 }
 
 pub trait CompressionProgressObserver: Send + Sync {
+    fn set_estimated_input_bytes(&self, _estimated_input_bytes: u64) {}
+
     fn update(&self, progress: CompressionProgress);
 }
 

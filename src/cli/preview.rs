@@ -194,7 +194,7 @@ Target DB  {target_value}
 {cache_message}
 
 {exporting}
-1.84 GiB | 42.1 MiB/s | 00:44
+1.84 GiB | 42.1 MiB/s | 00:44 | ETA ~00:18
 
 {restoring}
   {ok} database recreated with source charset and collation

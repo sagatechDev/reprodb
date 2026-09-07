@@ -20,6 +20,9 @@ const MAX_PREFLIGHT_OUTPUT_BYTES: usize = 16 * 1024;
 const PREFLIGHT_QUERY: &str = "\
 SELECT 'DATABASE', HEX(default_character_set_name), HEX(default_collation_name) \
 FROM information_schema.schemata WHERE BINARY schema_name = BINARY DATABASE();\
+SELECT 'SIZE', COALESCE(SUM(data_length), 0) \
+FROM information_schema.tables \
+WHERE BINARY table_schema = BINARY DATABASE() AND table_type = 'BASE TABLE';\
 SELECT 'ENGINE', HEX(COALESCE(engine, '')), COUNT(*) \
 FROM information_schema.tables \
 WHERE BINARY table_schema = BINARY DATABASE() AND table_type = 'BASE TABLE' \
@@ -134,6 +137,7 @@ fn parse_preflight(output: &[u8]) -> Result<DumpPreflight, DumpPreflightError> {
     }
     let output = std::str::from_utf8(output).map_err(|_| DumpPreflightError::InvalidMetadata)?;
     let mut encoding = None;
+    let mut estimated_data_bytes = None;
     let mut engines = Vec::new();
     let mut objects = None;
     let mut definers = None;
@@ -147,6 +151,9 @@ fn parse_preflight(output: &[u8]) -> Result<DumpPreflight, DumpPreflightError> {
                     decode_hex(charset, 64)?,
                     decode_hex(collation, 64)?,
                 )?);
+            }
+            ["SIZE", bytes] if estimated_data_bytes.is_none() => {
+                estimated_data_bytes = Some(parse_count(bytes)?);
             }
             ["ENGINE", engine, count] => {
                 engines.push(StorageEngineUsage::try_new(
@@ -179,6 +186,7 @@ fn parse_preflight(output: &[u8]) -> Result<DumpPreflight, DumpPreflightError> {
 
     Ok(DumpPreflight {
         encoding: encoding.ok_or(DumpPreflightError::InvalidMetadata)?,
+        estimated_data_bytes: estimated_data_bytes.ok_or(DumpPreflightError::InvalidMetadata)?,
         engines,
         objects: objects.ok_or(DumpPreflightError::InvalidMetadata)?,
         definers: definers.ok_or(DumpPreflightError::InvalidMetadata)?,
@@ -285,6 +293,7 @@ mod tests {
 
     fn valid_output() -> &'static str {
         "DATABASE\t757466386D6234\t757466386D62345F303930305F61695F6369\n\
+         SIZE\t8388608\n\
          ENGINE\t496E6E6F4442\t42\n\
          OBJECTS\t2\t1\t0\t0\n\
          DEFINERS\t2\t1\t0\t0\n\
@@ -302,6 +311,7 @@ mod tests {
 
         assert_eq!(approved.server.version.to_string(), "8.4.4");
         assert_eq!(approved.preflight.encoding.charset(), "utf8mb4");
+        assert_eq!(approved.preflight.estimated_data_bytes, 8 * 1024 * 1024);
         assert_eq!(
             approved.preflight.encoding.collation(),
             "utf8mb4_0900_ai_ci"
@@ -346,6 +356,7 @@ mod tests {
     #[test]
     fn parses_an_empty_database_and_rejects_missing_duplicate_or_untrusted_metadata() {
         let empty = "DATABASE\t757466386D6234\t757466386D62345F62696E\n\
+                     SIZE\t0\n\
                      OBJECTS\t0\t0\t0\t0\n\
                      DEFINERS\t0\t0\t0\t0\n\
                      GTID\tON\n";
@@ -358,9 +369,9 @@ mod tests {
 
         for invalid in [
             "OBJECTS\t0\t0\t0\t0\nDEFINERS\t0\t0\t0\t0\nGTID\tOFF\n",
-            "DATABASE\t757466386D6234\t757466386D62345F62696E\nDATABASE\t757466386D6234\t757466386D62345F62696E\nOBJECTS\t0\t0\t0\t0\nDEFINERS\t0\t0\t0\t0\nGTID\tOFF\n",
-            "DATABASE\t757466386D62343B\t757466386D62345F62696E\nOBJECTS\t0\t0\t0\t0\nDEFINERS\t0\t0\t0\t0\nGTID\tOFF\n",
-            "DATABASE\t757466386D6234\t757466386D62345F62696E\nOBJECTS\t0\t0\t0\t0\nDEFINERS\t0\t0\t0\t0\nGTID\tOFF;unsafe\n",
+            "DATABASE\t757466386D6234\t757466386D62345F62696E\nSIZE\t1\nDATABASE\t757466386D6234\t757466386D62345F62696E\nOBJECTS\t0\t0\t0\t0\nDEFINERS\t0\t0\t0\t0\nGTID\tOFF\n",
+            "DATABASE\t757466386D62343B\t757466386D62345F62696E\nSIZE\t1\nOBJECTS\t0\t0\t0\t0\nDEFINERS\t0\t0\t0\t0\nGTID\tOFF\n",
+            "DATABASE\t757466386D6234\t757466386D62345F62696E\nSIZE\t1\nOBJECTS\t0\t0\t0\t0\nDEFINERS\t0\t0\t0\t0\nGTID\tOFF;unsafe\n",
         ] {
             assert!(parse_preflight(invalid.as_bytes()).is_err(), "{invalid:?}");
         }

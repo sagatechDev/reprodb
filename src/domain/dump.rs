@@ -99,6 +99,7 @@ impl GtidMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DumpPreflight {
     pub encoding: DatabaseEncoding,
+    pub estimated_data_bytes: u64,
     pub engines: Vec<StorageEngineUsage>,
     pub objects: DatabaseObjectCounts,
     pub definers: DefinerObjectCounts,
@@ -271,6 +272,7 @@ mod tests {
                 "utf8mb4_0900_ai_ci".to_owned(),
             )
             .unwrap(),
+            estimated_data_bytes: 8 * 1024 * 1024,
             engines: vec![StorageEngineUsage::try_new("InnoDB".to_owned(), 42).unwrap()],
             objects: DatabaseObjectCounts {
                 views: 2,

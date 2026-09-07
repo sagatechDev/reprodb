@@ -32,7 +32,7 @@ config/profile
     -> publicação atômica no cache
 ```
 
-O comando mostra bytes processados, throughput e duração quando executado em terminal. Não mostra percentual porque o tamanho total do dump não é conhecido previamente.
+O comando mostra bytes processados, throughput e duração quando executado em terminal. Depois de uma amostra mínima, acrescenta `ETA ~mm:ss` calculado a partir de `information_schema.tables.data_length` e da vazão real do stream. O sinal `~` deixa explícito que a previsão é aproximada; não há percentual porque o tamanho do SQL não é conhecido exatamente.
 
 Ao concluir, a saída informa o profile, tenant, database, versões do source e client, tamanhos, duração, ID e caminho do artefato. Esse ID é a entrada do [`reprodb restore`](restore-command.md).
 
@@ -62,7 +62,7 @@ Para MySQL 8, o plano atual inclui as opções conservadoras definidas pela dump
 --set-gtid-purged=OFF
 ```
 
-O preflight valida versão/vendor, charset/collation, engines e objetos relevantes antes de criar o staging. Uma policy incompatível encerra o comando antes do dump.
+O preflight valida versão/vendor, charset/collation, engines e objetos relevantes, além de coletar a estimativa lógica usada no ETA, antes de criar o staging. Uma policy incompatível encerra o comando antes do dump.
 
 ## Falhas e limitações desta etapa
 

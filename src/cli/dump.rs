@@ -2,7 +2,7 @@ use std::{
     io::{self, IsTerminal, Write},
     sync::{
         Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -15,6 +15,7 @@ use crate::{
 };
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
+const ETA_SAMPLE_WINDOW: Duration = Duration::from_secs(2);
 
 pub fn render_start(style: &OutputStyle) -> String {
     format!(
@@ -58,6 +59,7 @@ pub struct CliDumpProgress {
     style: OutputStyle,
     enabled: bool,
     rendered: AtomicBool,
+    estimated_input_bytes: AtomicU64,
     last_rendered: Mutex<Duration>,
 }
 
@@ -67,6 +69,7 @@ impl CliDumpProgress {
             style,
             enabled: io::stderr().is_terminal(),
             rendered: AtomicBool::new(false),
+            estimated_input_bytes: AtomicU64::new(0),
             last_rendered: Mutex::new(Duration::ZERO),
         }
     }
@@ -79,6 +82,11 @@ impl CliDumpProgress {
 }
 
 impl CompressionProgressObserver for CliDumpProgress {
+    fn set_estimated_input_bytes(&self, estimated_input_bytes: u64) {
+        self.estimated_input_bytes
+            .store(estimated_input_bytes, Ordering::Relaxed);
+    }
+
     fn update(&self, progress: CompressionProgress) {
         if !self.enabled {
             return;
@@ -93,15 +101,36 @@ impl CompressionProgressObserver for CliDumpProgress {
         }
         *last_rendered = progress.elapsed;
         self.rendered.store(true, Ordering::Relaxed);
+        let eta = estimated_remaining(progress, self.estimated_input_bytes.load(Ordering::Relaxed))
+            .map(|duration| format!(" | ETA ~{}", format_duration(duration)))
+            .unwrap_or_default();
         eprint!(
-            "\r{} Exporting: {} | {}/s | {}",
+            "\r{} Exporting: {} | {}/s | {}{}",
             self.style.attention("◌"),
             format_bytes(progress.input_bytes),
             format_bytes(progress.input_bytes_per_second() as u64),
             format_duration(progress.elapsed),
+            eta,
         );
         let _ = io::stderr().flush();
     }
+}
+
+fn estimated_remaining(progress: CompressionProgress, estimated_total: u64) -> Option<Duration> {
+    if progress.elapsed < ETA_SAMPLE_WINDOW
+        || progress.input_bytes == 0
+        || progress.input_bytes >= estimated_total
+    {
+        return None;
+    }
+    let bytes_per_second = progress.input_bytes_per_second();
+    if !bytes_per_second.is_finite() || bytes_per_second <= 0.0 {
+        return None;
+    }
+    let remaining_bytes = estimated_total - progress.input_bytes;
+    Some(Duration::from_secs_f64(
+        remaining_bytes as f64 / bytes_per_second,
+    ))
 }
 
 pub(crate) fn format_bytes(bytes: u64) -> String {
@@ -168,5 +197,39 @@ mod tests {
         assert_eq!(format_bytes(1024), "1.0 KiB");
         assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MiB");
         assert_eq!(format_duration(Duration::from_secs(125)), "02:05");
+    }
+
+    #[test]
+    fn eta_waits_for_a_sample_and_disappears_after_the_estimate_is_reached() {
+        assert_eq!(
+            estimated_remaining(
+                CompressionProgress {
+                    input_bytes: 2_000,
+                    elapsed: Duration::from_secs(2),
+                },
+                10_000,
+            ),
+            Some(Duration::from_secs(8))
+        );
+        assert!(
+            estimated_remaining(
+                CompressionProgress {
+                    input_bytes: 1_000,
+                    elapsed: Duration::from_millis(500),
+                },
+                10_000,
+            )
+            .is_none()
+        );
+        assert!(
+            estimated_remaining(
+                CompressionProgress {
+                    input_bytes: 10_001,
+                    elapsed: Duration::from_secs(3),
+                },
+                10_000,
+            )
+            .is_none()
+        );
     }
 }

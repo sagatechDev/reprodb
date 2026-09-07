@@ -146,6 +146,8 @@ where
         let _lock =
             lock_manager.try_acquire(OperationLockKey::source(profile_name, &resolved.database))?;
         let approved = preflight.assess(&source, &resolved.database).await?;
+        self.progress
+            .set_estimated_input_bytes(approved.preflight.estimated_data_bytes);
 
         let created_at = self.clock.now_unix_seconds()?;
         let store = LocalArtifactStore::new(self.repository.paths().cache_dir());
@@ -278,7 +280,7 @@ mod tests {
     use std::{
         collections::{BTreeMap, VecDeque},
         io::Cursor,
-        sync::Mutex,
+        sync::{Mutex, atomic::AtomicU64},
     };
 
     use secrecy::SecretString;
@@ -380,6 +382,22 @@ mod tests {
         fail: bool,
     }
 
+    #[derive(Default)]
+    struct RecordingEstimate(AtomicU64);
+
+    impl CompressionProgressObserver for RecordingEstimate {
+        fn set_estimated_input_bytes(&self, estimated_input_bytes: u64) {
+            self.0
+                .store(estimated_input_bytes, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        fn update(
+            &self,
+            _progress: crate::infrastructure::compression::CompressionProgress,
+        ) {
+        }
+    }
+
     #[async_trait]
     impl DumpExecutor for FakeExecutor {
         async fn execute(
@@ -415,6 +433,7 @@ mod tests {
                 "utf8mb4_0900_ai_ci".to_owned(),
             )
             .unwrap(),
+            estimated_data_bytes: 1024,
             engines: vec![StorageEngineUsage::try_new("InnoDB".to_owned(), 1).unwrap()],
             objects: DatabaseObjectCounts::default(),
             definers: DefinerObjectCounts::default(),
@@ -480,7 +499,9 @@ mod tests {
             .await
             .unwrap();
         let cache_root = repository.paths().cache_dir().to_owned();
-        let service = DumpService::with_clock(repository, TestClock::new([900, 1_000, 1_001]));
+        let progress = Arc::new(RecordingEstimate::default());
+        let service = DumpService::with_clock(repository, TestClock::new([900, 1_000, 1_001]))
+            .with_progress(progress.clone());
 
         let created = service
             .create(
@@ -496,6 +517,10 @@ mod tests {
         assert_eq!(created.profile.as_str(), "local-source");
         assert_eq!(created.tenant_id.as_str(), "salt_sagatec");
         assert_eq!(created.database.as_str(), "salt_sagatec");
+        assert_eq!(
+            progress.0.load(std::sync::atomic::Ordering::Relaxed),
+            1024
+        );
         assert!(created.artifact_path.is_dir());
         assert!(created.compressed_bytes > 0);
         let artifacts = LocalArtifactStore::new(&cache_root)
