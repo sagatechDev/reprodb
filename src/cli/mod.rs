@@ -1,4 +1,6 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+
+use crate::domain::MysqlTlsMode;
 
 pub mod cache;
 pub mod doctor;
@@ -28,7 +30,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     /// Configure the local Docker target.
-    Setup(PreviewArgs),
+    Setup(SetupArgs),
 
     /// Manage MySQL source profiles.
     Profile(ProfileArgs),
@@ -92,6 +94,41 @@ pub struct PreviewArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct SetupArgs {
+    /// Show the planned interactive experience without making changes.
+    #[arg(long, conflicts_with = "non_interactive")]
+    pub preview: bool,
+
+    /// Configure using flags and a password read from stdin.
+    #[arg(long)]
+    pub non_interactive: bool,
+
+    /// Exact running Docker container name.
+    #[arg(long, value_name = "CONTAINER", requires = "non_interactive")]
+    pub target: Option<String>,
+
+    /// Local MySQL username.
+    #[arg(long, default_value = "root", requires = "non_interactive")]
+    pub username: String,
+
+    /// Database containing the local tenants registry.
+    #[arg(long, default_value = "salt_central", requires = "non_interactive")]
+    pub central_database: String,
+
+    /// Allowed prefix for restored tenant databases.
+    #[arg(long, default_value = "salt_", requires = "non_interactive")]
+    pub tenant_database_prefix: String,
+
+    /// Read exactly one password line from stdin.
+    #[arg(long, requires = "non_interactive")]
+    pub password_stdin: bool,
+
+    /// Replace an existing target configuration without prompting.
+    #[arg(long, requires = "non_interactive")]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct ProfileAddArgs {
     /// Profile name.
     #[arg(value_name = "NAME")]
@@ -100,6 +137,57 @@ pub struct ProfileAddArgs {
     /// Show the planned interactive experience without making changes.
     #[arg(long)]
     pub preview: bool,
+
+    /// Configure using flags and a password read from stdin.
+    #[arg(long, conflicts_with = "preview")]
+    pub non_interactive: bool,
+
+    /// MySQL source host.
+    #[arg(long, default_value = "127.0.0.1", requires = "non_interactive")]
+    pub host: String,
+
+    /// MySQL source port.
+    #[arg(long, default_value_t = 3306, requires = "non_interactive")]
+    pub port: u16,
+
+    /// MySQL source username.
+    #[arg(long, requires = "non_interactive")]
+    pub username: Option<String>,
+
+    /// Required source transport policy.
+    #[arg(
+        long,
+        value_enum,
+        default_value = "required",
+        requires = "non_interactive"
+    )]
+    pub tls: CliTlsMode,
+
+    /// Classify this source as production.
+    #[arg(long, requires = "non_interactive")]
+    pub production: bool,
+
+    /// Read exactly one password line from stdin.
+    #[arg(long, requires = "non_interactive")]
+    pub password_stdin: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum CliTlsMode {
+    Disabled,
+    Preferred,
+    #[default]
+    Required,
+}
+
+impl From<CliTlsMode> for MysqlTlsMode {
+    fn from(value: CliTlsMode) -> Self {
+        match value {
+            CliTlsMode::Disabled => Self::Disabled,
+            CliTlsMode::Preferred => Self::Preferred,
+            CliTlsMode::Required => Self::Required,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -228,6 +316,55 @@ mod tests {
         };
         assert_eq!(arguments.name, "salt-local");
         assert!(arguments.preview);
+        assert!(!arguments.non_interactive);
+    }
+
+    #[test]
+    fn parses_non_interactive_setup_and_profile_without_password_values() {
+        let setup = Cli::try_parse_from([
+            "reprodb",
+            "setup",
+            "--non-interactive",
+            "--target",
+            "mysql-target",
+            "--password-stdin",
+            "--yes",
+        ])
+        .unwrap();
+        let Commands::Setup(setup) = setup.command else {
+            panic!("expected setup command")
+        };
+        assert_eq!(setup.target.as_deref(), Some("mysql-target"));
+        assert_eq!(setup.username, "root");
+        assert!(setup.password_stdin);
+
+        let profile = Cli::try_parse_from([
+            "reprodb",
+            "profile",
+            "add",
+            "ci-source",
+            "--non-interactive",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "3307",
+            "--username",
+            "root",
+            "--tls",
+            "required",
+            "--password-stdin",
+        ])
+        .unwrap();
+        let Commands::Profile(profile) = profile.command else {
+            panic!("expected profile command")
+        };
+        let ProfileCommands::Add(profile) = profile.command else {
+            panic!("expected profile add")
+        };
+        assert!(profile.non_interactive);
+        assert_eq!(profile.port, 3307);
+        assert_eq!(profile.tls, CliTlsMode::Required);
+        assert!(profile.password_stdin);
     }
 
     #[test]

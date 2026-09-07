@@ -73,7 +73,7 @@ pub async fn execute_with_cancellation(
             print!("{}", cli::preview::setup(&style));
             Ok(())
         }
-        Commands::Setup(_) => {
+        Commands::Setup(arguments) => {
             let repository = ConfigRepository::discover()?;
             let service = application::SetupService::new(repository);
             let discovery = infrastructure::docker::DockerTargetDiscovery::new(
@@ -88,9 +88,22 @@ pub async fn execute_with_cancellation(
                 return Err(application::SetupServiceError::NoCandidates.into());
             }
 
-            let selected = cli::prompt::select_local_target(&candidates)?;
+            let selected = if arguments.non_interactive {
+                let target = arguments.target.as_deref().ok_or(
+                    cli::prompt::PromptError::IncompleteNonInteractive("--target is required"),
+                )?;
+                candidates
+                    .iter()
+                    .position(|candidate| candidate.name.as_str() == target)
+                    .ok_or(cli::prompt::PromptError::NonInteractiveTargetNotFound)?
+            } else {
+                cli::prompt::select_local_target(&candidates)?
+            };
             let candidate = &candidates[selected];
             if candidate.state != infrastructure::docker::ContainerState::Running {
+                if arguments.non_interactive {
+                    return Err(cli::prompt::PromptError::NonInteractiveTargetNotRunning.into());
+                }
                 if !cli::prompt::confirm_container_start(candidate)? {
                     print!("{}", cli::setup::render_cancelled(&style));
                     return Ok(());
@@ -100,14 +113,30 @@ pub async fn execute_with_cancellation(
                     .start_container(&docker_context, &candidate.id)
                     .await?;
             }
-            if service.has_target_named(&candidate.name)?
-                && !cli::prompt::confirm_target_replacement(candidate)?
-            {
-                print!("{}", cli::setup::render_cancelled(&style));
-                return Ok(());
+            if service.has_target_named(&candidate.name)? {
+                if arguments.non_interactive && !arguments.yes {
+                    return Err(cli::prompt::PromptError::IncompleteNonInteractive(
+                        "--yes is required to replace an existing target",
+                    )
+                    .into());
+                }
+                if !arguments.non_interactive
+                    && !cli::prompt::confirm_target_replacement(candidate)?
+                {
+                    print!("{}", cli::setup::render_cancelled(&style));
+                    return Ok(());
+                }
             }
 
-            let input = cli::prompt::collect_local_target(docker_context, candidate)?;
+            let input = if arguments.non_interactive {
+                cli::prompt::collect_local_target_non_interactive(
+                    docker_context,
+                    candidate,
+                    &arguments,
+                )?
+            } else {
+                cli::prompt::collect_local_target(docker_context, candidate)?
+            };
             println!("\n{}", cli::setup::render_verifying(&style, candidate));
             let verifier = infrastructure::mysql::DockerLocalTargetVerifier::new(
                 infrastructure::process::TokioProcessRunner,
@@ -129,11 +158,15 @@ pub async fn execute_with_cancellation(
                 Ok(())
             }
             ProfileCommands::Add(arguments) => {
-                let name = ProfileName::try_from(arguments.name)?;
+                let name = ProfileName::try_from(arguments.name.clone())?;
                 let service = application::ProfileService::new(ConfigRepository::discover()?);
                 service.ensure_name_available(&name)?;
                 println!("{}", cli::profile::render_add_intro(&style, &name));
-                let input = cli::prompt::collect_new_profile(name)?;
+                let input = if arguments.non_interactive {
+                    cli::prompt::collect_new_profile_non_interactive(name, &arguments)?
+                } else {
+                    cli::prompt::collect_new_profile(name)?
+                };
                 println!(
                     "\n{}",
                     cli::profile::render_verifying(&style, input.tls_mode)

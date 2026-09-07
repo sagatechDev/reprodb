@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, BufRead};
 
 use dialoguer::{Confirm, Input, Select, theme::SimpleTheme};
 use rpassword::{Config, ConfigBuilder, prompt_password_with_config};
@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     application::{NewLocalTargetInput, NewProfileInput, PullTargetChoice},
-    cli::setup,
+    cli::{ProfileAddArgs, SetupArgs, setup},
     domain::{ContainerName, DatabaseName, MysqlTlsMode, ProfileName},
     infrastructure::docker::DockerContainerCandidate,
 };
@@ -31,6 +31,21 @@ pub enum PromptError {
 
     #[error("the local restore database name is invalid")]
     InvalidRestoreDatabase,
+
+    #[error("non-interactive input is incomplete: {0}")]
+    IncompleteNonInteractive(&'static str),
+
+    #[error("could not read the password from stdin")]
+    PasswordStdinUnavailable,
+
+    #[error("password read from stdin must contain 1-4096 bytes on one line")]
+    InvalidStdinPassword,
+
+    #[error("the exact Docker target requested for non-interactive setup was not found")]
+    NonInteractiveTargetNotFound,
+
+    #[error("the Docker target requested for non-interactive setup is not running")]
+    NonInteractiveTargetNotRunning,
 }
 
 pub fn collect_new_profile(name: ProfileName) -> Result<NewProfileInput, PromptError> {
@@ -113,6 +128,32 @@ pub fn collect_new_profile(name: ProfileName) -> Result<NewProfileInput, PromptE
         password,
         tls_mode,
         production,
+    })
+}
+
+pub fn collect_new_profile_non_interactive(
+    name: ProfileName,
+    arguments: &ProfileAddArgs,
+) -> Result<NewProfileInput, PromptError> {
+    if !arguments.non_interactive || !arguments.password_stdin {
+        return Err(PromptError::IncompleteNonInteractive(
+            "use --non-interactive with --password-stdin",
+        ));
+    }
+    let username = arguments
+        .username
+        .clone()
+        .ok_or(PromptError::IncompleteNonInteractive(
+            "--username is required",
+        ))?;
+    Ok(NewProfileInput {
+        name,
+        host: arguments.host.clone(),
+        port: arguments.port,
+        username,
+        password: read_password_from_stdin()?,
+        tls_mode: arguments.tls.into(),
+        production: arguments.production,
     })
 }
 
@@ -207,6 +248,53 @@ pub fn collect_local_target(
         tenant_database_prefix,
         managed_by_reprodb: candidate.managed_by_reprodb,
     })
+}
+
+pub fn collect_local_target_non_interactive(
+    docker_context: String,
+    candidate: &DockerContainerCandidate,
+    arguments: &SetupArgs,
+) -> Result<NewLocalTargetInput, PromptError> {
+    if !arguments.non_interactive || !arguments.password_stdin {
+        return Err(PromptError::IncompleteNonInteractive(
+            "use --non-interactive with --password-stdin",
+        ));
+    }
+    Ok(NewLocalTargetInput {
+        docker_context,
+        container_name: candidate.name.clone(),
+        container_id: candidate.id.clone(),
+        username: arguments.username.clone(),
+        password: read_password_from_stdin()?,
+        central_database: DatabaseName::try_from(arguments.central_database.as_str())
+            .map_err(|_| PromptError::InvalidCentralDatabase)?,
+        tenant_database_prefix: arguments.tenant_database_prefix.clone(),
+        managed_by_reprodb: candidate.managed_by_reprodb,
+    })
+}
+
+fn read_password_from_stdin() -> Result<SecretString, PromptError> {
+    let stdin = io::stdin();
+    password_from_reader(&mut stdin.lock())
+}
+
+fn password_from_reader(reader: &mut impl BufRead) -> Result<SecretString, PromptError> {
+    let mut password = Vec::new();
+    std::io::Read::take(&mut *reader, 4098)
+        .read_until(b'\n', &mut password)
+        .map_err(|_| PromptError::PasswordStdinUnavailable)?;
+    if password.last() == Some(&b'\n') {
+        password.pop();
+        if password.last() == Some(&b'\r') {
+            password.pop();
+        }
+    }
+    if password.is_empty() || password.len() > 4096 {
+        return Err(PromptError::InvalidStdinPassword);
+    }
+    String::from_utf8(password)
+        .map(SecretString::from)
+        .map_err(|_| PromptError::InvalidStdinPassword)
 }
 
 pub fn confirm_target_replacement(
@@ -319,5 +407,18 @@ mod tests {
             error.to_string(),
             "could not read the password from the terminal"
         );
+    }
+
+    #[test]
+    fn stdin_password_is_limited_trimmed_and_never_part_of_errors() {
+        use secrecy::ExposeSecret as _;
+
+        let password = password_from_reader(&mut io::Cursor::new(b"pasted secret\r\n")).unwrap();
+        assert_eq!(password.expose_secret(), "pasted secret");
+
+        for input in [Vec::new(), vec![b'x'; 4097], vec![0xff, b'\n']] {
+            let error = password_from_reader(&mut io::Cursor::new(input)).unwrap_err();
+            assert!(!error.to_string().contains("pasted secret"));
+        }
     }
 }
