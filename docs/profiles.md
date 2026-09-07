@@ -10,10 +10,11 @@ O ciclo de vida completo do profile é funcional:
 reprodb profile add salt-source
 reprodb profile list
 reprodb profile use NAME
+reprodb profile edit NAME --central-database DATABASE
 reprodb profile remove NAME
 ```
 
-`profile add` pergunta host, porta, usuário e senha. Durante a senha, a CLI mostra um `*` por caractere para deixar a digitação visível sem revelar seu conteúdo. Texto colado também é aceito; use o atalho do seu terminal (`Cmd+V` normalmente no macOS e `Ctrl+Shift+V` normalmente no Linux). Em seguida a CLI pergunta se o source é produção e define a política TLS — `REQUIRED` é o default local. Produção seleciona obrigatoriamente `VERIFY_IDENTITY` e pede o path absoluto da CA. Certificado e chave de cliente também podem ser informados quando o servidor exigir mTLS.
+`profile add` pergunta host, porta, usuário, senha e o database central que contém `tenants` e `domains` (default `salt_central`). Durante a senha, a CLI mostra um `*` por caractere para deixar a digitação visível sem revelar seu conteúdo. Texto colado também é aceito; use o atalho do seu terminal (`Cmd+V` normalmente no macOS e `Ctrl+Shift+V` normalmente no Linux). Em seguida a CLI pergunta se o source é produção e define a política TLS — `REQUIRED` é o default local. Produção seleciona obrigatoriamente `VERIFY_IDENTITY` e pede o path absoluto da CA. Certificado e chave de cliente também podem ser informados quando o servidor exigir mTLS.
 
 Antes de salvar, o comando:
 
@@ -33,6 +34,8 @@ O modo não interativo equivalente aceita `--tls verify-identity --tls-ca /path/
 `profile list` é somente leitura e mostra apenas nome, endpoint, série MySQL, política e indicação do profile ativo. Ele não consulta nem revela credenciais.
 
 `profile use` valida que o nome existe antes de trocar o profile ativo e persiste o TOML por escrita transacional.
+
+`profile edit NAME --central-database DATABASE` altera somente o resolver do profile no arquivo de configuração. Não solicita nem substitui a senha, não testa a conexão e não executa SQL. Isso permite corrigir o catálogo central sem remover e cadastrar novamente o profile.
 
 `profile remove` pede confirmação, exceto com `--yes`. A configuração deixa de referenciar a credencial antes de o credential store ser alterado. Remover o profile ativo deixa o projeto sem profile selecionado e a saída explica como escolher o próximo.
 

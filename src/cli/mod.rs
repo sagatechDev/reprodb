@@ -12,6 +12,7 @@ pub mod prompt;
 pub mod pull;
 pub mod restore;
 pub mod setup;
+pub mod tenant;
 
 pub use output::ColorChoice;
 
@@ -49,6 +50,9 @@ pub enum Commands {
 
     /// Inspect and clean the local dump cache.
     Cache(CacheArgs),
+
+    /// Inspect tenants available in the active source profile.
+    Tenant(TenantCommandArgs),
 }
 
 impl Commands {
@@ -61,6 +65,7 @@ impl Commands {
             Self::Restore(_) => "restore",
             Self::Pull(_) => "pull",
             Self::Cache(_) => "cache",
+            Self::Tenant(_) => "tenant",
         }
     }
 }
@@ -81,6 +86,9 @@ pub enum ProfileCommands {
 
     /// Select the active source profile.
     Use(ProfileNameArgs),
+
+    /// Edit safe source profile settings without replacing its credential.
+    Edit(ProfileEditArgs),
 
     /// Remove a source profile and its credential.
     Remove(ProfileRemoveArgs),
@@ -154,6 +162,10 @@ pub struct ProfileAddArgs {
     #[arg(long, requires = "non_interactive")]
     pub username: Option<String>,
 
+    /// Database containing the source tenant registry.
+    #[arg(long, default_value = "salt_central", requires = "non_interactive")]
+    pub central_database: String,
+
     /// Required source transport policy.
     #[arg(
         long,
@@ -211,6 +223,17 @@ pub struct ProfileNameArgs {
     /// Profile name.
     #[arg(value_name = "NAME")]
     pub name: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ProfileEditArgs {
+    /// Profile name.
+    #[arg(value_name = "NAME")]
+    pub name: String,
+
+    /// Database containing the source tenant registry.
+    #[arg(long, value_name = "DATABASE")]
+    pub central_database: String,
 }
 
 #[derive(Debug, Args)]
@@ -277,6 +300,25 @@ pub struct PullArgs {
 pub struct CacheArgs {
     #[command(subcommand)]
     pub command: CacheCommands,
+}
+
+#[derive(Debug, Args)]
+pub struct TenantCommandArgs {
+    #[command(subcommand)]
+    pub command: TenantCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TenantCommands {
+    /// List tenants from the configured central database without changing the source.
+    List(TenantListArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TenantListArgs {
+    /// Maximum number of tenants to return.
+    #[arg(long, default_value_t = crate::application::DEFAULT_TENANT_LIST_LIMIT)]
+    pub limit: u16,
 }
 
 #[derive(Debug, Subcommand)]
@@ -396,6 +438,38 @@ mod tests {
         };
         assert_eq!(arguments.name, "salt-source");
         assert!(arguments.yes);
+    }
+
+    #[test]
+    fn parses_a_central_database_profile_edit() {
+        let cli = Cli::try_parse_from([
+            "reprodb",
+            "profile",
+            "edit",
+            "sandbox",
+            "--central-database",
+            "demo_central",
+        ])
+        .unwrap();
+
+        let Commands::Profile(arguments) = cli.command else {
+            panic!("expected profile command");
+        };
+        let ProfileCommands::Edit(arguments) = arguments.command else {
+            panic!("expected profile edit command");
+        };
+        assert_eq!(arguments.name, "sandbox");
+        assert_eq!(arguments.central_database, "demo_central");
+    }
+
+    #[test]
+    fn parses_tenant_list_with_a_bounded_limit() {
+        let cli = Cli::try_parse_from(["reprodb", "tenant", "list", "--limit", "25"]).unwrap();
+        let Commands::Tenant(arguments) = cli.command else {
+            panic!("expected tenant command");
+        };
+        let TenantCommands::List(arguments) = arguments.command;
+        assert_eq!(arguments.limit, 25);
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 
 use reprodb::{
     application::{NewProfileInput, ProfileService},
-    domain::{MysqlTlsMode, ProfileName},
+    domain::{DatabaseName, MysqlTlsMode, ProfileName},
     infrastructure::{
         config::{AppPaths, ConfigRepository},
         credentials::{CredentialStore, MemoryCredentialStore},
@@ -35,6 +35,7 @@ async fn adds_a_profile_after_verifying_the_real_local_mysql_source() {
         port: 3306,
         username: "root".to_owned(),
         password,
+        central_database: DatabaseName::try_from("salt_central").unwrap(),
         tls_mode: MysqlTlsMode::Required,
         tls_material: Default::default(),
         production: false,

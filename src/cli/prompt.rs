@@ -93,6 +93,16 @@ pub fn collect_new_profile(name: ProfileName) -> Result<NewProfileInput, PromptE
         .interact_text()
         .map_err(unavailable)?;
     let password = collect_password("MySQL password: ")?;
+    let central_database = Input::<String>::with_theme(&theme)
+        .with_prompt("Central database")
+        .default("salt_central".to_owned())
+        .validate_with(|value: &String| -> Result<(), &str> {
+            DatabaseName::try_from(value.as_str())
+                .map(|_| ())
+                .map_err(|_| "enter a valid non-administrative database name")
+        })
+        .interact_text()
+        .map_err(unavailable)?;
     let production = Confirm::with_theme(&theme)
         .with_prompt("Is this a production source?")
         .default(false)
@@ -130,6 +140,8 @@ pub fn collect_new_profile(name: ProfileName) -> Result<NewProfileInput, PromptE
         port,
         username,
         password,
+        central_database: DatabaseName::try_from(central_database)
+            .map_err(|_| PromptError::InvalidCentralDatabase)?,
         tls_mode,
         tls_material: collect_tls_material(tls_mode)?,
         production,
@@ -222,6 +234,8 @@ pub fn collect_new_profile_non_interactive(
         port: arguments.port,
         username,
         password: read_password_from_stdin()?,
+        central_database: DatabaseName::try_from(arguments.central_database.as_str())
+            .map_err(|_| PromptError::InvalidCentralDatabase)?,
         tls_mode: arguments.tls.into(),
         tls_material: MysqlTlsMaterialPaths {
             ca: arguments.tls_ca.clone(),

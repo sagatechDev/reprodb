@@ -48,6 +48,7 @@ async fn doctor_validates_the_real_environment_without_changing_configuration() 
                 port: 3306,
                 username: "root".to_owned(),
                 password: local_container_root_password(&context, &expected),
+                central_database: DatabaseName::try_from("salt_central").unwrap(),
                 tls_mode: MysqlTlsMode::Required,
                 tls_material: Default::default(),
                 production: false,

@@ -285,7 +285,10 @@ reprodb setup
 reprodb profile add NAME
 reprodb profile list
 reprodb profile use NAME
+reprodb profile edit NAME --central-database DATABASE
 reprodb profile remove NAME
+
+reprodb tenant list
 
 reprodb doctor
 
@@ -335,7 +338,7 @@ Os IDs `RDB-NNN` abaixo são estáveis dentro deste documento e podem ser usados
 | 0 — Riscos técnicos | RDB-001 a RDB-005 | Pipeline e decisões críticas provados sem produção |
 | 1 — Bootstrap | RDB-010 a RDB-013 | Projeto Rust, CLI base, erros e infraestrutura de testes |
 | 2 — Configuração/setup | RDB-020 a RDB-026 | Source profiles e target Docker configuráveis com credenciais seguras |
-| 3 — Tenant Salt | RDB-030 a RDB-033 | Alias/ID resolvido pelo `salt_central` |
+| 3 — Tenant Salt | RDB-030 a RDB-034 | Alias/ID resolvido pelo catálogo central configurável |
 | 4 — Dump/cache | RDB-041 a RDB-046 | Artefato Zstd atômico, íntegro e reutilizável |
 | 5 — Restore/pull | RDB-050 a RDB-057 | Tenant restaurado e inicializável pelo Salt com target explícito, cache e ETA |
 | 6 — Resiliência | RDB-060 a RDB-064 | Falhas, cancelamento, performance e macOS/Linux cobertos |
@@ -627,6 +630,18 @@ Critério da milestone: um alias como `sagatec` resolve de modo seguro para tena
 **Escopo:** tenants por ID, domains, override de database, tenant links e JSON contendo chaves sensíveis fictícias.
 
 **Aceite:** testes provam resolução e ausência de secrets em snapshot/output.
+
+#### RDB-034 — Listar tenants e editar o database central do profile
+
+**Labels:** `priority:p0`, `type:feature`, `area:tenant`, `area:mysql`, `area:security`
+
+**Status:** implementada — `profile add` coleta o database central; `profile edit NAME --central-database DATABASE` permite corrigi-lo sem recadastrar conexão ou credencial; `tenant list` retorna somente ID, database efetivo e um domínio, com limite rígido e sem transportar o JSON completo.
+
+**Escopo:** configuração explícita por source profile, edição local e listagem remota estritamente somente leitura.
+
+**Aceite:** edição preserva profile/credencial; listagem usa o database configurado, executa somente `SELECT`, valida toda metadata, limita output e não retorna secrets ou overrides de conexão.
+
+**Depende de:** RDB-021, RDB-023 e RDB-031.
 
 ### Milestone 4 — Dump, compressão e cache
 

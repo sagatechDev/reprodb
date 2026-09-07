@@ -27,6 +27,8 @@ Comece como alguém que ainda não conhece a ferramenta:
 $REPRODB --help
 $REPRODB profile --help
 $REPRODB profile add --help
+$REPRODB profile edit --help
+$REPRODB tenant list --help
 $REPRODB pull --help
 ```
 
@@ -86,6 +88,18 @@ echo $?
 ```
 
 O resultado esperado é erro de uso com exit code `2`, sem imprimir o valor recebido.
+
+Num profile já configurado, o database central pode ser corrigido sem solicitar senha ou conectar ao MySQL:
+
+```bash
+$REPRODB profile edit sandbox --central-database outro_central
+```
+
+`tenant list` não possui preview porque seu resultado depende do source real. Ele é somente leitura, mas abre uma conexão e executa um `SELECT`; use-o apenas quando quiser consultar conscientemente o ambiente configurado:
+
+```bash
+$REPRODB tenant list
+```
 
 ### 3.3 Diagnosticar o ambiente
 

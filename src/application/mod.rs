@@ -9,6 +9,7 @@ mod pull_service;
 mod restore_engine;
 mod restore_service;
 mod setup_service;
+mod tenant_catalog_service;
 
 pub use cache_service::{
     CacheListEntry, CacheListReport, CacheListStatus, CachePurgeReady, CacheService,
@@ -33,8 +34,9 @@ pub use local_tenant_registration_service::{
     LocalTenantWriteError, LocalTenantWriter,
 };
 pub use profile_service::{
-    NewProfileInput, ProfileCreated, ProfileRemoval, ProfileService, ProfileServiceError,
-    ProfileSummary, SourceProfileVerifier, SourceVerificationError, VerifiedSource,
+    NewProfileInput, ProfileCentralDatabaseUpdated, ProfileCreated, ProfileRemoval, ProfileService,
+    ProfileServiceError, ProfileSummary, SourceProfileVerifier, SourceVerificationError,
+    VerifiedSource,
 };
 pub use pull_service::{
     NoPullProgress, PullCacheUse, PullDatabaseSelectionError, PullDatabaseSelector,
@@ -50,4 +52,9 @@ pub use restore_service::{
 pub use setup_service::{
     LocalTargetConfigured, LocalTargetVerifier, NewLocalTargetInput, SetupService,
     SetupServiceError, TargetVerificationError, VerifiedLocalTarget,
+};
+pub use tenant_catalog_service::{
+    DEFAULT_TENANT_LIST_LIMIT, MAX_TENANT_LIST_LIMIT, TenantCatalogEntry, TenantCatalogPage,
+    TenantCatalogReadError, TenantCatalogReader, TenantCatalogService, TenantCatalogServiceError,
+    TenantCatalogSource,
 };

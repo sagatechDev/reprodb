@@ -456,12 +456,23 @@ impl DoctorService {
         let configured_series = profile.mysql_series.clone();
         let tls_mode = profile.tls_mode;
         let production = profile.production;
+        let central_database = match profile.tenant_resolver {
+            crate::infrastructure::config::TenantResolverConfig::SaltCentral {
+                central_database,
+                ..
+            } => central_database,
+            crate::infrastructure::config::TenantResolverConfig::Pattern { .. } => {
+                crate::domain::DatabaseName::try_from("salt_central")
+                    .expect("the fallback central database name is valid")
+            }
+        };
         let input = NewProfileInput {
             name,
             host: profile.host,
             port: profile.port,
             username: profile.username,
             password,
+            central_database,
             tls_mode: profile.tls_mode,
             tls_material: profile.tls_material,
             production: profile.production,

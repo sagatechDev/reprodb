@@ -6,6 +6,7 @@ use crate::{
         LocalTargetAttestationError, LocalTargetGateError, LocalTenantRegistrationServiceError,
         LocalTenantWriteError, ProfileServiceError, PullServiceError, RestoreEngineError,
         RestoreServiceError, SetupServiceError, SourceVerificationError, TargetVerificationError,
+        TenantCatalogReadError, TenantCatalogServiceError,
     },
     cli::prompt::PromptError,
     domain::{DumpMetadataError, TenantResolutionError, ValueObjectError},
@@ -89,6 +90,9 @@ pub enum AppError {
 
     #[error(transparent)]
     Cache(#[from] CacheServiceError),
+
+    #[error(transparent)]
+    TenantCatalog(#[from] TenantCatalogServiceError),
 
     #[error("doctor found required problems; review the failed checks above")]
     DoctorChecksFailed { kind: DoctorFailureKind },
@@ -184,6 +188,25 @@ impl AppError {
             Self::Restore(error) => restore_error_category(error),
             Self::Pull(error) => pull_error_category(error),
             Self::Cache(error) => cache_error_category(error),
+            Self::TenantCatalog(error) => match error {
+                TenantCatalogServiceError::Config(_)
+                | TenantCatalogServiceError::NoActiveProfile
+                | TenantCatalogServiceError::UnsupportedResolver => ErrorCategory::Configuration,
+                TenantCatalogServiceError::InvalidLimit => ErrorCategory::Usage,
+                TenantCatalogServiceError::Credential(_)
+                | TenantCatalogServiceError::Read(TenantCatalogReadError::AuthenticationFailed) => {
+                    ErrorCategory::Credential
+                }
+                TenantCatalogServiceError::Client(_)
+                | TenantCatalogServiceError::Read(TenantCatalogReadError::ClientUnavailable) => {
+                    ErrorCategory::Dependency
+                }
+                TenantCatalogServiceError::Read(
+                    TenantCatalogReadError::SourceUnavailable
+                    | TenantCatalogReadError::SchemaUnavailable
+                    | TenantCatalogReadError::InvalidMetadata,
+                ) => ErrorCategory::SourceConnection,
+            },
             Self::DoctorChecksFailed { kind } => match kind {
                 DoctorFailureKind::Configuration => ErrorCategory::Configuration,
                 DoctorFailureKind::Credential => ErrorCategory::Credential,

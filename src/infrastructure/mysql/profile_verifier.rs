@@ -223,6 +223,7 @@ mod tests {
             port: 3306,
             username: "reader".to_owned(),
             password: SecretString::from("secret"),
+            central_database: crate::domain::DatabaseName::try_from("salt_central").unwrap(),
             tls_mode: MysqlTlsMode::Preferred,
             tls_material: MysqlTlsMaterialPaths::default(),
             production: false,

@@ -9,6 +9,7 @@ mod profile_verifier;
 mod restore_executor;
 mod salt_central_resolver;
 mod target_verifier;
+mod tenant_catalog_reader;
 
 pub use client_catalog::{
     ApprovedMysqlClient, ClientCatalog, ClientCatalogError, MYSQL_CLIENT_CATALOG_VERSION,
@@ -32,3 +33,4 @@ pub use restore_executor::{
 };
 pub use salt_central_resolver::{DockerSaltCentralTenantResolver, SaltCentralSource};
 pub use target_verifier::DockerLocalTargetVerifier;
+pub use tenant_catalog_reader::DockerTenantCatalogReader;

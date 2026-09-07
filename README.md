@@ -12,6 +12,7 @@ O fluxo local está funcionalmente implementado e validado no macOS; o MVP ainda
 - [`docs/setup.md`](docs/setup.md), para configurar o target Docker local;
 - [`docs/doctor.md`](docs/doctor.md), para diagnosticar o ambiente sem alterá-lo;
 - [`docs/tenant-resolution.md`](docs/tenant-resolution.md), para lookup seguro de tenant/database;
+- [`docs/tenant-list.md`](docs/tenant-list.md), para listar o catálogo remoto em modo somente leitura;
 - [`docs/restore-engine.md`](docs/restore-engine.md), para as barreiras e o pipeline streaming de restore;
 - [`docs/restore-command.md`](docs/restore-command.md), para executar um restore gerenciado por dump ID;
 - [`docs/pull-command.md`](docs/pull-command.md), para o fluxo completo de cache, dump e restore;

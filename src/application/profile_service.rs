@@ -25,6 +25,7 @@ pub struct NewProfileInput {
     pub port: u16,
     pub username: String,
     pub password: SecretString,
+    pub central_database: DatabaseName,
     pub tls_mode: MysqlTlsMode,
     pub tls_material: MysqlTlsMaterialPaths,
     pub production: bool,
@@ -97,6 +98,14 @@ pub struct ProfileSummary {
     pub mysql_series: String,
     pub tls_mode: MysqlTlsMode,
     pub production: bool,
+    pub central_database: Option<DatabaseName>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileCentralDatabaseUpdated {
+    pub name: ProfileName,
+    pub previous: DatabaseName,
+    pub current: DatabaseName,
 }
 
 #[derive(Debug, Error)]
@@ -152,14 +161,23 @@ impl ProfileService {
         Ok(config
             .profiles
             .into_iter()
-            .map(|(name, profile)| ProfileSummary {
-                active: config.active_profile.as_ref() == Some(&name),
-                name,
-                host: profile.host,
-                port: profile.port,
-                mysql_series: profile.mysql_series,
-                tls_mode: profile.tls_mode,
-                production: profile.production,
+            .map(|(name, profile)| {
+                let central_database = match &profile.tenant_resolver {
+                    TenantResolverConfig::SaltCentral {
+                        central_database, ..
+                    } => Some(central_database.clone()),
+                    TenantResolverConfig::Pattern { .. } => None,
+                };
+                ProfileSummary {
+                    active: config.active_profile.as_ref() == Some(&name),
+                    name,
+                    host: profile.host,
+                    port: profile.port,
+                    mysql_series: profile.mysql_series,
+                    tls_mode: profile.tls_mode,
+                    production: profile.production,
+                    central_database,
+                }
             })
             .collect())
     }
@@ -222,8 +240,7 @@ impl ProfileService {
                     image: verified.client.image().to_owned(),
                 },
                 tenant_resolver: TenantResolverConfig::SaltCentral {
-                    central_database: DatabaseName::try_from("salt_central")
-                        .expect("the fixed central database is valid"),
+                    central_database: input.central_database,
                     allow_domain_lookup: true,
                 },
             },
@@ -258,6 +275,36 @@ impl ProfileService {
         config.active_profile = Some(name.clone());
         self.repository.save(&config)?;
         Ok(())
+    }
+
+    pub fn update_central_database(
+        &self,
+        name: &ProfileName,
+        central_database: DatabaseName,
+    ) -> Result<ProfileCentralDatabaseUpdated, ProfileServiceError> {
+        let mut config = self.repository.load()?;
+        let profile = config
+            .profiles
+            .get_mut(name)
+            .ok_or(ProfileServiceError::NotFound)?;
+        let TenantResolverConfig::SaltCentral {
+            central_database: configured,
+            ..
+        } = &mut profile.tenant_resolver
+        else {
+            return Err(ProfileServiceError::InvalidField {
+                field: "tenant_resolver",
+                reason: "is not a Salt Central resolver",
+            });
+        };
+        let previous = std::mem::replace(configured, central_database.clone());
+        self.repository.save(&config)?;
+
+        Ok(ProfileCentralDatabaseUpdated {
+            name: name.clone(),
+            previous,
+            current: central_database,
+        })
     }
 
     pub async fn remove(
@@ -461,6 +508,7 @@ mod tests {
             port: 3306,
             username: "root".to_owned(),
             password: SecretString::from("password-that-must-not-leak"),
+            central_database: DatabaseName::try_from("salt_central").unwrap(),
             tls_mode: MysqlTlsMode::Preferred,
             tls_material: Default::default(),
             production: false,
@@ -533,6 +581,32 @@ mod tests {
                 .expose_secret(),
             "password-that-must-not-leak"
         );
+    }
+
+    #[test]
+    fn updates_only_the_selected_profiles_central_database() {
+        let temp = TempDir::new().unwrap();
+        let repository = repository(&temp);
+        save_profiles(&repository);
+        let sandbox = ProfileName::try_from("local").unwrap();
+
+        let updated = ProfileService::new(repository.clone())
+            .update_central_database(&sandbox, DatabaseName::try_from("demo_central").unwrap())
+            .unwrap();
+
+        assert_eq!(updated.previous.as_str(), "salt_central");
+        assert_eq!(updated.current.as_str(), "demo_central");
+        let config = repository.load().unwrap();
+        let profile = config.profiles.get(&sandbox).unwrap();
+        assert!(matches!(
+            &profile.tenant_resolver,
+            TenantResolverConfig::SaltCentral {
+                central_database,
+                allow_domain_lookup: true,
+            } if central_database.as_str() == "demo_central"
+        ));
+        assert_eq!(profile.host, "127.0.0.1");
+        assert_eq!(config.active_profile.as_ref(), Some(&sandbox));
     }
 
     #[tokio::test]

@@ -1,8 +1,21 @@
 use crate::{
-    application::{ProfileCreated, ProfileRemoval, ProfileSummary},
+    application::{ProfileCentralDatabaseUpdated, ProfileCreated, ProfileRemoval, ProfileSummary},
     cli::output::OutputStyle,
     domain::ProfileName,
 };
+
+pub fn render_central_database_updated(
+    style: &OutputStyle,
+    update: &ProfileCentralDatabaseUpdated,
+) -> String {
+    format!(
+        "{} Profile {} updated\n    Central database  {} → {}\n    Source credential and connection were not changed.\n",
+        style.success("✓"),
+        update.name,
+        update.previous,
+        update.current
+    )
+}
 
 pub fn render_add_intro(style: &OutputStyle, name: &ProfileName) -> String {
     format!(
@@ -71,8 +84,13 @@ pub fn render_list(style: &OutputStyle, profiles: &[ProfileSummary]) -> String {
             style.muted("development")
         };
         output.push_str(&format!(
-            "{marker} {}{active}\n    {}:{} · MySQL {} · TLS {} · {policy}\n",
-            profile.name, profile.host, profile.port, profile.mysql_series, profile.tls_mode,
+            "{marker} {}{active}\n    {}:{} · MySQL {} · TLS {} · {policy}\n    Central database: {}\n",
+            profile.name,
+            profile.host,
+            profile.port,
+            profile.mysql_series,
+            profile.tls_mode,
+            profile.central_database.as_ref().map_or("—", |value| value.as_str()),
         ));
     }
     output
@@ -124,6 +142,7 @@ mod tests {
             mysql_series: "8.4".to_owned(),
             tls_mode: crate::domain::MysqlTlsMode::Required,
             production,
+            central_database: Some(crate::domain::DatabaseName::try_from("salt_central").unwrap()),
         }
     }
 
@@ -201,6 +220,7 @@ mod tests {
         assert!(output.contains("active"));
         assert!(output.contains("production"));
         assert!(output.contains("development"));
+        assert!(output.contains("Central database: salt_central"));
 
         let colored = render_list(
             &OutputStyle::colored(),
