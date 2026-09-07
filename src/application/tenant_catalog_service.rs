@@ -3,7 +3,7 @@ use secrecy::SecretString;
 use thiserror::Error;
 
 use crate::{
-    domain::{DatabaseName, MysqlTlsMaterialPaths, MysqlTlsMode},
+    domain::{MysqlTlsMaterialPaths, MysqlTlsMode},
     infrastructure::{
         config::{ConfigError, ConfigRepository},
         credentials::{CredentialError, CredentialStore},
@@ -28,7 +28,7 @@ pub struct TenantCatalogSource {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TenantCatalogEntry {
-    pub database: DatabaseName,
+    pub database: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -144,7 +144,7 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::{
-        domain::{CredentialKey, CredentialScope, MysqlTlsMode, ProfileName},
+        domain::{CredentialKey, CredentialScope, DatabaseName, MysqlTlsMode, ProfileName},
         infrastructure::{
             config::{
                 AppConfig, AppPaths, ClientRuntimeConfig, MysqlClientConfig, MysqlFamily,

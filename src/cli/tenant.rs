@@ -33,7 +33,6 @@ mod tests {
     use crate::{
         application::{TenantCatalogEntry, TenantCatalogPage},
         cli::output::OutputStyle,
-        domain::DatabaseName,
     };
 
     use super::*;
@@ -43,7 +42,7 @@ mod tests {
         let page = TenantCatalogPage {
             profile_name: "sandbox".to_owned(),
             entries: vec![TenantCatalogEntry {
-                database: DatabaseName::try_from("demo_sagatec").unwrap(),
+                database: "demo_sagatec".to_owned(),
             }],
             truncated: true,
         };

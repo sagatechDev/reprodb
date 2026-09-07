@@ -5,7 +5,6 @@ use crate::{
         TenantCatalogEntry, TenantCatalogPage, TenantCatalogReadError, TenantCatalogReader,
         TenantCatalogSource,
     },
-    domain::DatabaseName,
     infrastructure::{mysql::DockerClientError, process::ProcessRunner},
 };
 
@@ -98,7 +97,7 @@ fn parse_catalog(
             return Err(TenantCatalogReadError::InvalidMetadata);
         }
         let database = decode_hex(row, 64)
-            .and_then(|value| DatabaseName::try_from(value).ok())
+            .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
             .ok_or(TenantCatalogReadError::InvalidMetadata)?;
         entries.push(TenantCatalogEntry { database });
     }
@@ -177,6 +176,16 @@ mod tests {
             assert!(!query.contains(mutation));
         }
         assert!(query.ends_with("LIMIT 101"));
+    }
+
+    #[test]
+    fn preserves_database_names_returned_by_mysql_without_applying_cli_identifier_rules() {
+        let output = "64656D6F2D6C6567616379\n";
+
+        let (entries, truncated) = parse_catalog(output.as_bytes(), 100).unwrap();
+
+        assert!(!truncated);
+        assert_eq!(entries[0].database, "demo-legacy");
     }
 
     #[test]
