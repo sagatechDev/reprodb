@@ -143,7 +143,7 @@ impl Mysql8DumpPolicy {
         database: &DatabaseName,
         preflight: &DumpPreflight,
     ) -> Result<ApprovedDumpPlan, DumpPolicyError> {
-        if !server_vendor.to_ascii_lowercase().contains("mysql") {
+        if server_vendor.to_ascii_lowercase().contains("mariadb") {
             return Err(DumpPolicyError::UnsupportedVendor);
         }
         if !matches!(
@@ -488,6 +488,17 @@ mod tests {
             )
             .unwrap_err(),
             DumpPolicyError::UnsupportedVendor
+        );
+
+        assert!(
+            Mysql8DumpPolicy::evaluate(
+                version("8.0.40"),
+                "Source distribution",
+                version("8.0.40"),
+                &database,
+                &preflight,
+            )
+            .is_ok()
         );
         assert_eq!(
             Mysql8DumpPolicy::evaluate(
