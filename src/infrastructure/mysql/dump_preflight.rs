@@ -260,7 +260,7 @@ mod tests {
                 ),
                 ProcessOutput::success("mysql  Ver 8.4.4 for Linux on aarch64\n"),
                 ProcessOutput::success(
-                    "8.4.4\tMySQL Community Server - GPL\nSsl_cipher\tTLS_AES_256_GCM_SHA384\n",
+                    "8.4.4\tMySQL Community Server - GPL\t11111111-1111-4111-8111-111111111111\nSsl_cipher\tTLS_AES_256_GCM_SHA384\n",
                 ),
                 ProcessOutput::success(query_output),
             ])),

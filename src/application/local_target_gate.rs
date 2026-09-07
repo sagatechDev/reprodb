@@ -3,7 +3,7 @@ use secrecy::SecretString;
 use thiserror::Error;
 
 use crate::{
-    domain::{ContainerId, ContainerName, DatabaseName, MysqlVersion},
+    domain::{ContainerId, ContainerName, DatabaseName, MysqlServerUuid, MysqlVersion},
     infrastructure::{
         config::{ConfigError, ConfigRepository, LocalTargetConfig, LocalTargetTrust},
         credentials::{CredentialError, CredentialStore},
@@ -23,6 +23,7 @@ pub struct LocalTargetAttestation {
     pub container_id: ContainerId,
     pub managed_by_reprodb: bool,
     pub server_version: MysqlVersion,
+    pub server_uuid: MysqlServerUuid,
     pub vendor: String,
     pub client: ApprovedMysqlClient,
 }
@@ -146,6 +147,7 @@ impl LocalTargetGate {
             central_database: configured.central_database.clone(),
             tenant_database_prefix: configured.tenant_database_prefix.clone(),
             server_version: attested.server_version,
+            server_uuid: attested.server_uuid,
             vendor: attested.vendor,
             client: attested.client,
         })
@@ -161,6 +163,7 @@ pub struct GuardedLocalTarget {
     central_database: DatabaseName,
     tenant_database_prefix: String,
     server_version: MysqlVersion,
+    server_uuid: MysqlServerUuid,
     vendor: String,
     client: ApprovedMysqlClient,
 }
@@ -176,6 +179,7 @@ impl std::fmt::Debug for GuardedLocalTarget {
             .field("central_database", &self.central_database)
             .field("tenant_database_prefix", &self.tenant_database_prefix)
             .field("server_version", &self.server_version)
+            .field("server_uuid", &self.server_uuid)
             .field("vendor", &self.vendor)
             .field("client", &self.client)
             .finish_non_exhaustive()
@@ -189,6 +193,10 @@ impl GuardedLocalTarget {
 
     pub const fn server_version(&self) -> MysqlVersion {
         self.server_version
+    }
+
+    pub fn server_uuid(&self) -> &MysqlServerUuid {
+        &self.server_uuid
     }
 
     pub fn vendor(&self) -> &str {
@@ -239,6 +247,10 @@ impl AuthorizedLocalTarget {
         self.target.server_version
     }
 
+    pub fn server_uuid(&self) -> &MysqlServerUuid {
+        &self.target.server_uuid
+    }
+
     pub fn docker_context(&self) -> &str {
         &self.target.docker_context
     }
@@ -275,11 +287,19 @@ impl AuthorizedLocalTarget {
                 central_database: DatabaseName::try_from("salt_central").unwrap(),
                 tenant_database_prefix: "salt_".to_owned(),
                 server_version: "8.4.4".parse().unwrap(),
+                server_uuid: "22222222-2222-4222-8222-222222222222".parse().unwrap(),
                 vendor: "MySQL Community Server - GPL".to_owned(),
                 client: crate::infrastructure::mysql::ClientCatalog::resolve("8.4").unwrap(),
             },
             database,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_on_server(database: DatabaseName, server_uuid: MysqlServerUuid) -> Self {
+        let mut target = Self::for_test(database);
+        target.target.server_uuid = server_uuid;
+        target
     }
 }
 
@@ -408,6 +428,7 @@ mod tests {
             container_id: ContainerId::try_from("a".repeat(64)).unwrap(),
             managed_by_reprodb,
             server_version: "8.4.4".parse().unwrap(),
+            server_uuid: "22222222-2222-4222-8222-222222222222".parse().unwrap(),
             vendor: "MySQL Community Server - GPL".to_owned(),
             client: ClientCatalog::resolve("8.4").unwrap(),
         }

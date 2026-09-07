@@ -40,6 +40,7 @@ pub enum ValueKind {
     ContainerId,
     CredentialKey,
     MysqlVersion,
+    MysqlServerUuid,
     Sha256Digest,
 }
 
@@ -55,6 +56,7 @@ impl fmt::Display for ValueKind {
             Self::ContainerId => "container ID",
             Self::CredentialKey => "credential key",
             Self::MysqlVersion => "MySQL version",
+            Self::MysqlServerUuid => "MySQL server UUID",
             Self::Sha256Digest => "SHA-256 digest",
         };
         formatter.write_str(name)
@@ -238,6 +240,7 @@ validated_string!(TenantId, validate_tenant_id);
 validated_string!(DomainAlias, validate_domain_alias);
 validated_string!(DatabaseName, validate_database_name);
 validated_string!(ContainerName, validate_container_name);
+validated_string!(MysqlServerUuid, validate_mysql_server_uuid);
 validated_string!(ContainerId, validate_container_id);
 
 fn validate_profile_name(value: &str) -> Result<(), ValueObjectError> {
@@ -323,6 +326,17 @@ fn validate_container_name(value: &str) -> Result<(), ValueObjectError> {
         "1-128 ASCII letters, digits, `_`, `.` or `-`, starting with a letter or digit",
         |byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'),
     )
+}
+
+fn validate_mysql_server_uuid(value: &str) -> Result<(), ValueObjectError> {
+    let valid = Uuid::parse_str(value).is_ok_and(|uuid| uuid.hyphenated().to_string() == value);
+    if !valid {
+        return Err(ValueObjectError::InvalidFormat {
+            kind: ValueKind::MysqlServerUuid,
+            expected: "a canonical lowercase hyphenated UUID",
+        });
+    }
+    Ok(())
 }
 
 fn validate_container_id(value: &str) -> Result<(), ValueObjectError> {
@@ -563,6 +577,14 @@ mod tests {
         assert!(DomainAlias::try_from("sagatec").is_ok());
         assert!(DatabaseName::try_from("salt_watt_construtora").is_ok());
         assert!(ContainerName::try_from("mysql-8").is_ok());
+        assert!(MysqlServerUuid::try_from("11111111-1111-4111-8111-111111111111").is_ok());
+    }
+
+    #[test]
+    fn mysql_server_uuid_requires_the_canonical_lowercase_form() {
+        assert!(MysqlServerUuid::try_from("11111111111141118111111111111111").is_err());
+        assert!(MysqlServerUuid::try_from("AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA").is_err());
+        assert!(MysqlServerUuid::try_from("not-a-server-id").is_err());
     }
 
     #[test]

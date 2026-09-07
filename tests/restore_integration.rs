@@ -144,6 +144,7 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
             database: database.clone(),
             profile: profile.clone(),
             source_fingerprint: Sha256Digest::from_bytes([1; 32]),
+            source_server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
             source_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
             client_version: client.version(),
             database_encoding: DatabaseEncoding::try_new(

@@ -90,6 +90,7 @@ where
 
         Ok(VerifiedLocalTarget {
             server_version: server.version,
+            server_uuid: server.server_uuid,
             vendor: server.vendor,
             tls_cipher: server.tls_cipher,
             client,
@@ -216,7 +217,9 @@ mod tests {
                 ),
                 ProcessOutput::success("mysql  Ver 8.4.4 for Linux on aarch64\n"),
                 ProcessOutput::failure(1, "Can't connect to MySQL server"),
-                ProcessOutput::success("8.4.4\tMySQL Community Server - GPL\n"),
+                ProcessOutput::success(
+                    "8.4.4\tMySQL Community Server - GPL\t22222222-2222-4222-8222-222222222222\n",
+                ),
             ])),
             calls: Arc::clone(&calls),
         };

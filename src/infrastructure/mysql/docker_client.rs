@@ -4,7 +4,7 @@ use secrecy::SecretString;
 use thiserror::Error;
 
 use crate::{
-    domain::{ContainerId, DatabaseName, MysqlTlsMode, MysqlVersion},
+    domain::{ContainerId, DatabaseName, MysqlServerUuid, MysqlTlsMode, MysqlVersion},
     infrastructure::{
         credentials::{MYSQL_OPTION_FILE_CONTAINER_PATH, MysqlOptionFile, OptionFileError},
         mysql::{ApprovedMysqlClient, ClientCatalog, ClientCatalogError},
@@ -14,12 +14,13 @@ use crate::{
 
 const IMAGE_DIGEST_TEMPLATE: &str = "{{json .RepoDigests}}";
 const VERSION_QUERY: &str =
-    "SELECT VERSION(), @@version_comment; SHOW SESSION STATUS LIKE 'Ssl_cipher'";
+    "SELECT VERSION(), @@version_comment, @@server_uuid; SHOW SESSION STATUS LIKE 'Ssl_cipher'";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MysqlServerInfo {
     pub version: MysqlVersion,
     pub vendor: String,
+    pub server_uuid: MysqlServerUuid,
     pub tls_cipher: Option<String>,
 }
 
@@ -537,10 +538,14 @@ fn parse_server_info(stdout: &[u8]) -> Result<MysqlServerInfo, DockerClientError
         .next()
         .ok_or(DockerClientError::InvalidServerMetadata)?
         .trim_end_matches('\r');
-    let (version, vendor) = line
-        .split_once('\t')
-        .ok_or(DockerClientError::InvalidServerMetadata)?;
+    let columns = line.split('\t').collect::<Vec<_>>();
+    let [version, vendor, server_uuid] = columns.as_slice() else {
+        return Err(DockerClientError::InvalidServerMetadata);
+    };
     let version = version
+        .parse()
+        .map_err(|_| DockerClientError::InvalidServerMetadata)?;
+    let server_uuid = server_uuid
         .parse()
         .map_err(|_| DockerClientError::InvalidServerMetadata)?;
     if vendor.is_empty() || vendor.chars().any(char::is_control) {
@@ -569,7 +574,8 @@ fn parse_server_info(stdout: &[u8]) -> Result<MysqlServerInfo, DockerClientError
 
     Ok(MysqlServerInfo {
         version,
-        vendor: vendor.to_owned(),
+        vendor: (*vendor).to_owned(),
+        server_uuid,
         tls_cipher,
     })
 }
@@ -787,7 +793,7 @@ mod tests {
     async fn connection_probe_mounts_the_option_file_read_only_without_shell() {
         let client = ClientCatalog::resolve("8.4").unwrap();
         let runner = FakeRunner::new([ProcessOutput::success(
-            "8.4.4\tMySQL Community Server - GPL\n",
+            "8.4.4\tMySQL Community Server - GPL\t11111111-1111-4111-8111-111111111111\n",
         )]);
         let runtime = DockerMysqlClientRuntime::new(runner);
         let option_file = runtime
@@ -871,7 +877,7 @@ mod tests {
     async fn target_probe_joins_the_selected_container_network_by_exact_id() {
         let client = ClientCatalog::resolve("8.4").unwrap();
         let runtime = DockerMysqlClientRuntime::new(FakeRunner::new([ProcessOutput::success(
-            "8.4.4\tMySQL Community Server - GPL\n",
+            "8.4.4\tMySQL Community Server - GPL\t22222222-2222-4222-8222-222222222222\n",
         )]));
         let option_file = runtime
             .create_container_option_file(
@@ -921,13 +927,17 @@ mod tests {
     #[test]
     fn parses_the_negotiated_tls_cipher_without_accepting_extra_rows() {
         let info = parse_server_info(
-            b"8.4.4\tMySQL Community Server - GPL\nSsl_cipher\tTLS_AES_256_GCM_SHA384\n",
+            b"8.4.4\tMySQL Community Server - GPL\t11111111-1111-4111-8111-111111111111\nSsl_cipher\tTLS_AES_256_GCM_SHA384\n",
         )
         .unwrap();
 
         assert_eq!(info.tls_cipher.as_deref(), Some("TLS_AES_256_GCM_SHA384"));
+        assert_eq!(
+            info.server_uuid.as_str(),
+            "11111111-1111-4111-8111-111111111111"
+        );
         assert!(matches!(
-            parse_server_info(b"8.4.4\tMySQL\nSsl_cipher\tTLS_AES\nunexpected\n"),
+            parse_server_info(b"8.4.4\tMySQL\t11111111-1111-4111-8111-111111111111\nSsl_cipher\tTLS_AES\nunexpected\n"),
             Err(DockerClientError::InvalidServerMetadata)
         ));
     }

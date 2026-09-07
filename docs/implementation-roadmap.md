@@ -797,7 +797,7 @@ Contrato e evidências: [`docs/cache-commands.md`](cache-commands.md).
 
 **Labels:** `priority:p0`, `type:feature`, `area:cli`, `area:restore`, `area:docker`
 
-**Status:** em andamento — o core separa source/target database; `setup` preserva múltiplos targets e define o último como default; `pull` oferece seletor interativo e `--target`; `pull`/`restore` aceitam `--target` e `--database` validados. Detecção do mesmo servidor source/target e o E2E com dois containers ainda são obrigatórios antes da conclusão.
+**Status:** implementada — o core separa source/target database; `setup` preserva múltiplos targets e define o último como default; `pull` oferece seletor interativo e `--target`; `pull`/`restore` aceitam `--target` e `--database` validados. O UUID observado do MySQL source é gravado no artefato e comparado ao target antes de qualquer mutação. O E2E cria um segundo MySQL, exporta de A, restaura em B e repete por cache.
 
 **Escopo:** permitir múltiplos targets locais cadastrados pelo `setup`, com um target default. Em terminal interativo, `pull` mostra os targets MySQL disponíveis/configurados e pergunta o container e o nome do database de destino; os defaults são o target ativo e o database vindo do dump. Flags explícitas equivalentes devem manter automação possível.
 

@@ -14,6 +14,7 @@ metadata estrita
     -> tamanho + SHA-256 do .zst
     -> decode Zstd completo + tamanho/SHA-256 do SQL
     -> target local atestado e database autorizado
+    -> UUID do servidor target diferente do UUID source do dump
     -> compatibilidade source/client/target
     -> lock local por context + container ID + database
     -> estado persistido como incomplete
@@ -42,11 +43,11 @@ docker --context <local> run --rm -i
 
 Não há shell, `docker cp`, TTY ou SQL cru intermediário. `-i` é obrigatório para manter o stdin do client container aberto; `-t` é proibido porque um pseudo-terminal pode alterar o stream.
 
-A senha fica somente no `SecretString` e no option file efêmero `0600` criado no diretório temporário seguro do sistema operacional. Ela não aparece no argv, metadata, estado ou diagnóstico. O stderr é drenado em paralelo, limitado a 64 KiB e usado apenas para classificar a falha; seu conteúdo não é devolvido nos erros públicos.
+A senha fica somente no `SecretString` e no option file efêmero `0600` criado no diretório temporário seguro do sistema operacional. Ela não aparece no argv, metadata, estado ou diagnóstico. A conexão com o MySQL target exige TLS, inclusive para autenticação `caching_sha2_password` no MySQL 8.4. O stderr é drenado em paralelo, limitado a 64 KiB e usado apenas para classificar a falha; seu conteúdo não é devolvido nos erros públicos.
 
 ## Recriação e estado recuperável
 
-O database precisa coincidir exatamente entre artefato e target autorizado. O `DROP DATABASE` e `CREATE DATABASE` usam apenas `DatabaseName`, charset e collation já validados, com o encoding registrado no source no momento do dump.
+O database target pode manter o nome do source ou usar outro nome explicitamente escolhido dentro da allowlist local. O `DROP DATABASE` e `CREATE DATABASE` usam apenas `DatabaseName`, charset e collation já validados, com o encoding registrado no source no momento do dump. Mesmo com outro nome, o restore é recusado se `@@server_uuid` indicar que target e source são o mesmo MySQL.
 
 Antes do `DROP`, o engine grava atomicamente:
 
@@ -69,6 +70,12 @@ cargo test --test restore_integration -- --ignored --nocapture
 ```
 
 O teste pode usar `REPRODB_TEST_MYSQL_CONTAINER` para selecionar outro container local compatível. A cobertura equivalente em Linux permanece na milestone cross-platform.
+
+O E2E de `pull` cria ainda um segundo container MySQL efêmero, exporta do `mysql-8`, restaura no segundo servidor e comprova a reutilização do cache sem credencial source:
+
+```bash
+cargo test --test pull_integration -- --ignored --nocapture
+```
 
 ## Limites mantidos para as próximas issues
 

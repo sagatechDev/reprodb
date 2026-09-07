@@ -158,7 +158,7 @@ fn target_option_file(
         3306,
         target.username(),
         target.password(),
-        crate::domain::MysqlTlsMode::Disabled,
+        crate::domain::MysqlTlsMode::Required,
     )
     .map_err(RestoreExecutorError::OptionFile)
 }
@@ -410,6 +410,7 @@ mod tests {
                 database,
                 profile: ProfileName::try_from("local-source").unwrap(),
                 source_fingerprint: Sha256Digest::from_bytes([1; 32]),
+                source_server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
                 source_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
                 client_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
                 database_encoding: DatabaseEncoding::try_new(

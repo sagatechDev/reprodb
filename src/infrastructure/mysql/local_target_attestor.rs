@@ -75,6 +75,7 @@ where
             container_id: candidate.id,
             managed_by_reprodb: candidate.managed_by_reprodb,
             server_version: verified.server_version,
+            server_uuid: verified.server_uuid,
             vendor: verified.vendor,
             client: verified.client,
         })

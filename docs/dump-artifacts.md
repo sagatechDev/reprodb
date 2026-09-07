@@ -41,7 +41,7 @@ O formato `mysql-sql-zstd-v1` registra:
 - dump ID;
 - tenant lookup e tenant ID canônico;
 - database e profile;
-- fingerprint do source;
+- fingerprint da configuração e UUID observado do servidor source;
 - versões do source e client;
 - charset e collation;
 - snapshot tipado das features permitidas para o tenant local;
@@ -50,6 +50,6 @@ O formato `mysql-sql-zstd-v1` registra:
 - bytes SQL e comprimidos;
 - SHA-256 do SQL e do arquivo Zstd.
 
-Identificadores, versões e hashes são value objects validados. A metadata não possui host, username, credential key, senha, nomes de objetos SQL ou valores de `DEFINER`.
+Identificadores, versões, UUID do servidor e hashes são value objects validados. O UUID vem de `@@server_uuid` e permite impedir que o restore aponte para o próprio servidor que produziu o dump. A metadata não possui host, username, credential key, senha, nomes de objetos SQL ou valores de `DEFINER`.
 
 O store exige o `CompressionMetrics` que produziu o arquivo e confere bytes e os dois SHA-256 contra a metadata, sem reler um artefato possivelmente enorme. Ele também confere o tamanho efetivo em disco depois do `fsync`. Na leitura, o cache volta a validar identidade, TTL, fingerprint, tamanho e checksum conforme [`cache-validity.md`](cache-validity.md).

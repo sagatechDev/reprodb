@@ -175,6 +175,7 @@ where
                 database: resolved.database.clone(),
                 profile: profile_name.clone(),
                 source_fingerprint: source_profile_fingerprint(profile_name, profile),
+                source_server_uuid: approved.server.server_uuid.clone(),
                 source_version: approved.server.version,
                 client_version: client.version(),
                 database_encoding: approved.preflight.encoding.clone(),
@@ -366,6 +367,7 @@ mod tests {
                 server: MysqlServerInfo {
                     version,
                     vendor: "MySQL Community Server - GPL".to_owned(),
+                    server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
                     tls_cipher: None,
                 },
                 preflight,

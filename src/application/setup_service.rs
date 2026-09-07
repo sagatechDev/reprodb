@@ -4,7 +4,8 @@ use thiserror::Error;
 
 use crate::{
     domain::{
-        ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseName, MysqlVersion,
+        ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseName, MysqlServerUuid,
+        MysqlVersion,
     },
     infrastructure::{
         config::{ConfigError, ConfigRepository, LocalTargetConfig, LocalTargetTrust},
@@ -29,6 +30,7 @@ pub struct NewLocalTargetInput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedLocalTarget {
     pub server_version: MysqlVersion,
+    pub server_uuid: MysqlServerUuid,
     pub vendor: String,
     pub tls_cipher: Option<String>,
     pub client: ApprovedMysqlClient,
@@ -302,6 +304,7 @@ mod tests {
                 calls: AtomicUsize::new(0),
                 result: Ok(VerifiedLocalTarget {
                     server_version: "8.4.4".parse().unwrap(),
+                    server_uuid: "22222222-2222-4222-8222-222222222222".parse().unwrap(),
                     vendor: "MySQL Community Server".to_owned(),
                     tls_cipher: Some("TLS_AES_256_GCM_SHA384".to_owned()),
                     client: ClientCatalog::resolve("8.4").unwrap(),

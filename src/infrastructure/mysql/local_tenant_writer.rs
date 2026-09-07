@@ -75,7 +75,7 @@ fn target_option_file(
         3306,
         target.username(),
         target.password(),
-        crate::domain::MysqlTlsMode::Disabled,
+        crate::domain::MysqlTlsMode::Required,
     )
     .map_err(|_| LocalTenantWriteError::TargetUnavailable)
 }

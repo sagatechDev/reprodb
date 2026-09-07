@@ -37,6 +37,9 @@ where
         artifact: &ValidatedRestoreArtifact,
     ) -> Result<RestoreCompleted, RestoreEngineError> {
         let metadata = artifact.metadata();
+        if target.server_uuid() == &metadata.source_server_uuid {
+            return Err(RestoreEngineError::SourceTargetCollision);
+        }
         if mysql_series(target.server_version()) != mysql_series(metadata.source_version)
             || mysql_series(target.client().version()) != mysql_series(metadata.client_version)
         {
@@ -112,6 +115,10 @@ impl RestoreCompleted {
 
 #[derive(Debug, Error)]
 pub enum RestoreEngineError {
+    #[error(
+        "restore target is the same MySQL server that produced this dump; select another container"
+    )]
+    SourceTargetCollision,
     #[error("the target server/client series is incompatible with the managed dump")]
     VersionMismatch,
     #[error(transparent)]
@@ -203,6 +210,7 @@ mod tests {
                 database: DatabaseName::try_from("salt_sagatec").unwrap(),
                 profile: profile.clone(),
                 source_fingerprint: Sha256Digest::from_bytes([1; 32]),
+                source_server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
                 source_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
                 client_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
                 database_encoding: DatabaseEncoding::try_new(
@@ -347,5 +355,33 @@ mod tests {
             engine.states.load(&target).unwrap().status,
             RestoreStatus::Ready
         );
+    }
+
+    #[tokio::test]
+    async fn same_mysql_server_is_rejected_before_lock_state_or_destructive_execution() {
+        let directory = tempdir().unwrap();
+        let artifact = artifact(&directory.path().join("cache")).await;
+        let target = AuthorizedLocalTarget::for_test_on_server(
+            DatabaseName::try_from("salt_polymer").unwrap(),
+            "11111111-1111-4111-8111-111111111111".parse().unwrap(),
+        );
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let engine = RestoreEngine::new(
+            FakeExecutor {
+                calls: Arc::clone(&calls),
+                fail_import: false,
+            },
+            directory.path().join("cache"),
+            directory.path().join("data"),
+        );
+
+        let error = engine.restore(&target, &artifact).await.unwrap_err();
+
+        assert!(matches!(error, RestoreEngineError::SourceTargetCollision));
+        assert!(calls.lock().unwrap().is_empty());
+        assert!(matches!(
+            engine.states.load(&target),
+            Err(crate::infrastructure::restore_state::RestoreStateError::Read(_))
+        ));
     }
 }

@@ -254,6 +254,7 @@ mod tests {
                 container_id: ContainerId::try_from("a".repeat(64)).unwrap(),
                 managed_by_reprodb: false,
                 server_version: "8.4.4".parse().unwrap(),
+                server_uuid: "22222222-2222-4222-8222-222222222222".parse().unwrap(),
                 vendor: "MySQL Community Server - GPL".to_owned(),
                 client: ClientCatalog::resolve("8.4").unwrap(),
             })
@@ -366,6 +367,7 @@ mod tests {
                 database: DatabaseName::try_from("salt_sagatec").unwrap(),
                 profile,
                 source_fingerprint: Sha256Digest::from_bytes([1; 32]),
+                source_server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
                 source_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
                 client_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
                 database_encoding: DatabaseEncoding::try_new(

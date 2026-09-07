@@ -238,6 +238,9 @@ const fn restore_error_category(error: &RestoreServiceError) -> ErrorCategory {
         RestoreServiceError::Engine(RestoreEngineError::VersionMismatch) => {
             ErrorCategory::Dependency
         }
+        RestoreServiceError::Engine(RestoreEngineError::SourceTargetCollision) => {
+            ErrorCategory::Restore
+        }
         RestoreServiceError::Engine(RestoreEngineError::Lock(_) | RestoreEngineError::State(_)) => {
             ErrorCategory::Cache
         }

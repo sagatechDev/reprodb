@@ -30,7 +30,7 @@ use reprodb::{
         process::TokioProcessRunner,
     },
 };
-use secrecy::{SecretString, zeroize::Zeroize};
+use secrecy::{ExposeSecret, SecretString, zeroize::Zeroize};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -61,7 +61,7 @@ impl PullTargetSelector for DefaultTarget {
 }
 
 #[tokio::test]
-#[ignore = "creates, pulls twice and removes a unique Salt tenant in the local mysql-8 container"]
+#[ignore = "creates a second MySQL container, pulls from mysql-8 into it, verifies cache reuse, and cleans both fixtures"]
 async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
     let expected =
         std::env::var("REPRODB_TEST_MYSQL_CONTAINER").unwrap_or_else(|_| "mysql-8".to_owned());
@@ -69,12 +69,28 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
         .discover()
         .await
         .unwrap();
-    let candidate = candidates
+    let source_candidate = candidates
         .into_iter()
         .find(|candidate| candidate.name.as_str() == expected)
         .expect("the expected local MySQL container was not discovered");
-    let password = local_container_root_password(&context, &expected);
+    let source_password = local_container_root_password(&context, &expected);
     let suffix = Uuid::new_v4().simple().to_string();
+    let target_name = format!("reprodb-target-{}", &suffix[..12]);
+    let target_password = SecretString::from("reprodb-integration-target-only");
+    let _target_guard = start_target_container(
+        &context,
+        &target_name,
+        ClientCatalog::resolve("8.4").unwrap().image(),
+        &target_password,
+    );
+    let (_, candidates) = DockerTargetDiscovery::new(TokioProcessRunner)
+        .discover()
+        .await
+        .unwrap();
+    let target_candidate = candidates
+        .into_iter()
+        .find(|candidate| candidate.name.as_str() == target_name)
+        .expect("the temporary target MySQL container was not discovered");
     let database = DatabaseName::try_from(format!("salt_reprodb_pull_{suffix}")).unwrap();
     let domain = DomainAlias::try_from(format!("reprodb-pull-{}", &suffix[..16])).unwrap();
     let profile_name = ProfileName::try_from("pull-local-source").unwrap();
@@ -97,12 +113,12 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
             },
             local_target: Some(LocalTargetConfig {
                 docker_context: context.clone(),
-                container_name: candidate.name.clone(),
-                container_id: candidate.id.clone(),
+                container_name: target_candidate.name.clone(),
+                container_id: target_candidate.id.clone(),
                 username: "root".to_owned(),
                 credential_key: target_key,
                 central_database: DatabaseName::try_from("salt_central").unwrap(),
-                trust: if candidate.managed_by_reprodb {
+                trust: if target_candidate.managed_by_reprodb {
                     LocalTargetTrust::ReprodbManaged
                 } else {
                     LocalTargetTrust::UserConfirmed
@@ -134,19 +150,40 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
         .unwrap();
     let credentials = MemoryCredentialStore::default();
     credentials
-        .set(&source_key, password.clone())
+        .set(&source_key, source_password.clone())
         .await
         .unwrap();
     credentials
-        .set(&target_key, password.clone())
+        .set(&target_key, target_password.clone())
         .await
         .unwrap();
 
+    wait_for_mysql(
+        &context,
+        target_candidate.id.as_str(),
+        client.image(),
+        &target_password,
+    )
+    .await;
+    run_mysql_query(
+        &context,
+        target_candidate.id.as_str(),
+        client.image(),
+        &target_password,
+        MysqlTlsMode::Required,
+        None,
+        "CREATE DATABASE `salt_central` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; \
+         CREATE TABLE `salt_central`.`tenants` (`id` VARCHAR(255) NOT NULL PRIMARY KEY, `created_at` TIMESTAMP NULL, `updated_at` TIMESTAMP NULL, `data` JSON NULL) ENGINE=InnoDB; \
+         CREATE TABLE `salt_central`.`domains` (`id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, `domain` VARCHAR(255) NOT NULL UNIQUE, `tenant_id` VARCHAR(255) NOT NULL, `created_at` TIMESTAMP NULL, `updated_at` TIMESTAMP NULL, CONSTRAINT `domains_tenant_fk` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`)) ENGINE=InnoDB",
+    )
+    .expect("the temporary target salt_central fixture must be created");
+
     let collision = run_mysql_query(
         &context,
-        candidate.id.as_str(),
+        source_candidate.id.as_str(),
         client.image(),
-        &password,
+        &source_password,
+        MysqlTlsMode::Disabled,
         Some(&DatabaseName::try_from("salt_central").unwrap()),
         &format!(
             "SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE BINARY SCHEMA_NAME = BINARY 0x{database}), (SELECT COUNT(*) FROM tenants WHERE BINARY id = BINARY 0x{tenant}), (SELECT COUNT(*) FROM domains WHERE BINARY domain = BINARY 0x{domain})",
@@ -160,9 +197,10 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
 
     let fixture = run_mysql_query(
         &context,
-        candidate.id.as_str(),
+        source_candidate.id.as_str(),
         client.image(),
-        &password,
+        &source_password,
+        MysqlTlsMode::Disabled,
         None,
         &format!(
             "CREATE DATABASE `{database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; \
@@ -231,9 +269,10 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
     let verification = if second.is_ok() {
         Some(run_mysql_query(
             &context,
-            candidate.id.as_str(),
+            target_candidate.id.as_str(),
             client.image(),
-            &password,
+            &target_password,
+            MysqlTlsMode::Required,
             Some(&database),
             "SELECT id, HEX(label) FROM reprodb_pull_items ORDER BY id",
         ))
@@ -243,9 +282,10 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
     let central_verification = if second.is_ok() {
         Some(run_mysql_query(
             &context,
-            candidate.id.as_str(),
+            target_candidate.id.as_str(),
             client.image(),
-            &password,
+            &target_password,
+            MysqlTlsMode::Required,
             Some(&DatabaseName::try_from("salt_central").unwrap()),
             &format!(
                 "SELECT JSON_UNQUOTE(JSON_EXTRACT(data, '$.tenancy_db_name')), JSON_UNQUOTE(JSON_EXTRACT(data, '$.tenancy_app_color')) FROM tenants WHERE BINARY id = BINARY 0x{}",
@@ -258,9 +298,10 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
 
     let central_cleanup = run_mysql_query(
         &context,
-        candidate.id.as_str(),
+        source_candidate.id.as_str(),
         client.image(),
-        &password,
+        &source_password,
+        MysqlTlsMode::Disabled,
         Some(&DatabaseName::try_from("salt_central").unwrap()),
         &format!(
             "DELETE FROM tenants WHERE BINARY id = BINARY 0x{}",
@@ -269,9 +310,10 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
     );
     let database_cleanup = run_mysql_query(
         &context,
-        candidate.id.as_str(),
+        source_candidate.id.as_str(),
         client.image(),
-        &password,
+        &source_password,
+        MysqlTlsMode::Disabled,
         None,
         &format!("DROP DATABASE IF EXISTS `{database}`"),
     );
@@ -285,6 +327,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
     assert!(matches!(second.cache, PullCacheUse::Hit { .. }));
     assert_eq!(first.restored.plan.dump_id, second.restored.plan.dump_id);
     assert_eq!(first.restored.plan.database, database);
+    assert_eq!(first.restored.plan.container, target_candidate.name);
     assert_eq!(
         String::from_utf8(verification.unwrap().unwrap()).unwrap(),
         "1\t5361676174656320F09FA782\n2\t506F6C796D6572\n"
@@ -292,6 +335,92 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
     assert_eq!(
         String::from_utf8(central_verification.unwrap().unwrap()).unwrap(),
         format!("{database}\tgreen\n")
+    );
+}
+
+struct TemporaryDockerContainer {
+    context: String,
+    name: String,
+}
+
+impl Drop for TemporaryDockerContainer {
+    fn drop(&mut self) {
+        let _ = Command::new("docker")
+            .args([
+                "--context",
+                &self.context,
+                "container",
+                "rm",
+                "--force",
+                &self.name,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+fn start_target_container(
+    context: &str,
+    name: &str,
+    image: &str,
+    password: &SecretString,
+) -> TemporaryDockerContainer {
+    let status = Command::new("docker")
+        .env("MYSQL_ROOT_PASSWORD", password.expose_secret())
+        .args([
+            "--context",
+            context,
+            "run",
+            "--detach",
+            "--rm",
+            "--pull=never",
+            "--name",
+            name,
+            "--label",
+            "com.sagatech.reprodb.target=true",
+            "--env",
+            "MYSQL_ROOT_PASSWORD",
+            image,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .status()
+        .expect("Docker must start the temporary target container");
+    assert!(status.success(), "could not start temporary MySQL target");
+    TemporaryDockerContainer {
+        context: context.to_owned(),
+        name: name.to_owned(),
+    }
+}
+
+async fn wait_for_mysql(
+    context: &str,
+    container_id: &str,
+    client_image: &str,
+    password: &SecretString,
+) {
+    let mut last_error = None;
+    for _ in 0..30 {
+        match run_mysql_query(
+            context,
+            container_id,
+            client_image,
+            password,
+            MysqlTlsMode::Required,
+            None,
+            "SELECT 1",
+        ) {
+            Ok(_) => return,
+            Err(error) => last_error = Some(error),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    panic!(
+        "temporary MySQL target did not become ready: {}",
+        last_error.unwrap_or_else(|| "no diagnostic".to_owned())
     );
 }
 
@@ -304,12 +433,12 @@ fn run_mysql_query(
     container_id: &str,
     client_image: &str,
     password: &SecretString,
+    tls_mode: MysqlTlsMode,
     database: Option<&DatabaseName>,
     query: &str,
 ) -> Result<Vec<u8>, String> {
-    let option_file =
-        MysqlOptionFile::create("127.0.0.1", 3306, "root", password, MysqlTlsMode::Disabled)
-            .map_err(|error| error.to_string())?;
+    let option_file = MysqlOptionFile::create("127.0.0.1", 3306, "root", password, tls_mode)
+        .map_err(|error| error.to_string())?;
     let mount = format!(
         "type=bind,src={},dst={MYSQL_OPTION_FILE_CONTAINER_PATH},readonly",
         option_file.path().display()

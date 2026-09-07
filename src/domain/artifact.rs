@@ -5,8 +5,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::domain::{
-    DatabaseEncoding, DatabaseName, LocalTenantFeatures, MysqlVersion, ProfileName, Sha256Digest,
-    TenantId, TenantLookup,
+    DatabaseEncoding, DatabaseName, LocalTenantFeatures, MysqlServerUuid, MysqlVersion,
+    ProfileName, Sha256Digest, TenantId, TenantLookup,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -77,6 +77,7 @@ pub struct DumpArtifactMetadata {
     pub database: DatabaseName,
     pub profile: ProfileName,
     pub source_fingerprint: Sha256Digest,
+    pub source_server_uuid: MysqlServerUuid,
     pub source_version: MysqlVersion,
     pub client_version: MysqlVersion,
     pub database_charset: String,
@@ -101,6 +102,7 @@ struct DumpArtifactMetadataWire {
     database: DatabaseName,
     profile: ProfileName,
     source_fingerprint: Sha256Digest,
+    source_server_uuid: MysqlServerUuid,
     source_version: MysqlVersion,
     client_version: MysqlVersion,
     database_charset: String,
@@ -135,6 +137,7 @@ impl<'de> Deserialize<'de> for DumpArtifactMetadata {
                 database: wire.database,
                 profile: wire.profile,
                 source_fingerprint: wire.source_fingerprint,
+                source_server_uuid: wire.source_server_uuid,
                 source_version: wire.source_version,
                 client_version: wire.client_version,
                 database_encoding: encoding,
@@ -161,6 +164,7 @@ pub struct DumpArtifactContext {
     pub database: DatabaseName,
     pub profile: ProfileName,
     pub source_fingerprint: Sha256Digest,
+    pub source_server_uuid: MysqlServerUuid,
     pub source_version: MysqlVersion,
     pub client_version: MysqlVersion,
     pub database_encoding: DatabaseEncoding,
@@ -202,6 +206,7 @@ impl DumpArtifactMetadata {
             database: context.database,
             profile: context.profile,
             source_fingerprint: context.source_fingerprint,
+            source_server_uuid: context.source_server_uuid,
             source_version: context.source_version,
             client_version: context.client_version,
             database_charset: context.database_encoding.charset().to_owned(),
@@ -253,6 +258,7 @@ mod tests {
                 database: DatabaseName::try_from("salt_sagatec").unwrap(),
                 profile: ProfileName::try_from("local-source").unwrap(),
                 source_fingerprint: digest(1),
+                source_server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
                 source_version: "8.4.4".parse().unwrap(),
                 client_version: "8.4.4".parse().unwrap(),
                 database_encoding: DatabaseEncoding::try_new(
@@ -284,6 +290,10 @@ mod tests {
         assert_eq!(json["tenant_lookup"], "sagatec");
         assert_eq!(json["tenant_id"], "salt_sagatec");
         assert_eq!(json["database"], "salt_sagatec");
+        assert_eq!(
+            json["source_server_uuid"],
+            "11111111-1111-4111-8111-111111111111"
+        );
         assert_eq!(json["database_charset"], "utf8mb4");
         assert_eq!(json["local_tenant_features"]["enable_beta"], true);
         assert!(

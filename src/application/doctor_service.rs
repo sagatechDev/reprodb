@@ -927,6 +927,7 @@ mod tests {
             calls: AtomicUsize::new(0),
             result: Ok(VerifiedLocalTarget {
                 server_version: "8.4.4".parse().unwrap(),
+                server_uuid: "22222222-2222-4222-8222-222222222222".parse().unwrap(),
                 vendor: "MySQL Community Server".to_owned(),
                 tls_cipher: Some("TLS_AES_256_GCM_SHA384".to_owned()),
                 client: ClientCatalog::resolve("8.4").unwrap(),
