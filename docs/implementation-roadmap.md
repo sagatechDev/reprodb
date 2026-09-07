@@ -835,7 +835,7 @@ Critério da milestone: falhas deixam estado compreensível e o fluxo é comprov
 
 **Labels:** `priority:p0`, `type:test`, `area:mysql`, `area:cache`, `area:restore`
 
-**Status:** em andamento — já existem injeções determinísticas para disco cheio, leitura interrompida, stderr acima do limite, Zstd/cache corrompido, falha no rename, interrupção e locks. Falhas externas de conexão/runtime ainda serão consolidadas na matriz desta issue.
+**Status:** implementada — a matriz em [`fault-injection.md`](fault-injection.md) cobre de forma determinística conexão, credencial, permissão, runtime, streaming, disco, cache, Zstd, rename e interrupção sem depender de danificar o ambiente real.
 
 **Cenários:** host/porta/senha inválidos, permission denied, disconnect, disco cheio, stderr grande, Docker parado, container ausente, imagem ausente, Zstd corrompido e falha no rename.
 

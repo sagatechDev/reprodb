@@ -223,6 +223,7 @@ fn classify_failure(stderr: &[u8]) -> DumpFailureKind {
         || stderr.contains("cannot connect")
         || stderr.contains("connection refused")
         || stderr.contains("connection timed out")
+        || stderr.contains("lost connection")
     {
         DumpFailureKind::SourceUnavailable
     } else {
@@ -403,6 +404,14 @@ mod tests {
         assert_eq!(
             classify_failure(b"Cannot connect to the Docker daemon"),
             DumpFailureKind::DockerUnavailable
+        );
+        assert_eq!(
+            classify_failure(b"You need (at least one of) the PROCESS privilege(s)"),
+            DumpFailureKind::Permission
+        );
+        assert_eq!(
+            classify_failure(b"Lost connection to MySQL server during query"),
+            DumpFailureKind::SourceUnavailable
         );
         let error = DumpExecutorError::ProcessFailed {
             exit_code: Some(2),

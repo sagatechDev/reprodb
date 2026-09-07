@@ -873,6 +873,34 @@ mod tests {
         assert!(!format!("{error:?}").contains(marker));
     }
 
+    #[test]
+    fn invalid_password_host_and_port_are_classified_without_retaining_diagnostics() {
+        let cases = [
+            (
+                "Access denied for user 'root' using password: YES; sensitive-marker",
+                DockerClientError::AuthenticationFailed,
+            ),
+            (
+                "Unknown MySQL server host 'invalid.invalid'; sensitive-marker",
+                DockerClientError::SourceNetworkUnavailable,
+            ),
+            (
+                "Can't connect to MySQL server on '127.0.0.1:65534'; sensitive-marker",
+                DockerClientError::SourceNetworkUnavailable,
+            ),
+        ];
+
+        for (stderr, expected) in cases {
+            let error = classify_connection_failure(&ProcessOutput::failure(1, stderr));
+            assert_eq!(
+                std::mem::discriminant(&error),
+                std::mem::discriminant(&expected)
+            );
+            assert!(!error.to_string().contains("sensitive-marker"));
+            assert!(!format!("{error:?}").contains("sensitive-marker"));
+        }
+    }
+
     #[tokio::test]
     async fn target_probe_joins_the_selected_container_network_by_exact_id() {
         let client = ClientCatalog::resolve("8.4").unwrap();

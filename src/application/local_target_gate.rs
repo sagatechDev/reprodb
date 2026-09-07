@@ -617,6 +617,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_container_absence_is_reported_before_restore_authorization() {
+        let temp = TempDir::new().unwrap();
+        let attestor = FakeAttestor {
+            calls: AtomicUsize::new(0),
+            result: Err(LocalTargetAttestationError::ContainerNotFound),
+        };
+
+        let error = LocalTargetGate::new(repository(&temp, LocalTargetTrust::UserConfirmed))
+            .verify(&credentials().await, &attestor)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            LocalTargetGateError::Attestation(LocalTargetAttestationError::ContainerNotFound)
+        ));
+        assert_eq!(attestor.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn incompatible_vendor_or_series_cannot_produce_a_guarded_target() {
         let cases = [
             LocalTargetAttestation {

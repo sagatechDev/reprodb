@@ -383,6 +383,27 @@ pub enum RestoreFailureKind {
     Unknown,
 }
 
+impl std::fmt::Display for RestoreFailureKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Authentication => {
+                "the local target rejected authentication; run `reprodb setup` to update it"
+            }
+            Self::Permission => {
+                "the local target user cannot recreate or import the selected database"
+            }
+            Self::TargetUnavailable => {
+                "the selected MySQL container became unavailable; verify it with `reprodb doctor`"
+            }
+            Self::Sql => "MySQL rejected a statement from the validated dump",
+            Self::DockerUnavailable => {
+                "Docker became unavailable; start Docker and run `reprodb doctor`"
+            }
+            Self::Unknown => "the MySQL client returned an unclassified restore failure",
+        })
+    }
+}
+
 fn classify_failure(stderr: &[u8]) -> RestoreFailureKind {
     let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
     if stderr.contains("access denied") {
@@ -395,7 +416,10 @@ fn classify_failure(stderr: &[u8]) -> RestoreFailureKind {
         || stderr.contains("error during connect")
     {
         RestoreFailureKind::DockerUnavailable
-    } else if stderr.contains("can't connect") || stderr.contains("connection refused") {
+    } else if stderr.contains("can't connect")
+        || stderr.contains("connection refused")
+        || stderr.contains("lost connection")
+    {
         RestoreFailureKind::TargetUnavailable
     } else if stderr.contains("error ") || stderr.contains("unknown database") {
         RestoreFailureKind::Sql
@@ -439,7 +463,7 @@ pub enum RestoreExecutorError {
     #[error("the validated dump changed while it was being imported")]
     ArtifactChangedDuringImport,
     #[error(
-        "database recreation failed ({kind:?}, exit code {exit_code:?}, diagnostics truncated: {stderr_truncated})"
+        "database recreation failed: {kind} (exit code {exit_code:?}, diagnostics truncated: {stderr_truncated})"
     )]
     RecreateFailed {
         exit_code: Option<i32>,
@@ -447,7 +471,7 @@ pub enum RestoreExecutorError {
         stderr_truncated: bool,
     },
     #[error(
-        "database import failed ({kind:?}, exit code {exit_code:?}, diagnostics truncated: {stderr_truncated})"
+        "database import failed: {kind} (exit code {exit_code:?}, diagnostics truncated: {stderr_truncated})"
     )]
     ImportFailed {
         exit_code: Option<i32>,
@@ -553,6 +577,20 @@ mod tests {
             classify_failure(format!("Access denied for {marker}").as_bytes()),
             RestoreFailureKind::Authentication
         );
+        assert_eq!(
+            classify_failure(b"You need (at least one of) the CREATE privilege(s)"),
+            RestoreFailureKind::Permission
+        );
+        assert_eq!(
+            classify_failure(b"Can't connect to local MySQL server"),
+            RestoreFailureKind::TargetUnavailable
+        );
+        let permission = RestoreExecutorError::ImportFailed {
+            exit_code: Some(1),
+            kind: RestoreFailureKind::Permission,
+            stderr_truncated: false,
+        };
+        assert!(permission.to_string().contains("cannot recreate or import"));
         assert!(!format!("{:?}", classify_failure(marker.as_bytes())).contains(marker));
     }
 }
