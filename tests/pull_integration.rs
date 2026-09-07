@@ -30,7 +30,7 @@ use reprodb::{
         process::TokioProcessRunner,
     },
 };
-use secrecy::{ExposeSecret, SecretString, zeroize::Zeroize};
+use secrecy::{ExposeSecret, SecretString};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -61,32 +61,36 @@ impl PullTargetSelector for DefaultTarget {
 }
 
 #[tokio::test]
-#[ignore = "creates a second MySQL container, pulls from mysql-8 into it, verifies cache reuse, and cleans both fixtures"]
+#[ignore = "creates isolated MySQL source/target containers and proves pull plus cache reuse"]
 async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
-    let expected =
-        std::env::var("REPRODB_TEST_MYSQL_CONTAINER").unwrap_or_else(|_| "mysql-8".to_owned());
-    let (context, candidates) = DockerTargetDiscovery::new(TokioProcessRunner)
+    let (context, _) = DockerTargetDiscovery::new(TokioProcessRunner)
         .discover()
         .await
         .unwrap();
-    let source_candidate = candidates
-        .into_iter()
-        .find(|candidate| candidate.name.as_str() == expected)
-        .expect("the expected local MySQL container was not discovered");
-    let source_password = local_container_root_password(&context, &expected);
     let suffix = Uuid::new_v4().simple().to_string();
+    let source_name = format!("reprodb-source-{}", &suffix[..12]);
     let target_name = format!("reprodb-target-{}", &suffix[..12]);
+    let source_password = SecretString::from("reprodb-integration-source-only");
     let target_password = SecretString::from("reprodb-integration-target-only");
-    let _target_guard = start_target_container(
-        &context,
-        &target_name,
-        ClientCatalog::resolve("8.4").unwrap().image(),
-        &target_password,
-    );
+    let image = ClientCatalog::resolve("8.4").unwrap().image();
+    let _source_guard =
+        start_mysql_container(&context, &source_name, image, &source_password, true, false);
+    let _target_guard =
+        start_mysql_container(&context, &target_name, image, &target_password, false, true);
     let (_, candidates) = DockerTargetDiscovery::new(TokioProcessRunner)
         .discover()
         .await
         .unwrap();
+    let source_candidate = candidates
+        .iter()
+        .find(|candidate| candidate.name.as_str() == source_name)
+        .cloned()
+        .expect("the temporary source MySQL container was not discovered");
+    let source_port = source_candidate
+        .published_ports
+        .first()
+        .expect("the source MySQL port was not published")
+        .host_port;
     let target_candidate = candidates
         .into_iter()
         .find(|candidate| candidate.name.as_str() == target_name)
@@ -129,13 +133,13 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
                 profile_name,
                 SourceProfileConfig {
                     host: "127.0.0.1".to_owned(),
-                    port: 3306,
+                    port: source_port,
                     username: "root".to_owned(),
                     credential_key: source_key,
                     mysql_family: MysqlFamily::Mysql,
                     mysql_series: "8.4".to_owned(),
                     production: false,
-                    tls_mode: MysqlTlsMode::Disabled,
+                    tls_mode: MysqlTlsMode::Required,
                     client: MysqlClientConfig {
                         image: client.image().to_owned(),
                     },
@@ -160,30 +164,37 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
 
     wait_for_mysql(
         &context,
+        source_candidate.id.as_str(),
+        client.image(),
+        &source_password,
+    )
+    .await;
+    wait_for_mysql(
+        &context,
         target_candidate.id.as_str(),
         client.image(),
         &target_password,
     )
     .await;
-    run_mysql_query(
+    create_salt_central(
+        &context,
+        source_candidate.id.as_str(),
+        client.image(),
+        &source_password,
+    );
+    create_salt_central(
         &context,
         target_candidate.id.as_str(),
         client.image(),
         &target_password,
-        MysqlTlsMode::Required,
-        None,
-        "CREATE DATABASE `salt_central` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; \
-         CREATE TABLE `salt_central`.`tenants` (`id` VARCHAR(255) NOT NULL PRIMARY KEY, `created_at` TIMESTAMP NULL, `updated_at` TIMESTAMP NULL, `data` JSON NULL) ENGINE=InnoDB; \
-         CREATE TABLE `salt_central`.`domains` (`id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, `domain` VARCHAR(255) NOT NULL UNIQUE, `tenant_id` VARCHAR(255) NOT NULL, `created_at` TIMESTAMP NULL, `updated_at` TIMESTAMP NULL, CONSTRAINT `domains_tenant_fk` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`)) ENGINE=InnoDB",
-    )
-    .expect("the temporary target salt_central fixture must be created");
+    );
 
     let collision = run_mysql_query(
         &context,
         source_candidate.id.as_str(),
         client.image(),
         &source_password,
-        MysqlTlsMode::Disabled,
+        MysqlTlsMode::Required,
         Some(&DatabaseName::try_from("salt_central").unwrap()),
         &format!(
             "SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE BINARY SCHEMA_NAME = BINARY 0x{database}), (SELECT COUNT(*) FROM tenants WHERE BINARY id = BINARY 0x{tenant}), (SELECT COUNT(*) FROM domains WHERE BINARY domain = BINARY 0x{domain})",
@@ -200,7 +211,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
         source_candidate.id.as_str(),
         client.image(),
         &source_password,
-        MysqlTlsMode::Disabled,
+        MysqlTlsMode::Required,
         None,
         &format!(
             "CREATE DATABASE `{database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; \
@@ -296,30 +307,6 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
         None
     };
 
-    let central_cleanup = run_mysql_query(
-        &context,
-        source_candidate.id.as_str(),
-        client.image(),
-        &source_password,
-        MysqlTlsMode::Disabled,
-        Some(&DatabaseName::try_from("salt_central").unwrap()),
-        &format!(
-            "DELETE FROM tenants WHERE BINARY id = BINARY 0x{}",
-            hex_utf8(database.as_str())
-        ),
-    );
-    let database_cleanup = run_mysql_query(
-        &context,
-        source_candidate.id.as_str(),
-        client.image(),
-        &source_password,
-        MysqlTlsMode::Disabled,
-        None,
-        &format!("DROP DATABASE IF EXISTS `{database}`"),
-    );
-
-    central_cleanup.expect("the unique pull tenant fixture must be removed");
-    database_cleanup.expect("the unique pull database fixture must be removed");
     source_credential_removed.expect("the source credential must be removable before cache hit");
     let first = first.expect("the cache miss must create and restore a real dump");
     let second = second.expect("the cache hit must restore without a source credential");
@@ -361,13 +348,16 @@ impl Drop for TemporaryDockerContainer {
     }
 }
 
-fn start_target_container(
+fn start_mysql_container(
     context: &str,
     name: &str,
     image: &str,
     password: &SecretString,
+    publish_source_port: bool,
+    managed_target: bool,
 ) -> TemporaryDockerContainer {
-    let status = Command::new("docker")
+    let mut command = Command::new("docker");
+    command
         .env("MYSQL_ROOT_PASSWORD", password.expose_secret())
         .args([
             "--context",
@@ -375,15 +365,20 @@ fn start_target_container(
             "run",
             "--detach",
             "--rm",
-            "--pull=never",
+            "--pull=missing",
             "--name",
             name,
-            "--label",
-            "com.sagatech.reprodb.target=true",
             "--env",
             "MYSQL_ROOT_PASSWORD",
-            image,
-        ])
+        ]);
+    if publish_source_port {
+        command.args(["--publish", "127.0.0.1::3306"]);
+    }
+    if managed_target {
+        command.args(["--label", "com.sagatech.reprodb.target=true"]);
+    }
+    let status = command
+        .arg(image)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -394,6 +389,26 @@ fn start_target_container(
         context: context.to_owned(),
         name: name.to_owned(),
     }
+}
+
+fn create_salt_central(
+    context: &str,
+    container_id: &str,
+    client_image: &str,
+    password: &SecretString,
+) {
+    run_mysql_query(
+        context,
+        container_id,
+        client_image,
+        password,
+        MysqlTlsMode::Required,
+        None,
+        "CREATE DATABASE `salt_central` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; \
+         CREATE TABLE `salt_central`.`tenants` (`id` VARCHAR(255) NOT NULL PRIMARY KEY, `created_at` TIMESTAMP NULL, `updated_at` TIMESTAMP NULL, `data` JSON NULL) ENGINE=InnoDB; \
+         CREATE TABLE `salt_central`.`domains` (`id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, `domain` VARCHAR(255) NOT NULL UNIQUE, `tenant_id` VARCHAR(255) NOT NULL, `created_at` TIMESTAMP NULL, `updated_at` TIMESTAMP NULL, CONSTRAINT `domains_tenant_fk` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`)) ENGINE=InnoDB",
+    )
+    .expect("the temporary salt_central fixture must be created");
 }
 
 async fn wait_for_mysql(
@@ -474,32 +489,4 @@ fn run_mysql_query(
     } else {
         Err(String::from_utf8_lossy(&output.stderr).into_owned())
     }
-}
-
-fn local_container_root_password(context: &str, container: &str) -> SecretString {
-    let output = Command::new("docker")
-        .args([
-            "--context",
-            context,
-            "container",
-            "inspect",
-            "--format",
-            "{{range .Config.Env}}{{println .}}{{end}}",
-            container,
-        ])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .expect("Docker must be available for this ignored integration test");
-    assert!(output.status.success(), "could not inspect test container");
-
-    let mut environment = String::from_utf8(output.stdout)
-        .expect("the test container environment must be valid UTF-8");
-    let password = environment
-        .lines()
-        .find_map(|line| line.strip_prefix("MYSQL_ROOT_PASSWORD="))
-        .map(str::to_owned)
-        .expect("test container does not expose MYSQL_ROOT_PASSWORD");
-    environment.zeroize();
-    SecretString::from(password)
 }

@@ -845,6 +845,8 @@ Critério da milestone: falhas deixam estado compreensível e o fluxo é comprov
 
 **Labels:** `priority:p0`, `type:test`, `area:cross-platform`
 
+**Status:** em andamento — o CI Linux já sobe source e target MySQL 8.4 isolados, cria fixtures Salt, prova dump/restore/cache hit e remove os containers. Falta levar `setup`/profile para um modo automatizável seguro e então exercitar o binário em vez de apenas os serviços reais.
+
 **Aceite:** binário real executa `setup` não interativo de teste, profile, pull, cache hit e comparação do target em CI com Docker.
 
 #### RDB-063 — Smoke suite no macOS Intel/ARM
