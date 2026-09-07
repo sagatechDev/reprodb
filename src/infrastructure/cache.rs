@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::{self, File},
     io::{self, BufReader, Read},
 };
@@ -82,6 +83,42 @@ pub enum CacheMissReason {
 pub enum CacheLookupResult {
     Hit(Box<ValidatedCacheHit>),
     Miss(CacheMissReason),
+}
+
+pub struct CacheInventoryRequest<'a> {
+    pub source_fingerprints: &'a BTreeMap<ProfileName, Sha256Digest>,
+    pub policy_version: u32,
+    pub now_unix_seconds: u64,
+    pub ttl_seconds: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CacheEntryStatus {
+    Ready,
+    Expired,
+    ProfileMissing,
+    SourceChanged,
+    PolicyChanged,
+    ClockInFuture,
+    CorruptMetadata,
+    IdentityChanged,
+    MissingFile,
+    SizeMismatch,
+    ChecksumMismatch,
+    InUse,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CacheInventoryEntry {
+    pub profile: ProfileName,
+    pub tenant_id: TenantId,
+    pub dump_id: crate::domain::DumpId,
+    pub tenant_lookup: Option<TenantLookup>,
+    pub database: Option<DatabaseName>,
+    pub completed_at_unix_seconds: Option<u64>,
+    pub expires_at_unix_seconds: Option<u64>,
+    pub compressed_bytes: Option<u64>,
+    pub status: CacheEntryStatus,
 }
 
 pub struct LocalCacheValidator {
@@ -225,6 +262,123 @@ impl LocalCacheValidator {
                 .unwrap_or(CacheMissReason::NotFound),
         ))
     }
+
+    pub fn inspect_all(
+        &self,
+        request: &CacheInventoryRequest<'_>,
+    ) -> Result<Vec<CacheInventoryEntry>, CacheError> {
+        let mut entries = Vec::new();
+        for located in self.store.list_all_candidates()? {
+            let (profile, tenant_id, artifact) = located.into_parts();
+            let dump_id = artifact.dump_id;
+            let lease = match self.store.try_acquire_lease(&artifact) {
+                Ok(lease) => lease,
+                Err(ArtifactLeaseError::NotFound) => {
+                    entries.push(CacheInventoryEntry {
+                        profile,
+                        tenant_id,
+                        dump_id,
+                        tenant_lookup: None,
+                        database: None,
+                        completed_at_unix_seconds: None,
+                        expires_at_unix_seconds: None,
+                        compressed_bytes: None,
+                        status: CacheEntryStatus::MissingFile,
+                    });
+                    continue;
+                }
+                Err(ArtifactLeaseError::Busy) => {
+                    entries.push(CacheInventoryEntry {
+                        profile,
+                        tenant_id,
+                        dump_id,
+                        tenant_lookup: None,
+                        database: None,
+                        completed_at_unix_seconds: None,
+                        expires_at_unix_seconds: None,
+                        compressed_bytes: None,
+                        status: CacheEntryStatus::InUse,
+                    });
+                    continue;
+                }
+                Err(ArtifactLeaseError::Io { source, .. }) => {
+                    return Err(CacheError::Io(source));
+                }
+            };
+            let metadata = match read_metadata(&artifact)? {
+                Ok(metadata) => metadata,
+                Err(reason) => {
+                    entries.push(CacheInventoryEntry {
+                        profile,
+                        tenant_id,
+                        dump_id,
+                        tenant_lookup: None,
+                        database: None,
+                        completed_at_unix_seconds: None,
+                        expires_at_unix_seconds: None,
+                        compressed_bytes: file_size(&artifact.dump_path)?,
+                        status: if reason == CacheMissReason::NotFound {
+                            CacheEntryStatus::MissingFile
+                        } else {
+                            CacheEntryStatus::CorruptMetadata
+                        },
+                    });
+                    continue;
+                }
+            };
+            let actual_size = file_size(&artifact.dump_path)?;
+            let expires_at = metadata
+                .completed_at_unix_seconds
+                .saturating_add(request.ttl_seconds);
+            let status = if metadata.dump_id != dump_id
+                || metadata.profile != profile
+                || metadata.tenant_id != tenant_id
+            {
+                CacheEntryStatus::IdentityChanged
+            } else if actual_size.is_none() {
+                CacheEntryStatus::MissingFile
+            } else if actual_size != Some(metadata.compressed_bytes) {
+                CacheEntryStatus::SizeMismatch
+            } else if hash_file(&artifact.dump_path)? != Some(metadata.artifact_sha256) {
+                CacheEntryStatus::ChecksumMismatch
+            } else if metadata.policy_version != request.policy_version {
+                CacheEntryStatus::PolicyChanged
+            } else if let Some(fingerprint) = request.source_fingerprints.get(&profile) {
+                if metadata.source_fingerprint != *fingerprint {
+                    CacheEntryStatus::SourceChanged
+                } else if metadata.completed_at_unix_seconds > request.now_unix_seconds {
+                    CacheEntryStatus::ClockInFuture
+                } else if request.now_unix_seconds >= expires_at {
+                    CacheEntryStatus::Expired
+                } else {
+                    CacheEntryStatus::Ready
+                }
+            } else {
+                CacheEntryStatus::ProfileMissing
+            };
+            entries.push(CacheInventoryEntry {
+                profile,
+                tenant_id,
+                dump_id,
+                tenant_lookup: Some(metadata.tenant_lookup),
+                database: Some(metadata.database),
+                completed_at_unix_seconds: Some(metadata.completed_at_unix_seconds),
+                expires_at_unix_seconds: Some(expires_at),
+                compressed_bytes: actual_size,
+                status,
+            });
+            drop(lease);
+        }
+        entries.sort_by(|left, right| {
+            right
+                .completed_at_unix_seconds
+                .cmp(&left.completed_at_unix_seconds)
+                .then_with(|| left.profile.cmp(&right.profile))
+                .then_with(|| left.tenant_id.cmp(&right.tenant_id))
+                .then_with(|| left.dump_id.to_string().cmp(&right.dump_id.to_string()))
+        });
+        Ok(entries)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -338,7 +492,11 @@ fn hash_file(path: &std::path::Path) -> Result<Option<Sha256Digest>, CacheError>
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::OpenOptions, io::Write as _, path::Path};
+    use std::{
+        fs::{self, OpenOptions},
+        io::Write as _,
+        path::Path,
+    };
 
     use tempfile::tempdir;
 
@@ -494,6 +652,68 @@ mod tests {
                 .unwrap(),
             CacheMissReason::NotFound,
         );
+    }
+
+    #[test]
+    fn inventory_verifies_integrity_and_reports_freshness_for_every_profile() {
+        let directory = tempdir().unwrap();
+        let (dump_id, _) = write_artifact(directory.path(), 9_900);
+        let profile = profile();
+        let fingerprints = BTreeMap::from([(profile.clone(), fingerprint(1))]);
+        let validator = LocalCacheValidator::new(LocalArtifactStore::new(directory.path()));
+
+        let incomplete_id = DumpId::new();
+        let incomplete = directory
+            .path()
+            .join("profiles/local-source/salt_sagatec")
+            .join(incomplete_id.to_string());
+        fs::create_dir(&incomplete).unwrap();
+        fs::write(incomplete.join("dump.sql.zst"), b"incomplete").unwrap();
+
+        let ready = validator
+            .inspect_all(&CacheInventoryRequest {
+                source_fingerprints: &fingerprints,
+                policy_version: 1,
+                now_unix_seconds: 10_000,
+                ttl_seconds: 200,
+            })
+            .unwrap();
+        assert_eq!(ready.len(), 2);
+        assert_eq!(ready[0].dump_id, dump_id);
+        assert_eq!(ready[0].status, CacheEntryStatus::Ready);
+        assert_eq!(ready[0].tenant_lookup.as_ref().unwrap().as_str(), "sagatec");
+        assert_eq!(ready[0].expires_at_unix_seconds, Some(10_100));
+        assert!(ready.iter().any(|entry| {
+            entry.dump_id == incomplete_id && entry.status == CacheEntryStatus::MissingFile
+        }));
+
+        let expired = validator
+            .inspect_all(&CacheInventoryRequest {
+                source_fingerprints: &fingerprints,
+                policy_version: 1,
+                now_unix_seconds: 10_100,
+                ttl_seconds: 200,
+            })
+            .unwrap();
+        assert_eq!(expired[0].status, CacheEntryStatus::Expired);
+
+        let dump_path = directory
+            .path()
+            .join("profiles/local-source/salt_sagatec")
+            .join(dump_id.to_string())
+            .join("dump.sql.zst");
+        let mut bytes = fs::read(&dump_path).unwrap();
+        bytes[0] ^= 0xff;
+        fs::write(dump_path, bytes).unwrap();
+        let corrupt = validator
+            .inspect_all(&CacheInventoryRequest {
+                source_fingerprints: &fingerprints,
+                policy_version: 1,
+                now_unix_seconds: 10_000,
+                ttl_seconds: 200,
+            })
+            .unwrap();
+        assert_eq!(corrupt[0].status, CacheEntryStatus::ChecksumMismatch);
     }
 
     #[test]

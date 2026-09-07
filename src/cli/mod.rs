@@ -1,5 +1,6 @@
 use clap::{Args, Parser, Subcommand};
 
+pub mod cache;
 pub mod doctor;
 pub mod dump;
 pub mod output;

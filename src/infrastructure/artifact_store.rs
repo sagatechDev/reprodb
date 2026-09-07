@@ -129,7 +129,7 @@ impl LocalArtifactStore {
             let path = entry.path();
             let dump_path = path.join(DUMP_FILE_NAME);
             let metadata_path = path.join(METADATA_FILE_NAME);
-            if dump_path.is_file() && metadata_path.is_file() {
+            if is_regular_file(&dump_path)? && is_regular_file(&metadata_path)? {
                 artifacts.push(PublishedDumpArtifact {
                     dump_id,
                     path,
@@ -274,6 +274,117 @@ impl LocalArtifactStore {
                 },
             ));
         }
+        Ok(artifacts)
+    }
+
+    pub fn list_all_candidates(&self) -> Result<Vec<LocatedDumpArtifact>, ArtifactStoreError> {
+        let profiles_path = self.root.join(PROFILES_DIRECTORY);
+        let profiles = match fs::read_dir(&profiles_path) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(source) => {
+                return Err(ArtifactStoreError::Io {
+                    operation: "list artifact profiles",
+                    source,
+                });
+            }
+        };
+        let mut artifacts = Vec::new();
+        for profile_entry in profiles {
+            let profile_entry = profile_entry.map_err(|source| ArtifactStoreError::Io {
+                operation: "read an artifact profile entry",
+                source,
+            })?;
+            if !profile_entry
+                .file_type()
+                .map_err(|source| ArtifactStoreError::Io {
+                    operation: "inspect an artifact profile entry",
+                    source,
+                })?
+                .is_dir()
+            {
+                continue;
+            }
+            let Some(profile_name) = profile_entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let Ok(profile) = ProfileName::try_from(profile_name) else {
+                continue;
+            };
+            let tenants =
+                fs::read_dir(profile_entry.path()).map_err(|source| ArtifactStoreError::Io {
+                    operation: "list artifact tenants",
+                    source,
+                })?;
+            for tenant_entry in tenants {
+                let tenant_entry = tenant_entry.map_err(|source| ArtifactStoreError::Io {
+                    operation: "read an artifact tenant entry",
+                    source,
+                })?;
+                if !tenant_entry
+                    .file_type()
+                    .map_err(|source| ArtifactStoreError::Io {
+                        operation: "inspect an artifact tenant entry",
+                        source,
+                    })?
+                    .is_dir()
+                {
+                    continue;
+                }
+                let Some(tenant_name) = tenant_entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                let Ok(tenant_id) = TenantId::try_from(tenant_name) else {
+                    continue;
+                };
+                let candidates =
+                    fs::read_dir(tenant_entry.path()).map_err(|source| ArtifactStoreError::Io {
+                        operation: "list artifact candidates",
+                        source,
+                    })?;
+                for candidate in candidates {
+                    let candidate = candidate.map_err(|source| ArtifactStoreError::Io {
+                        operation: "read an artifact candidate entry",
+                        source,
+                    })?;
+                    if !candidate
+                        .file_type()
+                        .map_err(|source| ArtifactStoreError::Io {
+                            operation: "inspect an artifact candidate entry",
+                            source,
+                        })?
+                        .is_dir()
+                    {
+                        continue;
+                    }
+                    let Some(candidate_name) = candidate.file_name().to_str().map(str::to_owned)
+                    else {
+                        continue;
+                    };
+                    let Ok(dump_id) = candidate_name.parse::<DumpId>() else {
+                        continue;
+                    };
+                    let path = candidate.path();
+                    artifacts.push(LocatedDumpArtifact {
+                        profile: profile.clone(),
+                        tenant_id: tenant_id.clone(),
+                        artifact: PublishedDumpArtifact {
+                            dump_id,
+                            dump_path: path.join(DUMP_FILE_NAME),
+                            metadata_path: path.join(METADATA_FILE_NAME),
+                            path,
+                        },
+                    });
+                }
+            }
+        }
+        artifacts.sort_by_key(|located| {
+            (
+                located.profile.as_str().to_owned(),
+                located.tenant_id.as_str().to_owned(),
+                located.artifact.dump_id.to_string(),
+            )
+        });
         Ok(artifacts)
     }
 

@@ -2,10 +2,10 @@ use thiserror::Error;
 
 use crate::{
     application::{
-        CredentialProvisionError, DoctorFailureKind, DumpServiceError, LocalTargetAttestationError,
-        LocalTargetGateError, LocalTenantRegistrationServiceError, LocalTenantWriteError,
-        ProfileServiceError, PullServiceError, RestoreEngineError, RestoreServiceError,
-        SetupServiceError, SourceVerificationError, TargetVerificationError,
+        CacheServiceError, CredentialProvisionError, DoctorFailureKind, DumpServiceError,
+        LocalTargetAttestationError, LocalTargetGateError, LocalTenantRegistrationServiceError,
+        LocalTenantWriteError, ProfileServiceError, PullServiceError, RestoreEngineError,
+        RestoreServiceError, SetupServiceError, SourceVerificationError, TargetVerificationError,
     },
     cli::prompt::PromptError,
     domain::{DumpMetadataError, TenantResolutionError, ValueObjectError},
@@ -87,14 +87,14 @@ pub enum AppError {
     #[error(transparent)]
     Pull(#[from] PullServiceError),
 
+    #[error(transparent)]
+    Cache(#[from] CacheServiceError),
+
     #[error("doctor found required problems; review the failed checks above")]
     DoctorChecksFailed { kind: DoctorFailureKind },
 
     #[error("could not write CLI output")]
     Output(#[source] std::io::Error),
-
-    #[error("command `{command}` is not implemented yet")]
-    CommandNotImplemented { command: &'static str },
 
     #[error("operation interrupted")]
     Interrupted,
@@ -182,6 +182,7 @@ impl AppError {
             Self::Dump(error) => dump_error_category(error),
             Self::Restore(error) => restore_error_category(error),
             Self::Pull(error) => pull_error_category(error),
+            Self::Cache(error) => cache_error_category(error),
             Self::DoctorChecksFailed { kind } => match kind {
                 DoctorFailureKind::Configuration => ErrorCategory::Configuration,
                 DoctorFailureKind::Credential => ErrorCategory::Credential,
@@ -191,7 +192,6 @@ impl AppError {
                 DoctorFailureKind::Filesystem => ErrorCategory::Cache,
             },
             Self::Output(_) => ErrorCategory::General,
-            Self::CommandNotImplemented { .. } => ErrorCategory::General,
             Self::Interrupted => ErrorCategory::Interrupted,
         }
     }
@@ -202,6 +202,16 @@ impl AppError {
 
     pub const fn should_render_on_stderr(&self) -> bool {
         !matches!(self, Self::DoctorChecksFailed { .. })
+    }
+}
+
+const fn cache_error_category(error: &CacheServiceError) -> ErrorCategory {
+    match error {
+        CacheServiceError::Config(_) | CacheServiceError::NoActiveProfile => {
+            ErrorCategory::Configuration
+        }
+        CacheServiceError::Clock(_) => ErrorCategory::General,
+        CacheServiceError::Cache(_) | CacheServiceError::Cleanup(_) => ErrorCategory::Cache,
     }
 }
 
@@ -396,14 +406,6 @@ mod tests {
     }
 
     #[test]
-    fn not_implemented_error_contains_only_the_static_command_name() {
-        let error = AppError::CommandNotImplemented { command: "cache" };
-
-        assert_eq!(error.to_string(), "command `cache` is not implemented yet");
-        assert_eq!(error.exit_code(), 1);
-    }
-
-    #[test]
     fn failed_credential_cleanup_uses_the_credential_exit_code() {
         let error = AppError::Profile(ProfileServiceError::CredentialCleanup {
             orphaned_key: crate::domain::CredentialKey::new(crate::domain::CredentialScope::Source),
@@ -414,6 +416,21 @@ mod tests {
 
         assert_eq!(error.exit_code(), 11);
         assert!(!error.to_string().contains("password"));
+    }
+
+    #[test]
+    fn cache_commands_keep_configuration_and_filesystem_exit_categories_distinct() {
+        assert_eq!(
+            AppError::Cache(CacheServiceError::NoActiveProfile).exit_code(),
+            10
+        );
+        assert_eq!(
+            AppError::Cache(CacheServiceError::Cleanup(
+                crate::infrastructure::cache_cleanup::CacheCleanupError::InvalidManagedPath
+            ))
+            .exit_code(),
+            50
+        );
     }
 
     #[test]

@@ -219,7 +219,17 @@ $REPRODB pull sagatec --fresh
 
 Compare a indicação `new dump`/`reused`, a idade do cache e o aviso antes da substituição local. `--fresh` deve gerar outro UUID. Esses comandos alteram `salt_sagatec` e o registro correspondente no `salt_central` do target configurado.
 
-Somente os comandos de `cache` ainda falham explicitamente até a próxima issue. A prévia continua disponível para avaliar o fluxo sem tocar nos bancos:
+Inspecione então a pasta local e compare os UUIDs, idades e estados de integridade:
+
+```bash
+$REPRODB cache list
+$REPRODB cache clean
+$REPRODB cache purge sagatec
+```
+
+`cache list` lê os dumps completos para validar SHA-256 e pode demorar em caches grandes. `clean` remove somente itens vencidos/abandonados; `purge` remove os dumps do tenant somente no profile ativo e não altera o database já restaurado no `mysql-8`.
+
+A prévia continua disponível para avaliar o fluxo sem tocar nos bancos:
 
 ```bash
 $REPRODB pull sagatec --preview

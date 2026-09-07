@@ -343,7 +343,7 @@ Os IDs `RDB-NNN` abaixo são estáveis dentro deste documento e podem ser usados
 | 2 — Configuração/setup | RDB-020 a RDB-026 | Source profiles e target Docker configuráveis com credenciais seguras |
 | 3 — Tenant Salt | RDB-030 a RDB-033 | Alias/ID resolvido pelo `salt_central` |
 | 4 — Dump/cache | RDB-041 a RDB-046 | Artefato Zstd atômico, íntegro e reutilizável |
-| 5 — Restore/pull | RDB-050 a RDB-055 | Tenant restaurado e inicializável pelo Salt com um comando |
+| 5 — Restore/pull | RDB-050 a RDB-057 | Tenant restaurado e inicializável pelo Salt com target explícito, cache e ETA |
 | 6 — Resiliência | RDB-060 a RDB-064 | Falhas, cancelamento, performance e macOS/Linux cobertos |
 | 7 — Produção | RDB-070 a RDB-074 | TLS, compatibilidade e piloto aprovados |
 
@@ -787,9 +787,31 @@ Contrato e evidências: [`docs/pull-command.md`](pull-command.md).
 
 **Labels:** `priority:p1`, `type:feature`, `area:cache`, `area:cli`
 
-**Escopo:** `list`, `clean` e `purge TENANT`, mostrando tamanho, idade, expiração, profile e integridade.
+**Status:** implementada — `list` inventaria todos os profiles e verifica metadata, identidade, tamanho e SHA-256 sob lease; `clean` remove somente expirados/partials/deleções interrompidas; `purge TENANT` atua no profile ativo e aceita lookup ou tenant ID canônico.
 
 **Aceite:** nunca remove artefato locked; remoções materiais são reportadas.
+
+Contrato e evidências: [`docs/cache-commands.md`](cache-commands.md).
+
+#### RDB-056 — Selecionar target e database no `pull`
+
+**Labels:** `priority:p0`, `type:feature`, `area:cli`, `area:restore`, `area:docker`
+
+**Escopo:** permitir múltiplos targets locais cadastrados pelo `setup`, com um target default. Em terminal interativo, `pull` mostra os targets MySQL disponíveis/configurados e pergunta o container e o nome do database de destino; os defaults são o target ativo e o database vindo do dump. Flags explícitas equivalentes devem manter automação possível.
+
+**Barreiras:** o target continua sendo um container Docker atestado; database customizado passa pelo value object, bloqueio de schemas administrativos e política de prefixo local. Quando um source profile local puder ser associado a um container Docker, persistir sua identidade e impedir `DROP` no mesmo container/database do source.
+
+**Aceite:** teste com dois containers MySQL exporta do A e restaura no B; aceitar os prompts sem editar preserva o nome original; escolher outro nome restaura somente esse database; cache hit também oferece a mesma escolha.
+
+#### RDB-057 — Exibir ETA estimado durante dump
+
+**Labels:** `priority:p1`, `type:feature`, `area:cli`, `area:mysql`, `area:performance`
+
+**Escopo:** coletar no preflight uma estimativa lógica com `information_schema.tables`, combinar o total estimado com os bytes SQL realmente recebidos e recalcular a duração restante depois de uma janela mínima de amostragem.
+
+**UX:** mostrar `ETA ~mm:ss` e identificar visualmente que é uma estimativa. Não prometer percentual exato: BLOBs, escaping, índices e estatísticas do MySQL fazem o tamanho do dump textual divergir do tamanho das tabelas.
+
+**Aceite:** ETA não aparece sem base suficiente, nunca divide por zero, se ajusta durante o stream e deixa de mostrar uma duração enganosa quando a estimativa já foi ultrapassada.
 
 ### Milestone 6 — Resiliência, performance e cross-platform
 

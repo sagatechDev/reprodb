@@ -8,7 +8,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    domain::{DumpArtifactMetadata, DumpId, ProfileName, TenantId},
+    domain::{DumpArtifactMetadata, DumpId, ProfileName, TenantId, TenantLookup},
     infrastructure::artifact_store::{
         ArtifactStoreError, METADATA_FILE_NAME, PART_SUFFIX, PROFILES_DIRECTORY,
         try_acquire_exclusive_artifact_lock,
@@ -47,6 +47,13 @@ pub struct CacheCleanupReport {
     pub invalid_entries_skipped: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CachePurgeReport {
+    pub artifacts_removed: u64,
+    pub locked_entries_skipped: u64,
+    pub invalid_entries_skipped: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct LocalCacheCleaner {
     cache_root: PathBuf,
@@ -77,6 +84,64 @@ impl LocalCacheCleaner {
                 }
                 for entry in read_directories(&tenant)? {
                     self.clean_entry(&entry, policy, &mut report)?;
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    pub fn purge(
+        &self,
+        profile: &ProfileName,
+        tenant_lookup: &TenantLookup,
+    ) -> Result<CachePurgeReport, CacheCleanupError> {
+        let mut report = CachePurgeReport::default();
+        let profile_path = self
+            .cache_root
+            .join(PROFILES_DIRECTORY)
+            .join(profile.as_str());
+        for tenant_path in read_directories(&profile_path)? {
+            let Some(tenant_name) = tenant_path.file_name().and_then(|name| name.to_str()) else {
+                report.invalid_entries_skipped += 1;
+                continue;
+            };
+            let Ok(tenant_id) = TenantId::try_from(tenant_name) else {
+                report.invalid_entries_skipped += 1;
+                continue;
+            };
+            let direct_tenant_match = tenant_id.as_str() == tenant_lookup.as_str();
+            for artifact_path in read_directories(&tenant_path)? {
+                let Some(artifact_name) = artifact_path.file_name().and_then(|name| name.to_str())
+                else {
+                    report.invalid_entries_skipped += 1;
+                    continue;
+                };
+                if artifact_name.parse::<DumpId>().is_err() {
+                    continue;
+                }
+                let selected = if direct_tenant_match {
+                    true
+                } else {
+                    match read_metadata(&artifact_path)? {
+                        Some(metadata) => {
+                            metadata.profile == *profile
+                                && metadata.tenant_id == tenant_id
+                                && (metadata.tenant_lookup == *tenant_lookup
+                                    || metadata.tenant_id.as_str() == tenant_lookup.as_str())
+                        }
+                        None => {
+                            report.invalid_entries_skipped += 1;
+                            false
+                        }
+                    }
+                };
+                if !selected {
+                    continue;
+                }
+                match isolate_and_remove(&artifact_path)? {
+                    RemovalOutcome::Removed => report.artifacts_removed += 1,
+                    RemovalOutcome::Locked => report.locked_entries_skipped += 1,
+                    RemovalOutcome::Gone => {}
                 }
             }
         }
@@ -186,21 +251,40 @@ fn remove_if_unlocked(
     kind: RemovalKind,
     report: &mut CacheCleanupReport,
 ) -> Result<(), CacheCleanupError> {
+    match isolate_and_remove(path)? {
+        RemovalOutcome::Removed => match kind {
+            RemovalKind::ExpiredArtifact => report.expired_artifacts_removed += 1,
+            RemovalKind::Partial => report.orphan_partials_removed += 1,
+            RemovalKind::InterruptedDeletion => report.interrupted_deletions_removed += 1,
+        },
+        RemovalOutcome::Locked => {
+            report.locked_entries_skipped += 1;
+        }
+        RemovalOutcome::Gone => {}
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RemovalOutcome {
+    Removed,
+    Locked,
+    Gone,
+}
+
+fn isolate_and_remove(path: &Path) -> Result<RemovalOutcome, CacheCleanupError> {
     let lock = match try_acquire_exclusive_artifact_lock(path) {
         Ok(Some(lock)) => lock,
-        Ok(None) => {
-            report.locked_entries_skipped += 1;
-            return Ok(());
-        }
+        Ok(None) => return Ok(RemovalOutcome::Locked),
         Err(ArtifactStoreError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
-            return Ok(());
+            return Ok(RemovalOutcome::Gone);
         }
         Err(error) => return Err(error.into()),
     };
     let deletion_path = deletion_path(path)?;
     match fs::rename(path, &deletion_path) {
         Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(RemovalOutcome::Gone),
         Err(source) => {
             return Err(CacheCleanupError::Io {
                 operation: "isolate a cache artifact for deletion",
@@ -213,12 +297,7 @@ fn remove_if_unlocked(
         operation: "remove an isolated cache artifact",
         source,
     })?;
-    match kind {
-        RemovalKind::ExpiredArtifact => report.expired_artifacts_removed += 1,
-        RemovalKind::Partial => report.orphan_partials_removed += 1,
-        RemovalKind::InterruptedDeletion => report.interrupted_deletions_removed += 1,
-    }
-    Ok(())
+    Ok(RemovalOutcome::Removed)
 }
 
 fn read_metadata(path: &Path) -> Result<Option<DumpArtifactMetadata>, CacheCleanupError> {
@@ -489,6 +568,40 @@ mod tests {
         drop(hit);
         let report = cleaner.clean(policy(1_000)).unwrap();
         assert_eq!(report.expired_artifacts_removed, 1);
+        assert!(!artifact.path.exists());
+    }
+
+    #[tokio::test]
+    async fn purge_resolves_an_alias_and_preserves_a_leased_artifact() {
+        let directory = tempdir().unwrap();
+        let artifact = publish(directory.path(), 100).await;
+        let profile = profile();
+        let tenant = tenant();
+        let database = DatabaseName::try_from("salt_sagatec").unwrap();
+        let validator = LocalCacheValidator::new(LocalArtifactStore::new(directory.path()));
+        let hit = validator
+            .lookup(&CacheLookup {
+                profile: &profile,
+                tenant_id: &tenant,
+                database: &database,
+                source_fingerprint: Sha256Digest::from_bytes([1; 32]),
+                policy_version: 1,
+                now_unix_seconds: 150,
+                ttl_seconds: 1_000,
+                fresh: false,
+            })
+            .unwrap();
+        let cleaner = LocalCacheCleaner::new(directory.path());
+        let lookup = TenantLookup::try_from("sagatec").unwrap();
+
+        let report = cleaner.purge(&profile, &lookup).unwrap();
+        assert_eq!(report.artifacts_removed, 0);
+        assert_eq!(report.locked_entries_skipped, 1);
+        assert!(artifact.path.exists());
+
+        drop(hit);
+        let report = cleaner.purge(&profile, &lookup).unwrap();
+        assert_eq!(report.artifacts_removed, 1);
         assert!(!artifact.path.exists());
     }
 

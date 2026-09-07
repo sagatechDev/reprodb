@@ -15,6 +15,7 @@ O projeto está no início da implementação. O backlog e as decisões técnica
 - [`docs/restore-engine.md`](docs/restore-engine.md), para as barreiras e o pipeline streaming de restore;
 - [`docs/restore-command.md`](docs/restore-command.md), para executar um restore gerenciado por dump ID;
 - [`docs/pull-command.md`](docs/pull-command.md), para o fluxo completo de cache, dump e restore;
+- [`docs/cache-commands.md`](docs/cache-commands.md), para inspecionar e limpar os dumps sob `~/.reprodb`;
 - [`docs/local-tenant-registration.md`](docs/local-tenant-registration.md), para o cadastro seguro pós-restore no `salt_central` local;
 - [`docs/ui-ux-test-guide.md`](docs/ui-ux-test-guide.md), para experimentar a CLI sem alterar a máquina.
 
@@ -38,7 +39,7 @@ Os spikes são deliberadamente separados do crate principal e não representam a
 
 ## Prévia da experiência
 
-Enquanto os demais fluxos ainda estão sendo implementados, é possível percorrer a UX planejada sem acessar Docker, MySQL, Keychain ou arquivos de configuração:
+Também é possível percorrer a UX planejada sem acessar Docker, MySQL, Keychain ou arquivos de configuração:
 
 ```bash
 ./scripts/preview-cli.sh

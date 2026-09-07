@@ -1,3 +1,4 @@
+mod cache_service;
 mod credential_transaction;
 mod doctor_service;
 mod dump_service;
@@ -9,6 +10,10 @@ mod restore_engine;
 mod restore_service;
 mod setup_service;
 
+pub use cache_service::{
+    CacheListEntry, CacheListReport, CacheListStatus, CachePurgeReady, CacheService,
+    CacheServiceError,
+};
 pub use credential_transaction::{CredentialProvisionError, persist_config_with_credential};
 pub use doctor_service::{
     DoctorCheck, DoctorDockerContainer, DoctorDockerError, DoctorDockerInspector,

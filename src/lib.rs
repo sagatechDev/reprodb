@@ -12,8 +12,8 @@ pub mod domain;
 pub mod error;
 pub mod infrastructure;
 
-use cli::ProfileCommands;
 use cli::output::OutputStyle;
+use cli::{CacheCommands, ProfileCommands};
 pub use cli::{Cli, Commands};
 use domain::{ProfileName, TenantLookup};
 pub use error::{AppError, ErrorCategory};
@@ -260,8 +260,26 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
             print!("{}", cli::pull::render_complete(&style, &ready));
             Ok(())
         }
-        command => Err(AppError::CommandNotImplemented {
-            command: command.name(),
-        }),
+        Commands::Cache(arguments) => {
+            let service = application::CacheService::new(ConfigRepository::discover()?);
+            match arguments.command {
+                CacheCommands::List => {
+                    print!("{}", cli::cache::render_list_start(&style));
+                    std::io::stdout().flush().map_err(AppError::Output)?;
+                    let report = service.list()?;
+                    print!("{}", cli::cache::render_list(&style, &report));
+                }
+                CacheCommands::Clean => {
+                    let report = service.clean()?;
+                    print!("{}", cli::cache::render_clean(&style, report));
+                }
+                CacheCommands::Purge(arguments) => {
+                    let tenant = TenantLookup::try_from(arguments.tenant)?;
+                    let ready = service.purge(&tenant)?;
+                    print!("{}", cli::cache::render_purge(&style, &ready));
+                }
+            }
+            Ok(())
+        }
     }
 }

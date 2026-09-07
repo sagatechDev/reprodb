@@ -101,6 +101,56 @@ fn cache_requires_a_subcommand() {
 }
 
 #[test]
+fn cache_list_is_useful_before_the_first_dump() {
+    let home = tempfile::tempdir().unwrap();
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .env("REPRODB_HOME", home.path())
+        .args(["cache", "list"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("reprodb cache")
+                .and(predicate::str::contains(
+                    home.path().join("cache").display().to_string(),
+                ))
+                .and(predicate::str::contains("No managed dumps found"))
+                .and(predicate::str::contains("not implemented").not()),
+        );
+}
+
+#[test]
+fn cache_clean_is_idempotent_for_an_empty_home() {
+    let home = tempfile::tempdir().unwrap();
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .env("REPRODB_HOME", home.path())
+        .args(["cache", "clean"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Cleanup complete · 0 items removed")
+                .and(predicate::str::contains("Expired dumps:          0")),
+        );
+}
+
+#[test]
+fn cache_purge_requires_an_active_profile() {
+    let home = tempfile::tempdir().unwrap();
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .env("REPRODB_HOME", home.path())
+        .args(["cache", "purge", "sagatec"])
+        .assert()
+        .failure()
+        .code(10)
+        .stderr(predicate::str::contains("no active source profile"));
+}
+
+#[test]
 fn restore_searches_only_the_isolated_managed_cache() {
     let home = tempfile::tempdir().unwrap();
     let mut command = Command::cargo_bin("reprodb").unwrap();

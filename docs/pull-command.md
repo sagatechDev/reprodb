@@ -68,7 +68,7 @@ A CLI mostra o domain conhecido, mas não inventa URL ou porta HTTP do Salt.
 - profiles de produção continuam bloqueados para novos dumps até o hardening correspondente;
 - cancelamento completo por `Ctrl+C` pertence à RDB-060.
 
-O TTL inicial continua fixado em duas horas. Configuração de TTL e comandos de inspeção/limpeza pertencem à RDB-055.
+O TTL inicial continua fixado em duas horas. Os comandos de inspeção/limpeza estão disponíveis em [`cache-commands.md`](cache-commands.md); tornar o TTL configurável permanece uma evolução separada.
 
 ## Evidência real
 

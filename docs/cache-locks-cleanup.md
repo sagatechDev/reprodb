@@ -45,6 +45,6 @@ A remoção nunca começa diretamente com `remove_dir_all`. Sob lock exclusivo, 
 
 Se o processo cair depois do rename, a próxima limpeza reconhece o nome `.deleting-<uuid>`, readquire o lock exclusivo e conclui a remoção. Symlinks e diretórios fora dos formatos gerenciados não são seguidos.
 
-Entradas com relógio futuro ou metadata inválida são preservadas e contabilizadas no relatório, pois apagá-las oportunisticamente esconderia um problema que deve aparecer em `cache list`/`cache clean`. Esses comandos e a chamada no início dos fluxos operacionais serão conectados nas issues de CLI correspondentes.
+Entradas com relógio futuro ou metadata inválida são preservadas e contabilizadas no relatório, pois apagá-las oportunisticamente esconderia um problema que aparece em `cache list`/`cache clean`. Os comandos usam o mesmo protocolo de lease desta infraestrutura.
 
-O relatório diferencia artefatos expirados, partials órfãos, deleções interrompidas, locks ativos, relógio futuro e entradas inválidas. As futuras mensagens da CLI não precisarão inferir comportamento por texto de erro.
+O relatório diferencia artefatos expirados, partials órfãos, deleções interrompidas, locks ativos, relógio futuro e entradas inválidas. `cache purge TENANT` limita a remoção ao profile ativo e também mantém qualquer artefato com lease ativa.
