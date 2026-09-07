@@ -845,7 +845,7 @@ Critério da milestone: falhas deixam estado compreensível e o fluxo é comprov
 
 **Labels:** `priority:p0`, `type:test`, `area:cross-platform`
 
-**Status:** em andamento — o CI Linux já sobe source e target MySQL 8.4 isolados, cria fixtures Salt, prova dump/restore/cache hit e remove os containers. Falta levar `setup`/profile para um modo automatizável seguro e então exercitar o binário em vez de apenas os serviços reais.
+**Status:** implementada, aguardando a primeira execução remota do workflow — o teste sobe source e target MySQL 8.4 isolados e executa o binário real em processos separados: `setup --non-interactive`, `profile add --non-interactive`, `pull`, desligamento do source, novo `pull` por cache e comparação do target. Senhas entram somente por stdin. Um credential store persistente em arquivo existe exclusivamente sob a feature de compilação `test-file-credential-store`, exige diretório absoluto isolado, usa nomes derivados por SHA-256 e permissões `0700/0600` no Unix; o backend não é compilado no binário normal. O workflow Linux executa exatamente esse teste e remove os containers ao final. A execução local completa passou em Docker Desktop; o checkbox do DoD permanece aberto até o GitHub Actions confirmar o runner Linux.
 
 **Aceite:** binário real executa `setup` não interativo de teste, profile, pull, cache hit e comparação do target em CI com Docker.
 

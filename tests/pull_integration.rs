@@ -325,6 +325,247 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
     );
 }
 
+#[cfg(feature = "test-file-credential-store")]
+#[tokio::test]
+#[ignore = "creates isolated MySQL containers and executes the real CLI across processes"]
+async fn real_cli_configures_pulls_and_reuses_cache_with_the_source_offline() {
+    let (context, _) = DockerTargetDiscovery::new(TokioProcessRunner)
+        .discover()
+        .await
+        .unwrap();
+    let suffix = Uuid::new_v4().simple().to_string();
+    let source_name = format!("reprodb-cli-source-{}", &suffix[..12]);
+    let target_name = format!("reprodb-cli-target-{}", &suffix[..12]);
+    let source_password = SecretString::from("reprodb-cli-source-password");
+    let target_password = SecretString::from("reprodb-cli-target-password");
+    let client = ClientCatalog::resolve("8.4").unwrap();
+    let _source_guard = start_mysql_container(
+        &context,
+        &source_name,
+        client.image(),
+        &source_password,
+        true,
+        false,
+    );
+    let _target_guard = start_mysql_container(
+        &context,
+        &target_name,
+        client.image(),
+        &target_password,
+        false,
+        true,
+    );
+    let (_, candidates) = DockerTargetDiscovery::new(TokioProcessRunner)
+        .discover()
+        .await
+        .unwrap();
+    let source = candidates
+        .iter()
+        .find(|candidate| candidate.name.as_str() == source_name)
+        .cloned()
+        .expect("the temporary CLI source must be discovered");
+    let source_port = source
+        .published_ports
+        .first()
+        .expect("the CLI source port must be published")
+        .host_port;
+    let target = candidates
+        .iter()
+        .find(|candidate| candidate.name.as_str() == target_name)
+        .cloned()
+        .expect("the temporary CLI target must be discovered");
+
+    wait_for_mysql(
+        &context,
+        source.id.as_str(),
+        client.image(),
+        &source_password,
+    )
+    .await;
+    wait_for_mysql(
+        &context,
+        target.id.as_str(),
+        client.image(),
+        &target_password,
+    )
+    .await;
+    create_salt_central(
+        &context,
+        source.id.as_str(),
+        client.image(),
+        &source_password,
+    );
+    create_salt_central(
+        &context,
+        target.id.as_str(),
+        client.image(),
+        &target_password,
+    );
+
+    let database = DatabaseName::try_from(format!("salt_cli_{suffix}")).unwrap();
+    let domain = DomainAlias::try_from(format!("cli-e2e-{}", &suffix[..16])).unwrap();
+    run_mysql_query(
+        &context,
+        source.id.as_str(),
+        client.image(),
+        &source_password,
+        MysqlTlsMode::Required,
+        None,
+        &format!(
+            "CREATE DATABASE `{database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; \
+             CREATE TABLE `{database}`.`cli_items` (`id` BIGINT NOT NULL PRIMARY KEY, `label` VARCHAR(255) NOT NULL) ENGINE=InnoDB; \
+             INSERT INTO `{database}`.`cli_items` VALUES (1, 'Sagatec'), (2, 'Polymer'); \
+             INSERT INTO `salt_central`.`tenants` (`id`, `created_at`, `updated_at`, `data`) VALUES (CONVERT(0x{tenant} USING utf8mb4), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, JSON_OBJECT('tenancy_db_name', CONVERT(0x{database_hex} USING utf8mb4), 'tenancy_app_color', 'blue')); \
+             INSERT INTO `salt_central`.`domains` (`domain`, `tenant_id`, `created_at`, `updated_at`) VALUES (CONVERT(0x{domain_hex} USING utf8mb4), CONVERT(0x{tenant} USING utf8mb4), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            tenant = hex_utf8(database.as_str()),
+            database_hex = hex_utf8(database.as_str()),
+            domain_hex = hex_utf8(domain.as_str()),
+        ),
+    )
+    .expect("the CLI source fixture must be created");
+
+    let home = TempDir::new().unwrap();
+    let credential_dir = home.path().join("test-credentials");
+    let setup = run_real_cli(
+        home.path(),
+        &credential_dir,
+        &[
+            "setup",
+            "--non-interactive",
+            "--target",
+            &target_name,
+            "--password-stdin",
+            "--yes",
+            "--color",
+            "never",
+        ],
+        Some(target_password.expose_secret()),
+    );
+    assert_cli_success("setup", &setup);
+
+    let source_port = source_port.to_string();
+    let profile = run_real_cli(
+        home.path(),
+        &credential_dir,
+        &[
+            "profile",
+            "add",
+            "cli-source",
+            "--non-interactive",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &source_port,
+            "--username",
+            "root",
+            "--tls",
+            "required",
+            "--password-stdin",
+            "--color",
+            "never",
+        ],
+        Some(source_password.expose_secret()),
+    );
+    assert_cli_success("profile add", &profile);
+
+    let pull_arguments = [
+        "pull",
+        domain.as_str(),
+        "--target",
+        &target_name,
+        "--database",
+        database.as_str(),
+        "--color",
+        "never",
+    ];
+    let first = run_real_cli(home.path(), &credential_dir, &pull_arguments, None);
+    assert_cli_success("first pull", &first);
+    let first_stdout = String::from_utf8_lossy(&first.stdout);
+    assert!(first_stdout.contains("No matching cached dump was found."));
+    assert!(first_stdout.contains("Cache:      new dump"));
+
+    let stopped = Command::new("docker")
+        .args(["--context", &context, "container", "stop", &source_name])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .status()
+        .expect("Docker must stop the CLI source");
+    assert!(
+        stopped.success(),
+        "the CLI source must stop before cache hit"
+    );
+
+    let second = run_real_cli(home.path(), &credential_dir, &pull_arguments, None);
+    assert_cli_success("cached pull", &second);
+    let second_stdout = String::from_utf8_lossy(&second.stdout);
+    assert!(second_stdout.contains("Cached dump found"));
+    assert!(second_stdout.contains("Cache:      reused"));
+
+    let restored = run_mysql_query(
+        &context,
+        target.id.as_str(),
+        client.image(),
+        &target_password,
+        MysqlTlsMode::Required,
+        Some(&database),
+        "SELECT id, label FROM cli_items ORDER BY id",
+    )
+    .expect("the restored CLI target must be queryable");
+    assert_eq!(
+        String::from_utf8(restored).unwrap(),
+        "1\tSagatec\n2\tPolymer\n"
+    );
+}
+
+#[cfg(feature = "test-file-credential-store")]
+fn run_real_cli(
+    home: &std::path::Path,
+    credential_dir: &std::path::Path,
+    arguments: &[&str],
+    stdin_secret: Option<&str>,
+) -> std::process::Output {
+    use std::io::Write as _;
+
+    let mut child = Command::new(assert_cmd::cargo::cargo_bin!("reprodb"))
+        .args(arguments)
+        .env("REPRODB_HOME", home)
+        .env("REPRODB_TEST_CREDENTIAL_DIR", credential_dir)
+        .stdin(if stdin_secret.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the real reprodb binary must start");
+    if let Some(secret) = stdin_secret {
+        let mut stdin = child.stdin.take().expect("CLI stdin must be piped");
+        stdin
+            .write_all(format!("{secret}\n").as_bytes())
+            .expect("the test password must reach stdin");
+    }
+    let output = child
+        .wait_with_output()
+        .expect("the real reprodb binary must finish");
+    for secret in ["reprodb-cli-source-password", "reprodb-cli-target-password"] {
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(secret));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+    }
+    output
+}
+
+#[cfg(feature = "test-file-credential-store")]
+fn assert_cli_success(operation: &str, output: &std::process::Output) {
+    assert!(
+        output.status.success(),
+        "{operation} failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
 struct TemporaryDockerContainer {
     context: String,
     name: String,

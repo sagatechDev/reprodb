@@ -63,5 +63,5 @@ jobs:
       - name: Check Docker
         run: docker info
 
-      - name: Pull, restore and reuse cache
-        run: cargo test --test pull_integration -- --ignored --nocapture
+      - name: Configure, pull, restore and reuse cache through the real CLI
+        run: cargo test --features test-file-credential-store --test pull_integration real_cli_configures_pulls_and_reuses_cache_with_the_source_offline -- --ignored --nocapture

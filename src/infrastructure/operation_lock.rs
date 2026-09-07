@@ -112,6 +112,14 @@ pub struct OperationLockGuard {
     _file: File,
 }
 
+impl Drop for OperationLockGuard {
+    fn drop(&mut self) {
+        // Explicit unlock avoids relying on platform-specific close timing.
+        // Closing the descriptor remains the final fallback if unlock fails.
+        let _ = fs4::FileExt::unlock(&self._file);
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum OperationLockError {
     #[error("another local {scope:?} operation is already running for this database")]

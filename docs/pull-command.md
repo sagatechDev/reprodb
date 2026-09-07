@@ -80,8 +80,19 @@ O TTL inicial continua fixado em duas horas. Os comandos de inspeção/limpeza e
 
 ## Evidência real
 
-O teste integrado cria um tenant e database efêmeros no source `mysql-8` e inicia um segundo container MySQL temporário como target. A primeira chamada produz o dump de A e restaura em B; depois a credencial source é removida do store em memória e a segunda chamada precisa concluir pelo cache. Ao final, dados, registro central e UUID são comparados e o database source, os registros source e o container target são removidos:
+O teste integrado de serviços cria um tenant e database efêmeros no source `mysql-8` e inicia um segundo container MySQL temporário como target. A primeira chamada produz o dump de A e restaura em B; depois a credencial source é removida do store em memória e a segunda chamada precisa concluir pelo cache. Ao final, dados, registro central e UUID são comparados e os containers são removidos:
 
 ```bash
 cargo test --test pull_integration -- --ignored --nocapture
 ```
+
+O CI Linux usa um cenário adicional que atravessa o executável real e persiste estado entre processos. Ele executa `setup`, `profile add` e dois `pull`; antes do segundo `pull`, desliga o source para provar que o cache hit não depende mais dele:
+
+```bash
+cargo test --features test-file-credential-store \
+  --test pull_integration \
+  real_cli_configures_pulls_and_reuses_cache_with_the_source_offline \
+  -- --ignored --nocapture
+```
+
+A feature `test-file-credential-store` e `REPRODB_TEST_CREDENTIAL_DIR` são somente infraestrutura de teste. Elas permitem que processos do binário compartilhem credenciais fictícias sem depender do Keychain/Secret Service do runner. O diretório deve ser absoluto e descartável. Builds normais não compilam esse backend; uso humano continua no credential store nativo do sistema operacional.

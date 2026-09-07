@@ -67,6 +67,7 @@ pub async fn execute_with_cancellation(
 ) -> Result<(), AppError> {
     tracing::debug!(command = cli.command.name(), "command received");
     let style = OutputStyle::stdout(cli.color);
+    let credential_store = infrastructure::credentials::RuntimeCredentialStore::discover();
 
     match cli.command {
         Commands::Setup(arguments) if arguments.preview => {
@@ -142,11 +143,7 @@ pub async fn execute_with_cancellation(
                 infrastructure::process::TokioProcessRunner,
             );
             let configured = service
-                .configure(
-                    &infrastructure::credentials::OsCredentialStore,
-                    &verifier,
-                    input,
-                )
+                .configure(&credential_store, &verifier, input)
                 .await?;
             print!("{}", cli::setup::render_configured(&style, &configured));
             Ok(())
@@ -174,13 +171,7 @@ pub async fn execute_with_cancellation(
                 let verifier = infrastructure::mysql::DockerSourceProfileVerifier::new(
                     infrastructure::process::TokioProcessRunner,
                 );
-                let created = service
-                    .add(
-                        &infrastructure::credentials::OsCredentialStore,
-                        &verifier,
-                        input,
-                    )
-                    .await?;
+                let created = service.add(&credential_store, &verifier, input).await?;
                 print!("{}", cli::profile::render_created(&style, &created));
                 Ok(())
             }
@@ -205,9 +196,7 @@ pub async fn execute_with_cancellation(
                     return Ok(());
                 }
                 let service = application::ProfileService::new(ConfigRepository::discover()?);
-                let removal = service
-                    .remove(&infrastructure::credentials::OsCredentialStore, &name)
-                    .await?;
+                let removal = service.remove(&credential_store, &name).await?;
                 print!("{}", cli::profile::render_removed(&style, &name, removal));
                 Ok(())
             }
@@ -231,13 +220,7 @@ pub async fn execute_with_cancellation(
             );
             let storage = infrastructure::filesystem::LocalFilesystemInspector;
             let report = service
-                .run(
-                    &infrastructure::credentials::OsCredentialStore,
-                    &docker,
-                    &storage,
-                    &source,
-                    &target,
-                )
+                .run(&credential_store, &docker, &storage, &source, &target)
                 .await;
             print!("{}", cli::doctor::render(&style, &report));
             if let Some(kind) = report.first_failure_kind() {
@@ -258,13 +241,7 @@ pub async fn execute_with_cancellation(
             let executor =
                 infrastructure::mysql::DockerMysqlDumpExecutor::new(cancellation.clone());
             let result = service
-                .create(
-                    &infrastructure::credentials::OsCredentialStore,
-                    &workflow,
-                    &workflow,
-                    &executor,
-                    tenant,
-                )
+                .create(&credential_store, &workflow, &workflow, &executor, tenant)
                 .await;
             progress.finish();
             let created = result?;
@@ -292,7 +269,7 @@ pub async fn execute_with_cancellation(
                 infrastructure::mysql::DockerMysqlRestoreExecutor::new(cancellation.clone());
             let restored = service
                 .restore_to(
-                    &infrastructure::credentials::OsCredentialStore,
+                    &credential_store,
                     &infrastructure::mysql::DockerLocalTargetAttestor::new(
                         infrastructure::process::TokioProcessRunner,
                     ),
@@ -363,7 +340,7 @@ pub async fn execute_with_cancellation(
                 infrastructure::mysql::DockerMysqlRestoreExecutor::new(cancellation.clone());
             let result = service
                 .pull(
-                    &infrastructure::credentials::OsCredentialStore,
+                    &credential_store,
                     application::PullDumpDependencies {
                         tenant_resolver: &workflow,
                         preflight: &workflow,
