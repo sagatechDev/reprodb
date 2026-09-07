@@ -853,6 +853,8 @@ Critério da milestone: falhas deixam estado compreensível e o fluxo é comprov
 
 **Labels:** `priority:p0`, `type:test`, `area:cross-platform`
 
+**Status:** implementada e validada em Apple Silicon (`arm64`) — a suite reproduzível cobre testes, Clippy, permissões, locks/sinais, Keychain temporário, Docker Desktop, descoberta/conexão com o `mysql-8` e o E2E do binário entre dois containers. A execução Intel (`x86_64`) permanece pendente e será obrigatória somente se essa arquitetura ainda fizer parte do parque suportado.
+
 **Escopo:** paths, keychain, Docker Desktop, host gateway, imagem do client, sinais e permissões.
 
 **Aceite:** execução documentada em pelo menos Apple Silicon; Intel fica obrigatório se fizer parte do parque real.
@@ -947,7 +949,7 @@ Não iniciar integração de produção antes de concluir as milestones 0 a 6.
 - [x] Registro central local mínimo é criado sem copiar secrets.
 - [x] Ctrl+C limpa child, partial, option file e lock.
 - [ ] E2E passa no Linux.
-- [ ] Smoke suite passa no macOS usado pela equipe.
+- [x] Smoke suite passa no macOS Apple Silicon usado no desenvolvimento; Intel depende da confirmação do parque suportado.
 
 ## 10. Definition of Done para produção
 
