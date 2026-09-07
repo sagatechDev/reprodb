@@ -2,7 +2,7 @@
 
 CLI local em Rust para obter dumps MySQL de tenants do Salt, mantê-los em cache temporário e restaurá-los num MySQL Docker para reprodução de problemas.
 
-O projeto está no início da implementação. O backlog e as decisões técnicas ficam em:
+O fluxo local está funcionalmente implementado e validado no macOS; o MVP ainda aguarda os gates de Docker Engine, Secret Service e E2E real no Linux. O backlog e as decisões técnicas ficam em:
 
 - [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md);
 - [`docs/adr`](docs/adr);
@@ -20,6 +20,7 @@ O projeto está no início da implementação. O backlog e as decisões técnica
 - [`docs/ui-ux-test-guide.md`](docs/ui-ux-test-guide.md), para experimentar a CLI sem alterar a máquina.
 - [`docs/macos-smoke.md`](docs/macos-smoke.md), para validar a integração local no macOS.
 - [`docs/performance-benchmark.md`](docs/performance-benchmark.md), para medir dump, restore, cache, compressão e memória.
+- [`docs/local-mvp-definition-of-done.md`](docs/local-mvp-definition-of-done.md), para o estado auditado e os gates restantes do MVP local.
 
 ## Desenvolvimento
 

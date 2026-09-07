@@ -164,13 +164,7 @@ Não basta procurar `mysql` no nome da imagem. A descoberta considera:
 - redes Docker;
 - container ID exato.
 
-O setup também oferece criar um container dedicado ao reprodb. Essa é a opção recomendada. Um container criado pela ferramenta recebe a label:
-
-```text
-com.sagatech.reprodb.target=true
-```
-
-Ao selecionar um container existente, o reprodb armazena nome e ID. Se o nome apontar futuramente para outro ID, operações destrutivas são bloqueadas até um novo `setup`.
+No MVP, o setup configura um container existente escolhido pelo desenvolvedor. O reprodb armazena nome e ID; se o nome apontar futuramente para outro ID, operações destrutivas são bloqueadas até um novo `setup`. Criar e administrar um container automaticamente é uma conveniência pós-MVP, não uma condição para o fluxo local solicitado.
 
 ### 3.7 Resolver real do Salt
 
@@ -374,7 +368,7 @@ Critério da milestone: provar conectividade, autenticação, dump, compressão 
 
 **Labels:** `priority:p0`, `type:spike`, `area:mysql`, `area:docker`, `area:cross-platform`
 
-**Status:** em andamento — [resultado do spike](research/docker-client-spike.md); caminho macOS local validado, Linux/VPN pendentes.
+**Status:** em andamento — [resultado do spike](research/docker-client-spike.md); caminho macOS local validado e Docker Engine Linux local pendente. VPN/source externo não bloqueia o MVP local e será validado somente na preparação do profile correspondente.
 
 **Objetivo:** provar que um client container alcança os mesmos hosts acessíveis pelo DBeaver.
 
@@ -388,7 +382,7 @@ Critério da milestone: provar conectividade, autenticação, dump, compressão 
 - stdout e stderr separados;
 - cancelamento e propagação de exit code.
 
-**Aceite:** `SELECT VERSION()` e um dump pequeno funcionam nos dois sistemas. Se VPN falhar, abrir ADR de runtime host antes de continuar.
+**Aceite do MVP local:** `SELECT VERSION()` e um dump pequeno entre MySQLs locais funcionam nos dois sistemas. A validação via VPN é um gate posterior do source externo e, se falhar, exige ADR de runtime host antes de habilitar esse profile.
 
 **Depende de:** RDB-001 apenas para escolher a imagem final; pode começar com o MySQL local.
 
@@ -535,7 +529,7 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 
 **Labels:** `priority:p0`, `type:feature`, `area:mysql`, `area:docker`
 
-**Status:** implementação concluída e validada no Docker Desktop/macOS contra o `mysql-8` local; compilação Linux validada, com execução real em Docker Engine Linux/VPN ainda acompanhada pela RDB-002.
+**Status:** implementação concluída e validada no Docker Desktop/macOS contra o `mysql-8` local; compilação Linux validada, com execução real em Docker Engine Linux ainda acompanhada pela RDB-002. VPN não faz parte do DoD local.
 
 **Escopo:** catálogo versionado, imagem fixada por digest, `image inspect`, `pull`, mount de option file, rede Mac/Linux e execução sem shell interpolation.
 
@@ -559,7 +553,7 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 
 **Labels:** `priority:p0`, `type:feature`, `area:docker`, `area:security`
 
-**Status:** em andamento — descoberta e seleção de containers existentes, rejeição de context remoto, alertas de bind, inicialização confirmada de container parado, senha mascarada, verificação real por ID e persistência transacional estão implementadas e validadas contra `mysql-8` no macOS. Criação de target dedicado e execução real em Linux permanecem pendentes.
+**Status:** implementação concluída no macOS — descoberta e seleção de containers existentes, rejeição de context remoto, alertas de bind, inicialização confirmada de container parado, senha mascarada, verificação real por ID e persistência transacional estão implementadas e validadas contra `mysql-8`. A validação em Docker Engine Linux permanece pendente; criação automática de container foi retirada do MVP.
 
 **Escopo:**
 
@@ -568,7 +562,6 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 - mostrar imagem, estado, versão, porta e redes;
 - mostrar o endereço de bind da porta e alertar para `0.0.0.0`/`::`;
 - permitir escolher existente;
-- oferecer criar container dedicado;
 - pedir credencial do target;
 - guardar container name + ID;
 - validar conexão real.
@@ -935,8 +928,9 @@ RDB-004 ─┘                         │
 
 RDB-005 ─> registro central local ─> pull realmente utilizável no Salt
 
-MVP local completo
-  ─> fault injection + macOS/Linux
+Implementação local completa no macOS
+  ─> Docker Engine + Secret Service + E2E real no Linux
+  ─> MVP local completo em macOS/Linux
   ─> TLS + matriz do source real
   ─> piloto de produção
 ```
@@ -945,22 +939,27 @@ Não iniciar integração de produção antes de concluir as milestones 0 a 6.
 
 ## 9. Definition of Done do MVP local
 
-- [ ] `reprodb setup` encontra ou cria um target MySQL Docker e grava sua identidade.
-- [ ] `profile add` coleta conexão como o DBeaver, testa e salva a senha no keyring.
-- [ ] A versão do MySQL é detectada por consulta, não inferida de `mysql:8`.
-- [ ] O client é uma imagem conhecida, fixada e compatível.
+**Estado revisado em 2026-09-07:** implementação funcional concluída no macOS; **MVP local ainda não encerrado** porque os três gates de Linux abaixo não possuem evidência de execução. São 17 critérios concluídos de 20. A auditoria detalhada e o roteiro de fechamento estão em [`local-mvp-definition-of-done.md`](local-mvp-definition-of-done.md).
+
+- [x] `reprodb setup` encontra um target MySQL Docker existente, permite escolhê-lo e grava sua identidade.
+- [x] `profile add` coleta conexão como o DBeaver, testa e salva a senha no credential store nativo.
+- [x] A versão do MySQL é detectada por consulta, não inferida de `mysql:8`.
+- [x] O client é uma imagem conhecida, fixada e compatível.
 - [x] `reprodb doctor` valida o ambiente implementado antes do dump, com os checks específicos do dump adicionados nas issues da milestone 4.
 - [x] Alias ou tenant ID resolve via `salt_central`.
 - [x] `tenancy_db_name` é respeitado.
-- [ ] Dump usa flags conservadoras e `--set-gtid-purged=OFF`.
+- [x] Dump usa flags conservadoras e `--set-gtid-purged=OFF`.
 - [x] Compressão e restore são streaming.
-- [ ] Nenhum SQL cru é persistido no fluxo normal.
-- [ ] Cache é atômico, possui checksum, TTL e source fingerprint.
+- [x] Nenhum SQL cru é persistido no fluxo normal.
+- [x] Cache é atômico, possui checksum, TTL e source fingerprint.
 - [x] Restore valida o artefato antes de dropar o database.
 - [x] Target Docker remoto ou trocado é bloqueado.
 - [x] Registro central local mínimo é criado sem copiar secrets.
 - [x] Ctrl+C limpa child, partial, option file e lock.
-- [ ] E2E passa no Linux.
+- [x] E2E do binário real passa no Docker Desktop/macOS entre source e target isolados, incluindo cache hit com source desligado.
+- [ ] `setup`, conexão source e networking do client passam em Docker Engine Linux real.
+- [ ] `profile add/get/remove` passam com o Secret Service nativo de uma sessão Linux de desenvolvedor.
+- [ ] E2E do binário real passa num runner Linux com Docker.
 - [x] Smoke suite passa no macOS Apple Silicon usado no desenvolvimento; Intel depende da confirmação do parque suportado.
 
 ## 10. Definition of Done para produção
@@ -986,6 +985,7 @@ Não iniciar integração de produção antes de concluir as milestones 0 a 6.
 - atualização automática da CLI;
 - busca aberta na internet por executáveis;
 - download/instalação silenciosa de pacotes no host;
+- criação e administração automática de container MySQL target;
 - MariaDB ou Percona sem matriz específica;
 - importação arbitrária de `.sql` ou `.sql.zst`;
 - cópia integral de `salt_central`;
