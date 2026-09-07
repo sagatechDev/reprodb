@@ -178,7 +178,7 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
         .restore(
             &credentials,
             &attestor,
-            DockerMysqlRestoreExecutor,
+            DockerMysqlRestoreExecutor::default(),
             DockerLocalTenantWriter::new(TokioProcessRunner),
             lookup.clone(),
             dump_id,
@@ -203,7 +203,7 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
                     .restore(
                         &credentials,
                         &attestor,
-                        DockerMysqlRestoreExecutor,
+                        DockerMysqlRestoreExecutor::default(),
                         DockerLocalTenantWriter::new(TokioProcessRunner),
                         lookup,
                         dump_id,

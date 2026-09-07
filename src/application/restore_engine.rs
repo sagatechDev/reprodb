@@ -179,7 +179,7 @@ mod tests {
         ) -> Result<RestoreMetrics, RestoreExecutorError> {
             self.calls.lock().unwrap().push("import");
             if self.fail_import {
-                return Err(RestoreExecutorError::MysqlStoppedEarly);
+                return Err(RestoreExecutorError::Interrupted);
             }
             Ok(RestoreMetrics::new_for_test(
                 artifact.metadata().uncompressed_bytes,
@@ -294,7 +294,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_import_remains_incomplete_and_same_artifact_can_be_retried() {
+    async fn interrupted_import_remains_incomplete_releases_lock_and_can_be_retried() {
         let directory = tempdir().unwrap();
         let artifact = artifact(&directory.path().join("cache")).await;
         let target =
@@ -310,11 +310,25 @@ mod tests {
 
         assert!(matches!(
             engine.restore(&target, &artifact).await,
-            Err(RestoreEngineError::Execution(_))
+            Err(RestoreEngineError::Execution(
+                RestoreExecutorError::Interrupted
+            ))
         ));
         let state = engine.states.load(&target).unwrap();
         assert_eq!(state.status, RestoreStatus::Incomplete);
         assert_eq!(state.dump_id, artifact.metadata().dump_id);
+        let released = OperationLockManager::new(directory.path().join("cache")).try_acquire(
+            OperationLockKey::target(
+                target.docker_context(),
+                target.container_id(),
+                target.database(),
+            ),
+        );
+        assert!(
+            released.is_ok(),
+            "interruption must release the restore lock"
+        );
+        drop(released);
 
         let retry = RestoreEngine::new(
             FakeExecutor {

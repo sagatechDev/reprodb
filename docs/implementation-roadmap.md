@@ -825,6 +825,8 @@ Critério da milestone: falhas deixam estado compreensível e o fluxo é comprov
 
 **Labels:** `priority:p0`, `type:hardening`, `area:cross-platform`
 
+**Status:** implementada — `Ctrl+C` ativa um token sticky compartilhado; dump/compressão/restore fecham seus streams, encerram e aguardam o child, removem explicitamente o client container efêmero nomeado e retornam exit code 130. Guards preservam option files, locks, dumps completos e removem `.part`.
+
 **Escopo:** Ctrl+C durante dump, compressão e restore; kill + wait; fechamento de stdin; cleanup de option file/partial; liberação de locks.
 
 **Aceite:** nenhum child órfão conhecido, cache completo anterior preservado e exit code 130.
@@ -939,7 +941,7 @@ Não iniciar integração de produção antes de concluir as milestones 0 a 6.
 - [x] Restore valida o artefato antes de dropar o database.
 - [x] Target Docker remoto ou trocado é bloqueado.
 - [x] Registro central local mínimo é criado sem copiar secrets.
-- [ ] Ctrl+C limpa child, partial, option file e lock.
+- [x] Ctrl+C limpa child, partial, option file e lock.
 - [ ] E2E passa no Linux.
 - [ ] Smoke suite passa no macOS usado pela equipe.
 

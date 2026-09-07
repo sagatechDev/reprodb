@@ -74,4 +74,4 @@ Os testes unitários cobrem localização global segura pelo UUID, ID duplicado,
 cargo test --test restore_integration -- --ignored --nocapture
 ```
 
-O tratamento completo de `Ctrl+C` e supervisão explícita dos processos continua pertencendo à RDB-060.
+`Ctrl+C` fecha o stdin do import, encerra e aguarda o `docker run`, remove explicitamente o client container efêmero e libera o lock. Como o banco pode ter sido recriado antes da interrupção, seu estado permanece `incomplete` e o mesmo dump pode ser usado novamente sem acessar o source.

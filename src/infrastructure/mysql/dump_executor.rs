@@ -8,9 +8,11 @@ use tokio::{io::AsyncReadExt, process::Command, task::JoinError};
 use crate::{
     domain::{ApprovedDumpPlan, ProfileName},
     infrastructure::{
+        cancellation::CancellationToken,
         compression::{CompressionError, CompressionMetrics, ZstdCompressor},
         config::SourceProfileConfig,
         credentials::MYSQL_OPTION_FILE_CONTAINER_PATH,
+        docker::{ephemeral_container_name, terminate_ephemeral_run},
         mysql::{ApprovedMysqlClient, DockerClientError, DockerMysqlClientRuntime},
         process::{ProcessSpec, TokioProcessRunner},
     },
@@ -38,8 +40,16 @@ pub trait DumpExecutor: Send + Sync {
     ) -> Result<CompressionMetrics, DumpExecutorError>;
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct DockerMysqlDumpExecutor;
+#[derive(Clone, Debug, Default)]
+pub struct DockerMysqlDumpExecutor {
+    cancellation: CancellationToken,
+}
+
+impl DockerMysqlDumpExecutor {
+    pub fn new(cancellation: CancellationToken) -> Self {
+        Self { cancellation }
+    }
+}
 
 #[async_trait]
 impl DumpExecutor for DockerMysqlDumpExecutor {
@@ -48,6 +58,9 @@ impl DumpExecutor for DockerMysqlDumpExecutor {
         request: DumpExecutionRequest<'_>,
         output: std::fs::File,
     ) -> Result<CompressionMetrics, DumpExecutorError> {
+        if self.cancellation.is_cancelled() {
+            return Err(DumpExecutorError::Interrupted);
+        }
         let runtime = DockerMysqlClientRuntime::new(TokioProcessRunner);
         let option_file = runtime.create_option_file(
             &request.profile.host,
@@ -56,7 +69,8 @@ impl DumpExecutor for DockerMysqlDumpExecutor {
             request.password,
             request.profile.tls_mode,
         )?;
-        let spec = dump_process_spec(&request, option_file.path());
+        let operation_container = ephemeral_container_name("dump");
+        let spec = dump_process_spec(&request, option_file.path(), &operation_container);
         let mut child = Command::new(spec.program())
             .args(spec.arguments())
             .stdin(Stdio::null())
@@ -76,15 +90,48 @@ impl DumpExecutor for DockerMysqlDumpExecutor {
         let stderr_task = tokio::spawn(read_bounded_stderr(stderr));
 
         let compression = ZstdCompressor::default()
-            .compress(stdout, output, Arc::clone(&request.progress))
+            .compress_with_cancellation(
+                stdout,
+                output,
+                Arc::clone(&request.progress),
+                self.cancellation.clone(),
+            )
             .await;
-        if compression.is_err() {
-            let _ = child.kill().await;
+        let mut interrupted_while_waiting = false;
+        let status = if compression.is_err() {
+            terminate_ephemeral_run(&mut child, request.docker_context, &operation_container).await
+        } else {
+            tokio::select! {
+                biased;
+                () = self.cancellation.cancelled() => {
+                    interrupted_while_waiting = true;
+                    terminate_ephemeral_run(
+                        &mut child,
+                        request.docker_context,
+                        &operation_container,
+                    ).await
+                }
+                status = child.wait() => status,
+            }
         }
-        let status = child.wait().await.map_err(DumpExecutorError::Wait);
+        .map_err(DumpExecutorError::Wait);
         let diagnostic = stderr_task.await.map_err(DumpExecutorError::StderrTask)??;
 
-        let metrics = compression?;
+        let metrics = match compression {
+            Err(CompressionError::Interrupted) => {
+                if let Err(error) = status {
+                    tracing::warn!(%error, "could not confirm interrupted dump child termination");
+                }
+                return Err(DumpExecutorError::Interrupted);
+            }
+            result => result?,
+        };
+        if interrupted_while_waiting {
+            if let Err(error) = status {
+                tracing::warn!(%error, "could not confirm interrupted dump child termination");
+            }
+            return Err(DumpExecutorError::Interrupted);
+        }
         let status = status?;
         if !status.success() {
             return Err(DumpExecutorError::ProcessFailed {
@@ -100,14 +147,16 @@ impl DumpExecutor for DockerMysqlDumpExecutor {
 fn dump_process_spec(
     request: &DumpExecutionRequest<'_>,
     option_file: &std::path::Path,
+    operation_container: &str,
 ) -> ProcessSpec {
     let mut mount = OsString::from("type=bind,src=");
     mount.push(option_file.as_os_str());
     mount.push(format!(",dst={MYSQL_OPTION_FILE_CONTAINER_PATH},readonly"));
 
     ProcessSpec::new("docker")
-        .args(["--context", request.docker_context, "run", "--rm"])
+        .args(["--context", request.docker_context, "run", "--rm", "--name"])
         .args([
+            OsString::from(operation_container),
             OsString::from("--pull=never"),
             OsString::from("--add-host=host.docker.internal:host-gateway"),
             OsString::from("--mount"),
@@ -212,6 +261,9 @@ pub enum DumpExecutorError {
 
     #[error(transparent)]
     Compression(#[from] CompressionError),
+
+    #[error("dump interrupted")]
+    Interrupted,
 
     #[error("could not start the Dockerized mysqldump process")]
     Start(#[source] io::Error),
@@ -332,6 +384,7 @@ mod tests {
         let spec = dump_process_spec(
             &request(&profile_name, &profile, &password, &plan),
             option_path,
+            "reprodb-dump-0123456789abcdef0123456789abcdef",
         );
         let arguments = spec
             .arguments()
@@ -341,12 +394,14 @@ mod tests {
 
         assert_eq!(spec.program(), "docker");
         assert_eq!(
-            &arguments[..12],
+            &arguments[..14],
             [
                 "--context",
                 "desktop-linux",
                 "run",
                 "--rm",
+                "--name",
+                "reprodb-dump-0123456789abcdef0123456789abcdef",
                 "--pull=never",
                 "--add-host=host.docker.internal:host-gateway",
                 "--mount",

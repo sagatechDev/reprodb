@@ -12,7 +12,7 @@ use tokio::{
     task,
 };
 
-use crate::domain::Sha256Digest;
+use crate::{domain::Sha256Digest, infrastructure::cancellation::CancellationToken};
 
 pub const DEFAULT_ZSTD_LEVEL: i32 = 1;
 const STREAM_BUFFER_BYTES: usize = 64 * 1024;
@@ -103,9 +103,24 @@ impl ZstdCompressor {
 
     pub async fn compress<R, W>(
         &self,
+        input: R,
+        output: W,
+        observer: Arc<dyn CompressionProgressObserver>,
+    ) -> Result<CompressionMetrics, CompressionError>
+    where
+        R: AsyncRead + Unpin,
+        W: Write + Send + 'static,
+    {
+        self.compress_with_cancellation(input, output, observer, CancellationToken::default())
+            .await
+    }
+
+    pub async fn compress_with_cancellation<R, W>(
+        &self,
         mut input: R,
         output: W,
         observer: Arc<dyn CompressionProgressObserver>,
+        cancellation: CancellationToken,
     ) -> Result<CompressionMetrics, CompressionError>
     where
         R: AsyncRead + Unpin,
@@ -119,10 +134,14 @@ impl ZstdCompressor {
         let mut input_bytes = 0_u64;
 
         let read_result = loop {
-            let bytes_read = match input.read(&mut buffer).await {
+            let bytes_read = match tokio::select! {
+                biased;
+                () = cancellation.cancelled() => Err(CompressionError::Interrupted),
+                result = input.read(&mut buffer) => result.map_err(CompressionError::ReadInput),
+            } {
                 Ok(0) => break Ok(()),
                 Ok(bytes_read) => bytes_read,
-                Err(error) => break Err(CompressionError::ReadInput(error)),
+                Err(error) => break Err(error),
             };
             input_bytes = input_bytes
                 .checked_add(bytes_read as u64)
@@ -169,6 +188,9 @@ pub enum CompressionError {
 
     #[error("the Zstd encoder task terminated unexpectedly")]
     EncoderTaskFailed,
+
+    #[error("dump compression interrupted")]
+    Interrupted,
 
     #[error("could not initialize, write, or finish the Zstd stream")]
     Encode(#[source] io::Error),
@@ -394,6 +416,31 @@ mod tests {
         assert!(matches!(error, CompressionError::ReadInput(_)));
     }
 
+    #[tokio::test]
+    async fn cancellation_finishes_the_encoder_and_returns_interrupted() {
+        let cancellation = CancellationToken::default();
+        let trigger = cancellation.clone();
+        let task = tokio::spawn(async move {
+            ZstdCompressor::default()
+                .compress_with_cancellation(
+                    PendingReader,
+                    SharedWriter::default(),
+                    Arc::new(NoCompressionProgress),
+                    cancellation,
+                )
+                .await
+        });
+
+        trigger.cancel();
+
+        let error = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("compression must stop promptly")
+            .unwrap()
+            .unwrap_err();
+        assert!(matches!(error, CompressionError::Interrupted));
+    }
+
     #[test]
     fn counting_hash_writer_hashes_only_bytes_accepted_by_the_writer() {
         let mut writer = CountingHashWriter::new(PartialWriter);
@@ -438,6 +485,18 @@ mod tests {
 
     struct FailingReader {
         emitted: bool,
+    }
+
+    struct PendingReader;
+
+    impl AsyncRead for PendingReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+            _buffer: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
     }
 
     impl AsyncRead for FailingReader {

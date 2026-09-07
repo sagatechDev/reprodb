@@ -74,7 +74,7 @@ A CLI mostra o domain conhecido, mas não inventa URL ou porta HTTP do Salt.
 - se o restore falhar, o artefato completo continua disponível para retry;
 - falha no registro central informa que o database foi importado, sem apagar o resultado;
 - profiles de produção continuam bloqueados para novos dumps até o hardening correspondente;
-- cancelamento completo por `Ctrl+C` pertence à RDB-060.
+- `Ctrl+C` cancela dump ou restore, aguarda os processos, limpa o estado parcial e retorna 130.
 
 O TTL inicial continua fixado em duas horas. Os comandos de inspeção/limpeza estão disponíveis em [`cache-commands.md`](cache-commands.md); tornar o TTL configurável permanece uma evolução separada.
 

@@ -4,6 +4,7 @@
 //! be tested without spawning the compiled executable. `main.rs` remains the
 //! composition root for process-level concerns.
 
+use std::future::Future;
 use std::io::Write as _;
 
 pub mod application;
@@ -20,6 +21,50 @@ pub use error::{AppError, ErrorCategory};
 use infrastructure::config::ConfigRepository;
 
 pub async fn execute(cli: Cli) -> Result<(), AppError> {
+    execute_with_cancellation(
+        cli,
+        infrastructure::cancellation::CancellationToken::default(),
+    )
+    .await
+}
+
+pub async fn execute_until_ctrl_c(cli: Cli) -> Result<(), AppError> {
+    let cancellation = infrastructure::cancellation::CancellationToken::default();
+    let execution = execute_with_cancellation(cli, cancellation.clone());
+    supervise_execution(execution, cancellation, tokio::signal::ctrl_c()).await
+}
+
+async fn supervise_execution<Execution, Interrupt>(
+    execution: Execution,
+    cancellation: infrastructure::cancellation::CancellationToken,
+    interrupt: Interrupt,
+) -> Result<(), AppError>
+where
+    Execution: Future<Output = Result<(), AppError>>,
+    Interrupt: Future<Output = std::io::Result<()>>,
+{
+    tokio::pin!(execution);
+    tokio::pin!(interrupt);
+    tokio::select! {
+        result = &mut execution => result,
+        signal = &mut interrupt => match signal {
+            Ok(()) => {
+                cancellation.cancel();
+                let _ = execution.await;
+                Err(AppError::Interrupted)
+            }
+            Err(error) => {
+                tracing::warn!(%error, "could not listen for Ctrl+C");
+                execution.await
+            }
+        }
+    }
+}
+
+pub async fn execute_with_cancellation(
+    cli: Cli,
+    cancellation: infrastructure::cancellation::CancellationToken,
+) -> Result<(), AppError> {
     tracing::debug!(command = cli.command.name(), "command received");
     let style = OutputStyle::stdout(cli.color);
 
@@ -177,12 +222,14 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
             );
             let progress = std::sync::Arc::new(cli::dump::CliDumpProgress::new(style));
             let service = application::DumpService::new(repository).with_progress(progress.clone());
+            let executor =
+                infrastructure::mysql::DockerMysqlDumpExecutor::new(cancellation.clone());
             let result = service
                 .create(
                     &infrastructure::credentials::OsCredentialStore,
                     &workflow,
                     &workflow,
-                    &infrastructure::mysql::DockerMysqlDumpExecutor,
+                    &executor,
                     tenant,
                 )
                 .await;
@@ -208,13 +255,15 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
             let repository = ConfigRepository::discover()?;
             let progress = std::sync::Arc::new(cli::restore::CliRestoreProgress::new(style));
             let service = application::RestoreService::new(repository).with_progress(progress);
+            let executor =
+                infrastructure::mysql::DockerMysqlRestoreExecutor::new(cancellation.clone());
             let restored = service
                 .restore_to(
                     &infrastructure::credentials::OsCredentialStore,
                     &infrastructure::mysql::DockerLocalTargetAttestor::new(
                         infrastructure::process::TokioProcessRunner,
                     ),
-                    infrastructure::mysql::DockerMysqlRestoreExecutor,
+                    executor,
                     infrastructure::mysql::DockerLocalTenantWriter::new(
                         infrastructure::process::TokioProcessRunner,
                     ),
@@ -275,19 +324,23 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
                 .with_progress(progress.clone())
                 .with_compression_progress(progress.clone())
                 .with_restore_progress(progress.clone());
+            let dump_executor =
+                infrastructure::mysql::DockerMysqlDumpExecutor::new(cancellation.clone());
+            let restore_executor =
+                infrastructure::mysql::DockerMysqlRestoreExecutor::new(cancellation.clone());
             let result = service
                 .pull(
                     &infrastructure::credentials::OsCredentialStore,
                     application::PullDumpDependencies {
                         tenant_resolver: &workflow,
                         preflight: &workflow,
-                        executor: &infrastructure::mysql::DockerMysqlDumpExecutor,
+                        executor: &dump_executor,
                     },
                     application::PullRestoreDependencies {
                         target_attestor: &infrastructure::mysql::DockerLocalTargetAttestor::new(
                             infrastructure::process::TokioProcessRunner,
                         ),
-                        executor: infrastructure::mysql::DockerMysqlRestoreExecutor,
+                        executor: restore_executor,
                         tenant_writer: infrastructure::mysql::DockerLocalTenantWriter::new(
                             infrastructure::process::TokioProcessRunner,
                         ),
@@ -324,5 +377,36 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn ctrl_c_waits_for_cooperative_cleanup_and_returns_130() {
+        let cancellation = infrastructure::cancellation::CancellationToken::default();
+        let operation_token = cancellation.clone();
+        let cleaned_up = Arc::new(AtomicBool::new(false));
+        let operation_cleanup = Arc::clone(&cleaned_up);
+        let execution = async move {
+            operation_token.cancelled().await;
+            tokio::task::yield_now().await;
+            operation_cleanup.store(true, Ordering::Release);
+            Err(AppError::Interrupted)
+        };
+
+        let error = supervise_execution(execution, cancellation, async { Ok(()) })
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.exit_code(), 130);
+        assert!(cleaned_up.load(Ordering::Acquire));
     }
 }

@@ -299,7 +299,7 @@ mod tests {
                 MysqlFamily, TenantResolverConfig,
             },
             credentials::MemoryCredentialStore,
-            mysql::{DumpFailureKind, MysqlServerInfo},
+            mysql::MysqlServerInfo,
         },
     };
 
@@ -391,11 +391,7 @@ mod tests {
                 .store(estimated_input_bytes, std::sync::atomic::Ordering::Relaxed);
         }
 
-        fn update(
-            &self,
-            _progress: crate::infrastructure::compression::CompressionProgress,
-        ) {
-        }
+        fn update(&self, _progress: crate::infrastructure::compression::CompressionProgress) {}
     }
 
     #[async_trait]
@@ -407,11 +403,7 @@ mod tests {
         ) -> Result<crate::infrastructure::compression::CompressionMetrics, DumpExecutorError>
         {
             if self.fail {
-                return Err(DumpExecutorError::ProcessFailed {
-                    exit_code: Some(2),
-                    kind: DumpFailureKind::Unknown,
-                    stderr_truncated: false,
-                });
+                return Err(DumpExecutorError::Interrupted);
             }
             assert_eq!(request.profile_name.as_str(), "local-source");
             assert_eq!(request.plan.arguments().last().unwrap(), "salt_sagatec");
@@ -517,10 +509,7 @@ mod tests {
         assert_eq!(created.profile.as_str(), "local-source");
         assert_eq!(created.tenant_id.as_str(), "salt_sagatec");
         assert_eq!(created.database.as_str(), "salt_sagatec");
-        assert_eq!(
-            progress.0.load(std::sync::atomic::Ordering::Relaxed),
-            1024
-        );
+        assert_eq!(progress.0.load(std::sync::atomic::Ordering::Relaxed), 1024);
         assert!(created.artifact_path.is_dir());
         assert!(created.compressed_bytes > 0);
         let artifacts = LocalArtifactStore::new(&cache_root)
@@ -547,7 +536,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn executor_failure_removes_the_partial_artifact() {
+    async fn interruption_removes_the_partial_and_preserves_the_previous_dump() {
         let directory = tempdir().unwrap();
         let (repository, credential_key) = repository(directory.path(), false);
         let credentials = MemoryCredentialStore::default();
@@ -556,7 +545,17 @@ mod tests {
             .await
             .unwrap();
         let cache_root = repository.paths().cache_dir().to_owned();
-        let service = DumpService::with_clock(repository, TestClock::new([900, 1_000]));
+        let first = DumpService::with_clock(repository.clone(), TestClock::new([800, 900, 901]))
+            .create(
+                &credentials,
+                &FakeResolver,
+                &FakePreflight,
+                &FakeExecutor { fail: false },
+                TenantLookup::try_from("sagatec").unwrap(),
+            )
+            .await
+            .unwrap();
+        let service = DumpService::with_clock(repository, TestClock::new([1_000, 1_100]));
 
         let error = service
             .create(
@@ -569,16 +568,18 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, DumpServiceError::Execute(_)));
-        assert!(
-            LocalArtifactStore::new(cache_root)
-                .list_complete(
-                    &ProfileName::try_from("local-source").unwrap(),
-                    &TenantId::try_from("salt_sagatec").unwrap(),
-                )
-                .unwrap()
-                .is_empty()
-        );
+        assert!(matches!(
+            error,
+            DumpServiceError::Execute(DumpExecutorError::Interrupted)
+        ));
+        let complete = LocalArtifactStore::new(cache_root)
+            .list_complete(
+                &ProfileName::try_from("local-source").unwrap(),
+                &TenantId::try_from("salt_sagatec").unwrap(),
+            )
+            .unwrap();
+        assert_eq!(complete.len(), 1);
+        assert_eq!(complete[0].dump_id(), first.dump_id);
         let tenant_cache = directory
             .path()
             .join("cache/profiles/local-source/salt_sagatec");
@@ -593,8 +594,16 @@ mod tests {
             remaining_entries
                 .iter()
                 .all(|name| !name.to_string_lossy().ends_with(".part")),
-            "failed dumps must not leave a staged artifact behind"
+            "interrupted dumps must not leave a staged artifact behind"
         );
+
+        let lock = OperationLockManager::new(directory.path().join("cache")).try_acquire(
+            OperationLockKey::source(
+                &ProfileName::try_from("local-source").unwrap(),
+                &DatabaseName::try_from("salt_sagatec").unwrap(),
+            ),
+        );
+        assert!(lock.is_ok(), "interruption must release the dump lock");
     }
 
     #[tokio::test]

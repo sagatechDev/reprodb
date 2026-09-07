@@ -80,7 +80,7 @@ async fn dumps_the_real_local_salt_tenant_into_a_managed_zstd_artifact() {
             &credentials,
             &workflow,
             &workflow,
-            &DockerMysqlDumpExecutor,
+            &DockerMysqlDumpExecutor::default(),
             TenantLookup::try_from("sagatec").unwrap(),
         )
         .await

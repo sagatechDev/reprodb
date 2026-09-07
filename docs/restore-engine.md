@@ -81,5 +81,5 @@ cargo test --test pull_integration -- --ignored --nocapture
 
 - RDB-052 registra o tenant mínimo no `salt_central` local somente após o tenant estar pronto;
 - RDB-053 liga lookup, dump ID, target gate, engine, registro central e UX no comando `restore`;
-- RDB-060 acrescentará cancelamento explícito do client container e tratamento de sinais;
+- RDB-060 adicionou cancelamento explícito do client container, espera do child, cleanup e exit code 130;
 - nenhum restore em host arbitrário, source profile ou Docker context remoto é suportado.

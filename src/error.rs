@@ -286,6 +286,7 @@ const fn local_target_error_category(error: &LocalTargetGateError) -> ErrorCateg
 
 const fn restore_executor_error_category(error: &RestoreExecutorError) -> ErrorCategory {
     match error {
+        RestoreExecutorError::Interrupted => ErrorCategory::Interrupted,
         RestoreExecutorError::OptionFile(_) => ErrorCategory::Credential,
         RestoreExecutorError::OpenArtifact(_)
         | RestoreExecutorError::DecodeArtifact(_)
@@ -336,6 +337,7 @@ const fn dump_error_category(error: &DumpServiceError) -> ErrorCategory {
         | DumpServiceError::Execute(DumpExecutorError::Client(error)) => {
             docker_client_error_category(error)
         }
+        DumpServiceError::Execute(DumpExecutorError::Interrupted) => ErrorCategory::Interrupted,
         DumpServiceError::Execute(DumpExecutorError::Start(_)) => ErrorCategory::Docker,
         DumpServiceError::Execute(DumpExecutorError::ProcessFailed { kind, .. }) => match kind {
             DumpFailureKind::Authentication | DumpFailureKind::SourceUnavailable => {
@@ -498,6 +500,10 @@ mod tests {
         assert_eq!(failure(DumpFailureKind::Authentication).exit_code(), 30);
         assert_eq!(failure(DumpFailureKind::DockerUnavailable).exit_code(), 60);
         assert_eq!(failure(DumpFailureKind::Unknown).exit_code(), 40);
+        assert_eq!(
+            AppError::from(DumpServiceError::Execute(DumpExecutorError::Interrupted)).exit_code(),
+            130
+        );
     }
 
     #[test]
@@ -515,6 +521,10 @@ mod tests {
         assert_eq!(missing.exit_code(), 50);
         assert_eq!(target.exit_code(), 10);
         assert_eq!(registration.exit_code(), 11);
+        assert_eq!(
+            restore_executor_error_category(&RestoreExecutorError::Interrupted).exit_code(),
+            130
+        );
     }
 
     #[test]

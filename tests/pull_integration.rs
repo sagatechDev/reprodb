@@ -216,7 +216,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
 
     let workflow = DockerDumpWorkflow::new(TokioProcessRunner);
     let attestor = DockerLocalTargetAttestor::new(TokioProcessRunner);
-    let dump_executor = DockerMysqlDumpExecutor;
+    let dump_executor = DockerMysqlDumpExecutor::default();
     let service = PullService::new(repository);
     let first = match fixture {
         Ok(_) => service
@@ -229,7 +229,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
                 },
                 PullRestoreDependencies {
                     target_attestor: &attestor,
-                    executor: DockerMysqlRestoreExecutor,
+                    executor: DockerMysqlRestoreExecutor::default(),
                     tenant_writer: DockerLocalTenantWriter::new(TokioProcessRunner),
                     target_selector: &DefaultTarget,
                     database_selector: &SourceDatabase,
@@ -253,7 +253,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
                 },
                 PullRestoreDependencies {
                     target_attestor: &attestor,
-                    executor: DockerMysqlRestoreExecutor,
+                    executor: DockerMysqlRestoreExecutor::default(),
                     tenant_writer: DockerLocalTenantWriter::new(TokioProcessRunner),
                     target_selector: &DefaultTarget,
                     database_selector: &SourceDatabase,

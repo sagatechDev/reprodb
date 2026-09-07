@@ -68,6 +68,6 @@ O preflight valida versão/vendor, charset/collation, engines e objetos relevant
 
 Erros são classificados em configuração, credencial, dependência, conexão source, resolução do tenant, dump, cache ou Docker, cada categoria com exit code estável. O stderr bruto do `mysqldump` não é repetido para evitar vazar dados retornados pelo client.
 
-O tratamento completo e testado de `Ctrl+C`, incluindo confirmação de encerramento do container efêmero, pertence à RDB-060. Nesta etapa o child possui `kill_on_drop`, o staging é protegido por RAII e operações órfãs continuam invisíveis como `.part`, mas isso ainda não representa o contrato final de cancelamento.
+`Ctrl+C` cancela cooperativamente a compressão, encerra e aguarda o `docker run`, remove explicitamente o client container efêmero e descarta o `.part`. Um dump completo anterior continua disponível e o processo termina com código 130.
 
 O cache criado já possui o formato, checksums e TTL necessários, mas o consumo automático por `pull` e os comandos de inspeção/limpeza entram nas próximas issues.

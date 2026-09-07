@@ -111,7 +111,7 @@ Isso deve virar uma asserção da futura construção de comandos do `DockerCliR
 
 ## Limites deste resultado
 
-- o teste determinístico de Ctrl+C usa um Docker fake para manter os streams bloqueados; o runtime final ainda deve testar a chamada real a `docker kill`;
+- o spike usou um Docker fake para manter os streams bloqueados; a RDB-060 incorporou token cooperativo, `kill + wait` do child e remoção explícita do container efêmero nomeado;
 - Linux e rede/VPN continuam pendentes em RDB-002 e RDB-061;
 - `SIGKILL` não permite cleanup pelo processo e pode deixar um client container até uma limpeza oportunista futura;
 - persistência durável com `fsync`, checksum e metadata pertencem à implementação do cache, não a este spike;

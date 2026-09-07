@@ -19,7 +19,9 @@ use crate::{
     application::AuthorizedLocalTarget,
     domain::{DumpArtifactMetadata, Sha256Digest},
     infrastructure::{
+        cancellation::CancellationToken,
         credentials::{MYSQL_OPTION_FILE_CONTAINER_PATH, MysqlOptionFile},
+        docker::{ephemeral_container_name, terminate_ephemeral_run},
         process::ProcessSpec,
         restore_artifact::ValidatedRestoreArtifact,
     },
@@ -60,8 +62,16 @@ pub trait RestoreExecutor: Send + Sync {
     ) -> Result<RestoreMetrics, RestoreExecutorError>;
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct DockerMysqlRestoreExecutor;
+#[derive(Clone, Debug, Default)]
+pub struct DockerMysqlRestoreExecutor {
+    cancellation: CancellationToken,
+}
+
+impl DockerMysqlRestoreExecutor {
+    pub fn new(cancellation: CancellationToken) -> Self {
+        Self { cancellation }
+    }
+}
 
 #[async_trait]
 impl RestoreExecutor for DockerMysqlRestoreExecutor {
@@ -70,9 +80,20 @@ impl RestoreExecutor for DockerMysqlRestoreExecutor {
         target: &AuthorizedLocalTarget,
         metadata: &DumpArtifactMetadata,
     ) -> Result<(), RestoreExecutorError> {
+        if self.cancellation.is_cancelled() {
+            return Err(RestoreExecutorError::Interrupted);
+        }
         let option_file = target_option_file(target)?;
-        let spec = recreate_process_spec(target, metadata, option_file.path());
-        let (status, diagnostic) = run_without_stdin(&spec).await?;
+        let operation_container = ephemeral_container_name("restore");
+        let spec =
+            recreate_process_spec(target, metadata, option_file.path(), &operation_container);
+        let (status, diagnostic) = run_without_stdin(
+            &spec,
+            &self.cancellation,
+            target.docker_context(),
+            &operation_container,
+        )
+        .await?;
         if !status.success() {
             return Err(RestoreExecutorError::RecreateFailed {
                 exit_code: status.code(),
@@ -88,8 +109,12 @@ impl RestoreExecutor for DockerMysqlRestoreExecutor {
         target: &AuthorizedLocalTarget,
         artifact: &ValidatedRestoreArtifact,
     ) -> Result<RestoreMetrics, RestoreExecutorError> {
+        if self.cancellation.is_cancelled() {
+            return Err(RestoreExecutorError::Interrupted);
+        }
         let option_file = target_option_file(target)?;
-        let spec = import_process_spec(target, artifact, option_file.path());
+        let operation_container = ephemeral_container_name("restore");
+        let spec = import_process_spec(target, artifact, option_file.path(), &operation_container);
         let mut child = spawn(&spec, true)?;
         let mut stdin = child
             .stdin
@@ -105,30 +130,70 @@ impl RestoreExecutor for DockerMysqlRestoreExecutor {
         let (sender, mut receiver) = mpsc::channel::<Vec<u8>>(BUFFERED_CHUNKS);
         let decoder = tokio::task::spawn_blocking(move || decode_chunks(path, sender));
         let copy_result = async {
-            while let Some(chunk) = receiver.recv().await {
-                stdin
-                    .write_all(&chunk)
-                    .await
-                    .map_err(RestoreExecutorError::WriteStdin)?;
+            loop {
+                let chunk = tokio::select! {
+                    biased;
+                    () = self.cancellation.cancelled() => {
+                        return Err(RestoreExecutorError::Interrupted);
+                    }
+                    chunk = receiver.recv() => chunk,
+                };
+                let Some(chunk) = chunk else {
+                    break;
+                };
+                tokio::select! {
+                    biased;
+                    () = self.cancellation.cancelled() => {
+                        return Err(RestoreExecutorError::Interrupted);
+                    }
+                    result = stdin.write_all(&chunk) => {
+                        result.map_err(RestoreExecutorError::WriteStdin)?;
+                    }
+                }
             }
-            stdin
-                .shutdown()
-                .await
-                .map_err(RestoreExecutorError::CloseStdin)
+            tokio::select! {
+                biased;
+                () = self.cancellation.cancelled() => {
+                    Err(RestoreExecutorError::Interrupted)
+                }
+                result = stdin.shutdown() => result.map_err(RestoreExecutorError::CloseStdin),
+            }
         }
         .await;
         drop(receiver);
         drop(stdin);
 
-        if copy_result.is_err() {
-            let _ = child.kill().await;
+        let mut interrupted_while_waiting = false;
+        let status = if copy_result.is_err() {
+            terminate_ephemeral_run(&mut child, target.docker_context(), &operation_container).await
+        } else {
+            tokio::select! {
+                biased;
+                () = self.cancellation.cancelled() => {
+                    interrupted_while_waiting = true;
+                    terminate_ephemeral_run(
+                        &mut child,
+                        target.docker_context(),
+                        &operation_container,
+                    ).await
+                }
+                status = child.wait() => status,
+            }
         }
-        let status = child.wait().await.map_err(RestoreExecutorError::Wait);
+        .map_err(RestoreExecutorError::Wait);
         let diagnostic = stderr_task
             .await
             .map_err(RestoreExecutorError::StderrTask)??;
         let decoded = decoder.await.map_err(RestoreExecutorError::DecoderTask)?;
 
+        if matches!(&copy_result, Err(RestoreExecutorError::Interrupted))
+            || interrupted_while_waiting
+        {
+            if let Err(error) = status {
+                tracing::warn!(%error, "could not confirm interrupted restore child termination");
+            }
+            return Err(RestoreExecutorError::Interrupted);
+        }
         copy_result?;
         let decoded = decoded?;
         let status = status?;
@@ -167,21 +232,23 @@ fn recreate_process_spec(
     target: &AuthorizedLocalTarget,
     metadata: &DumpArtifactMetadata,
     option_file: &std::path::Path,
+    operation_container: &str,
 ) -> ProcessSpec {
     let database = target.database().as_str();
     let sql = format!(
         "DROP DATABASE IF EXISTS `{database}`; CREATE DATABASE `{database}` CHARACTER SET {} COLLATE {};",
         metadata.database_charset, metadata.database_collation
     );
-    mysql_process_spec(target, option_file, false).args(["--execute", &sql])
+    mysql_process_spec(target, option_file, false, operation_container).args(["--execute", &sql])
 }
 
 fn import_process_spec(
     target: &AuthorizedLocalTarget,
     artifact: &ValidatedRestoreArtifact,
     option_file: &std::path::Path,
+    operation_container: &str,
 ) -> ProcessSpec {
-    mysql_process_spec(target, option_file, true).args([
+    mysql_process_spec(target, option_file, true, operation_container).args([
         OsString::from("--binary-mode"),
         OsString::from(format!("--database={}", target.database())),
         OsString::from(format!(
@@ -195,6 +262,7 @@ fn mysql_process_spec(
     target: &AuthorizedLocalTarget,
     option_file: &std::path::Path,
     interactive: bool,
+    operation_container: &str,
 ) -> ProcessSpec {
     let mut mount = OsString::from("type=bind,src=");
     mount.push(option_file.as_os_str());
@@ -205,6 +273,8 @@ fn mysql_process_spec(
         OsString::from(target.docker_context()),
         OsString::from("run"),
         OsString::from("--rm"),
+        OsString::from("--name"),
+        OsString::from(operation_container),
     ]);
     if interactive {
         spec = spec.arg("-i");
@@ -240,6 +310,9 @@ fn spawn(spec: &ProcessSpec, pipe_stdin: bool) -> Result<Child, RestoreExecutorE
 
 async fn run_without_stdin(
     spec: &ProcessSpec,
+    cancellation: &CancellationToken,
+    docker_context: &str,
+    operation_container: &str,
 ) -> Result<(std::process::ExitStatus, BoundedStderr), RestoreExecutorError> {
     let mut child = spawn(spec, false)?;
     let stderr = child
@@ -247,7 +320,17 @@ async fn run_without_stdin(
         .take()
         .ok_or(RestoreExecutorError::MissingStderr)?;
     let stderr_task = tokio::spawn(read_bounded_stderr(stderr));
-    let status = child.wait().await.map_err(RestoreExecutorError::Wait)?;
+    let status = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => {
+            terminate_ephemeral_run(&mut child, docker_context, operation_container)
+                .await
+                .map_err(RestoreExecutorError::Wait)?;
+            let _ = stderr_task.await;
+            return Err(RestoreExecutorError::Interrupted);
+        }
+        status = child.wait() => status.map_err(RestoreExecutorError::Wait)?,
+    };
     let diagnostic = stderr_task
         .await
         .map_err(RestoreExecutorError::StderrTask)??;
@@ -346,6 +429,8 @@ fn classify_failure(stderr: &[u8]) -> RestoreFailureKind {
 pub enum RestoreExecutorError {
     #[error("could not create the private MySQL target credential file")]
     OptionFile(#[source] crate::infrastructure::credentials::OptionFileError),
+    #[error("restore interrupted")]
+    Interrupted,
     #[error("could not start the Dockerized mysql process")]
     Start(#[source] io::Error),
     #[error("could not wait for the Dockerized mysql process")]
@@ -448,6 +533,7 @@ mod tests {
             &target,
             std::path::Path::new("/tmp/reprodb/client.cnf"),
             true,
+            "reprodb-restore-0123456789abcdef0123456789abcdef",
         );
         let arguments = arguments(&spec);
 
@@ -456,6 +542,8 @@ mod tests {
         assert!(!arguments.contains(&"-t".to_owned()));
         assert!(arguments.contains(&format!("--network=container:{}", target.container_id())));
         assert!(arguments.contains(&target.client().image().to_owned()));
+        assert!(arguments.contains(&"--name".to_owned()));
+        assert!(arguments.contains(&"reprodb-restore-0123456789abcdef0123456789abcdef".to_owned()));
         assert!(!arguments.join(" ").contains("local-test-password"));
     }
 
@@ -467,6 +555,7 @@ mod tests {
             &target,
             &metadata(database),
             std::path::Path::new("/tmp/reprodb/client.cnf"),
+            "reprodb-restore-0123456789abcdef0123456789abcdef",
         );
         let arguments = arguments(&spec);
         let sql = arguments.last().unwrap();

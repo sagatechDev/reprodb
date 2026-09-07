@@ -2,7 +2,17 @@ use std::{ffi::OsString, io, process::Stdio};
 
 use async_trait::async_trait;
 use thiserror::Error;
-use tokio::process::Command;
+use tokio::process::{Child, Command};
+
+pub async fn terminate_and_wait(child: &mut Child) -> io::Result<std::process::ExitStatus> {
+    if let Err(kill_error) = child.start_kill() {
+        return match child.try_wait() {
+            Ok(Some(status)) => Ok(status),
+            _ => Err(kill_error),
+        };
+    }
+    child.wait().await
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProcessSpec {
@@ -118,5 +128,26 @@ mod tests {
         assert_eq!(spec.program(), "docker");
         assert_eq!(spec.arguments().len(), 4);
         assert_eq!(spec.arguments()[1], "desktop-linux; echo unsafe");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn termination_kills_and_reaps_the_owned_child() {
+        let mut child = Command::new("sh")
+            .args(["-c", "exec sleep 30"])
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+
+        let status = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            terminate_and_wait(&mut child),
+        )
+        .await
+        .expect("termination must not wait for the original process duration")
+        .unwrap();
+
+        assert!(!status.success());
+        assert!(child.try_wait().unwrap().is_some());
     }
 }

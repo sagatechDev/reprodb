@@ -1,5 +1,5 @@
 use clap::Parser;
-use reprodb::{Cli, execute};
+use reprodb::{Cli, execute_until_ctrl_c};
 use std::process::ExitCode;
 
 #[tokio::main]
@@ -14,7 +14,7 @@ async fn main() -> ExitCode {
 
     let cli = Cli::parse();
 
-    match execute(cli).await {
+    match execute_until_ctrl_c(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             if error.should_render_on_stderr() {

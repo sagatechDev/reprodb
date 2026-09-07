@@ -29,4 +29,4 @@ No fluxo de restore, UUID inválido é erro de uso (`2`); artefato ausente, dupl
 - tipos que carregam secrets não implementam `Display` e usam `secrecy::SecretString` para `Debug` redigido;
 - input do usuário só aparece quando necessário e depois de validado; mensagens de autenticação não repetem username/password.
 
-`ErrorCategory::Interrupted` reserva 130 desde o bootstrap, mesmo antes da implementação completa de sinais na RDB-060.
+`ErrorCategory::Interrupted` é usado pelo tratamento cooperativo de `Ctrl+C`: a CLI aguarda o cleanup dos processos e retorna 130.
