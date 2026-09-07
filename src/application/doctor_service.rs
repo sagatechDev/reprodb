@@ -702,7 +702,7 @@ fn source_connection_failure(error: SourceVerificationError) -> DoctorCheck {
             DoctorFailureKind::Docker,
         ),
         SourceVerificationError::ClientUnavailable
-        | SourceVerificationError::UnsupportedServerSeries => failed(
+        | SourceVerificationError::UnsupportedServerSeries { .. } => failed(
             DoctorSection::Source,
             "source connection",
             "the approved MySQL client is absent or incompatible",
@@ -743,7 +743,7 @@ fn source_connection_failure(error: SourceVerificationError) -> DoctorCheck {
 fn target_connection_failure(error: TargetVerificationError) -> DoctorCheck {
     match error {
         TargetVerificationError::ClientUnavailable
-        | TargetVerificationError::UnsupportedServerSeries => failed(
+        | TargetVerificationError::UnsupportedServerSeries { .. } => failed(
             DoctorSection::Target,
             "target connection",
             "the approved MySQL client is absent or incompatible",

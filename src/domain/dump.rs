@@ -146,7 +146,10 @@ impl Mysql8DumpPolicy {
         if !server_vendor.to_ascii_lowercase().contains("mysql") {
             return Err(DumpPolicyError::UnsupportedVendor);
         }
-        if (server_version.major, server_version.minor) != (8, 4) {
+        if !matches!(
+            (server_version.major, server_version.minor),
+            (8, 0) | (8, 4)
+        ) {
             return Err(DumpPolicyError::UnsupportedServerSeries);
         }
         if (client_version.major, client_version.minor)
@@ -248,7 +251,7 @@ pub enum DumpPolicyError {
     #[error("the source vendor is not supported by the MySQL 8 dump policy")]
     UnsupportedVendor,
 
-    #[error("the source server series is not supported; this policy requires MySQL 8.4")]
+    #[error("the source server series is not supported; this policy accepts MySQL 8.0 or 8.4")]
     UnsupportedServerSeries,
 
     #[error("the approved client and source server must use the same MySQL series")]
@@ -353,6 +356,24 @@ mod tests {
             plan.notices(),
             [DumpPolicyNotice::ConcurrentDdlMustBePrevented]
         );
+    }
+
+    #[test]
+    fn accepts_each_approved_mysql_8_series_with_a_matching_client() {
+        let database = DatabaseName::try_from("salt_sagatec").unwrap();
+
+        for supported in ["8.0.46", "8.4.4"] {
+            let plan = Mysql8DumpPolicy::evaluate(
+                version(supported),
+                "MySQL Community Server - GPL",
+                version(supported),
+                &database,
+                &safe_preflight(),
+            )
+            .unwrap();
+
+            assert_eq!(plan.arguments().last().unwrap(), "salt_sagatec");
+        }
     }
 
     #[test]
@@ -470,7 +491,7 @@ mod tests {
         );
         assert_eq!(
             Mysql8DumpPolicy::evaluate(
-                version("8.0.40"),
+                version("5.7.44"),
                 "MySQL Community Server - GPL",
                 version("8.4.4"),
                 &database,

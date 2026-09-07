@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-const BOOTSTRAP_MYSQL_SERIES: &str = "8.4";
+const DISCOVERY_MYSQL_SERIES: &str = "8.4";
 
 pub struct DockerLocalTargetVerifier<R> {
     runtime: DockerMysqlClientRuntime<R>,
@@ -63,18 +63,11 @@ where
         &self,
         input: &NewLocalTargetInput,
     ) -> Result<VerifiedLocalTarget, TargetVerificationError> {
-        let client = ClientCatalog::resolve(BOOTSTRAP_MYSQL_SERIES)
+        let discovery_client = ClientCatalog::resolve(DISCOVERY_MYSQL_SERIES)
             .map_err(|_| TargetVerificationError::ClientUnavailable)?;
-        let prepared = if self.pull_missing_client {
-            self.runtime
-                .prepare(&input.docker_context, client.series(), client.image())
-                .await
-        } else {
-            self.runtime
-                .prepare_existing(&input.docker_context, client.series(), client.image())
-                .await
-        }
-        .map_err(map_runtime_error)?;
+        let prepared = self
+            .prepare_client(&input.docker_context, discovery_client)
+            .await?;
         let option_file = self
             .runtime
             .create_container_option_file(
@@ -84,9 +77,27 @@ where
                 MysqlTlsMode::Required,
             )
             .map_err(map_runtime_error)?;
-        let server = self
+        let discovered_server = self
             .probe_until_ready(&prepared, &input.container_id, &option_file)
             .await?;
+        let detected_series = format!(
+            "{}.{}",
+            discovered_server.version.major, discovered_server.version.minor
+        );
+        let client = ClientCatalog::resolve(&detected_series).map_err(|_| {
+            TargetVerificationError::UnsupportedServerSeries {
+                major: discovered_server.version.major,
+                minor: discovered_server.version.minor,
+                supported: ClientCatalog::supported_series(),
+            }
+        })?;
+        let server = if client == discovery_client {
+            discovered_server
+        } else {
+            let prepared = self.prepare_client(&input.docker_context, client).await?;
+            self.probe_until_ready(&prepared, &input.container_id, &option_file)
+                .await?
+        };
 
         Ok(VerifiedLocalTarget {
             server_version: server.version,
@@ -102,6 +113,23 @@ impl<R> DockerLocalTargetVerifier<R>
 where
     R: ProcessRunner,
 {
+    async fn prepare_client(
+        &self,
+        docker_context: &str,
+        client: crate::infrastructure::mysql::ApprovedMysqlClient,
+    ) -> Result<crate::infrastructure::mysql::PreparedMysqlClient, TargetVerificationError> {
+        let prepared = if self.pull_missing_client {
+            self.runtime
+                .prepare(docker_context, client.series(), client.image())
+                .await
+        } else {
+            self.runtime
+                .prepare_existing(docker_context, client.series(), client.image())
+                .await
+        };
+        prepared.map_err(map_runtime_error)
+    }
+
     async fn probe_until_ready(
         &self,
         client: &crate::infrastructure::mysql::PreparedMysqlClient,
@@ -243,5 +271,49 @@ mod tests {
 
         assert_eq!(verified.server_version.to_string(), "8.4.4");
         assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn discovers_the_server_then_selects_and_verifies_its_approved_client() {
+        let discovery = ClientCatalog::resolve("8.4").unwrap();
+        let selected = ClientCatalog::resolve("8.0").unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let runner = FakeRunner {
+            outputs: Mutex::new(VecDeque::from([
+                ProcessOutput::success(
+                    serde_json::to_vec(&vec![discovery.repository_digest()]).unwrap(),
+                ),
+                ProcessOutput::success("mysql  Ver 8.4.4 for Linux on aarch64\n"),
+                ProcessOutput::success(
+                    "8.0.40\tMySQL Community Server - GPL\t22222222-2222-4222-8222-222222222222\n",
+                ),
+                ProcessOutput::success(
+                    serde_json::to_vec(&vec![selected.repository_digest()]).unwrap(),
+                ),
+                ProcessOutput::success("mysql  Ver 8.0.46 for Linux on aarch64\n"),
+                ProcessOutput::success(
+                    "8.0.40\tMySQL Community Server - GPL\t22222222-2222-4222-8222-222222222222\n",
+                ),
+            ])),
+            calls: Arc::clone(&calls),
+        };
+        let verifier =
+            DockerLocalTargetVerifier::with_retry_policy(runner, 1, Duration::from_millis(0));
+        let input = NewLocalTargetInput {
+            docker_context: "desktop-linux".to_owned(),
+            container_name: ContainerName::try_from("mysql-8-0").unwrap(),
+            container_id: ContainerId::try_from("a".repeat(64)).unwrap(),
+            username: "root".to_owned(),
+            password: SecretString::from("secret"),
+            central_database: DatabaseName::try_from("salt_central").unwrap(),
+            tenant_database_prefix: "salt_".to_owned(),
+            managed_by_reprodb: false,
+        };
+
+        let verified = verifier.verify(&input).await.unwrap();
+
+        assert_eq!(verified.server_version.to_string(), "8.0.40");
+        assert_eq!(verified.client, selected);
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
     }
 }

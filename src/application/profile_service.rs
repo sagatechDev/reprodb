@@ -70,8 +70,14 @@ pub enum SourceVerificationError {
     #[error("the MySQL source did not negotiate the required TLS transport")]
     TlsRequiredButNotNegotiated,
 
-    #[error("the detected MySQL server series is not supported by the approved client catalog")]
-    UnsupportedServerSeries,
+    #[error(
+        "the detected MySQL server series {major}.{minor} is not supported by the approved client catalog (currently: {supported})"
+    )]
+    UnsupportedServerSeries {
+        major: u16,
+        minor: u16,
+        supported: &'static str,
+    },
 }
 
 #[async_trait]
@@ -186,7 +192,7 @@ impl ProfileService {
             verified.server_version.major, verified.server_version.minor
         );
         if detected_series != verified.client.series() {
-            return Err(SourceVerificationError::UnsupportedServerSeries.into());
+            return Err(SourceVerificationError::InvalidMetadata.into());
         }
 
         if let Some(configured_context) = &config.client_runtime.docker_context
@@ -527,6 +533,40 @@ mod tests {
                 .expose_secret(),
             "password-that-must-not-leak"
         );
+    }
+
+    #[tokio::test]
+    async fn unsupported_server_error_reports_the_safe_detected_series() {
+        let temp = TempDir::new().unwrap();
+        let repository = repository(&temp);
+        let store = crate::infrastructure::credentials::MemoryCredentialStore::default();
+        let verifier = FakeVerifier {
+            calls: AtomicUsize::new(0),
+            result: Err(SourceVerificationError::UnsupportedServerSeries {
+                major: 5,
+                minor: 7,
+                supported: "8.0, 8.4",
+            }),
+        };
+
+        let error = ProfileService::new(repository.clone())
+            .add(&store, &verifier, new_profile_input("sandbox"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "the detected MySQL server series 5.7 is not supported by the approved client catalog (currently: 8.0, 8.4)"
+        );
+        assert!(matches!(
+            error,
+            ProfileServiceError::Verification(SourceVerificationError::UnsupportedServerSeries {
+                major: 5,
+                minor: 7,
+                supported: "8.0, 8.4"
+            })
+        ));
+        assert!(repository.load().unwrap().profiles.is_empty());
     }
 
     #[tokio::test]

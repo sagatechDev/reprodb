@@ -43,7 +43,7 @@ docker --context <local> run --rm -i
 
 Não há shell, `docker cp`, TTY ou SQL cru intermediário. `-i` é obrigatório para manter o stdin do client container aberto; `-t` é proibido porque um pseudo-terminal pode alterar o stream.
 
-A senha fica somente no `SecretString` e no option file efêmero `0600` criado no diretório temporário seguro do sistema operacional. Ela não aparece no argv, metadata, estado ou diagnóstico. A conexão com o MySQL target exige TLS, inclusive para autenticação `caching_sha2_password` no MySQL 8.4. O stderr é drenado em paralelo, limitado a 64 KiB e usado apenas para classificar a falha; seu conteúdo não é devolvido nos erros públicos.
+A senha fica somente no `SecretString` e no option file efêmero `0600` criado no diretório temporário seguro do sistema operacional. Ela não aparece no argv, metadata, estado ou diagnóstico. A conexão com o MySQL target exige TLS, inclusive para autenticação `caching_sha2_password` no MySQL 8.0/8.4. O stderr é drenado em paralelo, limitado a 64 KiB e usado apenas para classificar a falha; seu conteúdo não é devolvido nos erros públicos.
 
 ## Recriação e estado recuperável
 

@@ -529,7 +529,7 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 
 **Labels:** `priority:p0`, `type:feature`, `area:mysql`, `area:docker`
 
-**Status:** implementação concluída e validada no Docker Desktop/macOS contra o `mysql-8` local; compilação Linux validada, com execução real em Docker Engine Linux ainda acompanhada pela RDB-002. VPN não faz parte do DoD local.
+**Status:** implementação concluída e validada no Docker Desktop/macOS. O runtime usa 8.4 somente para descobrir `SELECT VERSION()`, seleciona automaticamente 8.0.46 ou 8.4.4 pelo catálogo v2, baixa a imagem oficial fixada por digest quando ausente e reconecta com o client definitivo. Séries desconhecidas informam versão detectada e catálogo suportado. Compilação Linux validada, com execução real em Docker Engine Linux ainda acompanhada pela RDB-002. VPN não faz parte do DoD local.
 
 **Escopo:** catálogo versionado, imagem fixada por digest, `image inspect`, `pull`, mount de option file, rede Mac/Linux e execução sem shell interpolation.
 
@@ -636,7 +636,7 @@ Critério da milestone: `reprodb dump TENANT` gera um artefato `.sql.zst` atômi
 
 **Labels:** `priority:p0`, `type:feature`, `area:mysql`, `area:security`
 
-**Status:** implementada — preflight somente leitura retorna apenas agregados, valida charset/collation/GTID e inventaria engines/objetos/definers. A policy v2 exige MySQL 8.4 com client da mesma série, aceita somente tabelas InnoDB, bloqueia qualquer view, trigger, routine, event ou `DEFINER`, explicita `--skip-routines/--skip-events` e produz argumentos ordenados sem shell. O risco de DDL concorrente permanece como aviso estruturado. A visibilidade integral de metadata pela credencial continua como gate explícito para produção.
+**Status:** implementada — preflight somente leitura retorna apenas agregados, valida charset/collation/GTID e inventaria engines/objetos/definers. A policy v2 aceita MySQL 8.0 ou 8.4 com client aprovado da mesma série, aceita somente tabelas InnoDB, bloqueia qualquer view, trigger, routine, event ou `DEFINER`, explicita `--skip-routines/--skip-events` e produz argumentos ordenados sem shell. O risco de DDL concorrente permanece como aviso estruturado. A visibilidade integral de metadata pela credencial continua como gate explícito para produção.
 
 **Flags iniciais:**
 

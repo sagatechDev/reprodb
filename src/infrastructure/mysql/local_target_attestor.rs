@@ -100,7 +100,7 @@ fn map_verification_error(error: TargetVerificationError) -> LocalTargetAttestat
             LocalTargetAttestationError::ContainerNotRunning
         }
         TargetVerificationError::ClientUnavailable
-        | TargetVerificationError::UnsupportedServerSeries => {
+        | TargetVerificationError::UnsupportedServerSeries { .. } => {
             LocalTargetAttestationError::ClientUnavailable
         }
         TargetVerificationError::ConnectionUnavailable => {

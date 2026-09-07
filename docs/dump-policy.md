@@ -7,7 +7,7 @@ Este documento registra a policy de dump versionada pelo `reprodb`. Ela é delib
 A policy atual aceita somente:
 
 - servidor cujo vendor observado é MySQL;
-- servidor MySQL 8.4 e client `mysqldump` aprovado da mesma série;
+- servidor MySQL 8.0 ou 8.4 e client `mysqldump` aprovado da mesma série;
 - database válido, com charset e collation validados;
 - tabelas base exclusivamente InnoDB;
 - nenhuma view;

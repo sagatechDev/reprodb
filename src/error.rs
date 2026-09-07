@@ -130,7 +130,7 @@ impl AppError {
             )) => ErrorCategory::Docker,
             Self::Profile(ProfileServiceError::Verification(
                 SourceVerificationError::ClientUnavailable
-                | SourceVerificationError::UnsupportedServerSeries,
+                | SourceVerificationError::UnsupportedServerSeries { .. },
             )) => ErrorCategory::Dependency,
             Self::Profile(ProfileServiceError::Verification(
                 SourceVerificationError::NetworkUnavailable
@@ -158,7 +158,7 @@ impl AppError {
             Self::Setup(SetupServiceError::InvalidField { .. }) => ErrorCategory::Usage,
             Self::Setup(SetupServiceError::Verification(
                 TargetVerificationError::ClientUnavailable
-                | TargetVerificationError::UnsupportedServerSeries,
+                | TargetVerificationError::UnsupportedServerSeries { .. },
             )) => ErrorCategory::Dependency,
             Self::Setup(SetupServiceError::Verification(
                 TargetVerificationError::AuthenticationFailed,

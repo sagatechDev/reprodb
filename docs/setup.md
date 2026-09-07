@@ -35,7 +35,7 @@ Com dois targets configurados, o `pull` interativo pergunta qual receberá o res
 ## Limites atuais
 
 - execução real em Docker Engine Linux ainda precisa ser validada;
-- apenas a série MySQL 8.4 está no catálogo aprovado;
+- as séries MySQL 8.0 e 8.4 estão no catálogo aprovado e são detectadas automaticamente;
 - criação automática de container não pertence ao MVP;
 - `setup` não altera automaticamente um bind exposto em todas as interfaces;
 - o comando não cria usuário MySQL.

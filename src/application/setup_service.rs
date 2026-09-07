@@ -65,8 +65,14 @@ pub enum TargetVerificationError {
     #[error("the selected container returned invalid MySQL metadata")]
     InvalidMetadata,
 
-    #[error("the selected MySQL target series is not supported by the approved client catalog")]
-    UnsupportedServerSeries,
+    #[error(
+        "the selected MySQL target series {major}.{minor} is not supported by the approved client catalog (currently: {supported})"
+    )]
+    UnsupportedServerSeries {
+        major: u16,
+        minor: u16,
+        supported: &'static str,
+    },
 }
 
 #[async_trait]
@@ -149,7 +155,7 @@ impl SetupService {
             verified.server_version.major, verified.server_version.minor
         );
         if detected_series != verified.client.series() {
-            return Err(TargetVerificationError::UnsupportedServerSeries.into());
+            return Err(TargetVerificationError::InvalidMetadata.into());
         }
 
         let previous_credential = config

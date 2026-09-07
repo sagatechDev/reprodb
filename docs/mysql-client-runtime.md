@@ -2,25 +2,31 @@
 
 O reprodb não pesquisa versões na internet em tempo de execução e não instala `mysql` ou `mysqldump` no host. A escolha é feita por um catálogo compilado no binário, contendo apenas combinações testadas de série, versão exata e digest imutável.
 
-## Catálogo inicial
+## Catálogo aprovado
 
 | Série do source | Client | Imagem aprovada |
 |---|---|---|
+| MySQL 8.0 | 8.0.46 | `mysql:8.0.46@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b` |
 | MySQL 8.4 | 8.4.4 | `mysql:8.4.4@sha256:1d967fb75a64dc3c2894c69285becfc2304ae0c3c4f4c715c297f3c12d60b01c` |
 
-MySQL 8.0 ainda não possui uma entrada porque a matriz não foi validada. Uma tag mutável como `mysql:8` ou uma imagem com outro digest é recusada antes de qualquer container ser iniciado.
+Uma tag mutável como `mysql:8` ou uma imagem com outro digest é recusada antes de qualquer container ser iniciado.
+
+`8.4` não é uma versão global fixa. Ela é usada apenas como client de descoberta porque já está disponível e consegue executar a consulta mínima de versão. Depois de `SELECT VERSION()`, o runtime seleciona a entrada que corresponde à série detectada, baixa a imagem automaticamente se estiver ausente, verifica digest e versão do binário e repete a conexão com o client definitivo. Séries fora do catálogo são recusadas com a versão observada e a lista de séries suportadas.
 
 ## Preparação
 
-Para preparar um client, o runtime:
+Para descobrir e preparar um client, o runtime:
 
 1. valida o Docker context;
-2. compara a configuração com o catálogo;
-3. executa `docker image inspect`;
-4. usa `docker image pull --quiet` somente quando a imagem está ausente;
-5. inspeciona novamente e confere `RepoDigests`;
-6. executa `mysql --version` com `--pull=never`;
-7. devolve um `PreparedMysqlClient` associado ao mesmo Docker context.
+2. prepara o client de descoberta aprovado;
+3. consulta a versão/vendor do servidor;
+4. resolve a série detectada no catálogo;
+5. executa `docker image inspect` para o client definitivo;
+6. usa `docker image pull --quiet` somente quando a imagem está ausente;
+7. inspeciona novamente e confere `RepoDigests`;
+8. executa `mysql --version` com `--pull=never`;
+9. repete a conexão usando o client selecionado;
+10. devolve um `PreparedMysqlClient` associado ao mesmo Docker context.
 
 O tipo preparado é exigido pelas operações seguintes. Assim, uma chamada de conexão não consegue receber diretamente uma string de imagem que não passou pelas verificações.
 
@@ -65,7 +71,7 @@ Os comandos são representados por programa e vetor de argumentos e executados d
 No macOS, os testes opt-in comprovaram:
 
 - inspeção do digest aprovado no context `desktop-linux`;
-- execução real do client MySQL 8.4.4;
+- execução real dos clients MySQL 8.0.46 e 8.4.4;
 - conexão TCP real ao container local `mysql-8` pela porta publicada;
 - leitura de `VERSION()` e `@@version_comment`;
 - option file montado read-only;
