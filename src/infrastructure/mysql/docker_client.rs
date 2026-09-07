@@ -428,7 +428,7 @@ fn connection_probe_spec(
     mount.push(option_file.parent().unwrap_or(option_file).as_os_str());
     mount.push(format!(",dst={MYSQL_SECRETS_CONTAINER_DIRECTORY},readonly"));
 
-    docker_spec(context).args([
+    let mut spec = docker_spec(context).args([
         OsString::from("run"),
         OsString::from("--rm"),
         OsString::from("--pull=never"),
@@ -440,7 +440,11 @@ fn connection_probe_spec(
         OsString::from(format!(
             "--defaults-file={MYSQL_OPTION_FILE_CONTAINER_PATH}"
         )),
-        OsString::from("--no-login-paths"),
+    ]);
+    if client.supports_no_login_paths() {
+        spec = spec.arg("--no-login-paths");
+    }
+    spec.args([
         OsString::from("--batch"),
         OsString::from("--skip-column-names"),
         OsString::from("--execute"),
@@ -459,7 +463,7 @@ fn connection_query_spec(
     mount.push(option_file.parent().unwrap_or(option_file).as_os_str());
     mount.push(format!(",dst={MYSQL_SECRETS_CONTAINER_DIRECTORY},readonly"));
 
-    docker_spec(context).args([
+    let mut spec = docker_spec(context).args([
         OsString::from("run"),
         OsString::from("--rm"),
         OsString::from("--pull=never"),
@@ -471,7 +475,11 @@ fn connection_query_spec(
         OsString::from(format!(
             "--defaults-file={MYSQL_OPTION_FILE_CONTAINER_PATH}"
         )),
-        OsString::from("--no-login-paths"),
+    ]);
+    if client.supports_no_login_paths() {
+        spec = spec.arg("--no-login-paths");
+    }
+    spec.args([
         OsString::from("--batch"),
         OsString::from("--skip-column-names"),
         OsString::from(format!("--database={}", database.as_str())),
@@ -490,7 +498,7 @@ fn container_connection_probe_spec(
     mount.push(option_file.parent().unwrap_or(option_file).as_os_str());
     mount.push(format!(",dst={MYSQL_SECRETS_CONTAINER_DIRECTORY},readonly"));
 
-    docker_spec(context).args([
+    let mut spec = docker_spec(context).args([
         OsString::from("run"),
         OsString::from("--rm"),
         OsString::from("--pull=never"),
@@ -502,7 +510,11 @@ fn container_connection_probe_spec(
         OsString::from(format!(
             "--defaults-file={MYSQL_OPTION_FILE_CONTAINER_PATH}"
         )),
-        OsString::from("--no-login-paths"),
+    ]);
+    if client.supports_no_login_paths() {
+        spec = spec.arg("--no-login-paths");
+    }
+    spec.args([
         OsString::from("--batch"),
         OsString::from("--skip-column-names"),
         OsString::from("--execute"),
@@ -995,6 +1007,27 @@ mod tests {
         }
         assert_eq!(docker_source_host("db.internal"), "db.internal");
         assert_eq!(docker_source_host("10.0.0.8"), "10.0.0.8");
+    }
+
+    #[test]
+    fn connection_specs_use_no_login_paths_only_when_the_client_supports_it() {
+        let option_file = Path::new("/tmp/reprodb-test-client.cnf");
+        let mysql_8_0 = arguments(&connection_probe_spec(
+            "default",
+            ClientCatalog::resolve("8.0").unwrap(),
+            option_file,
+        ));
+        let mysql_8_4 = arguments(&connection_probe_spec(
+            "default",
+            ClientCatalog::resolve("8.4").unwrap(),
+            option_file,
+        ));
+
+        assert!(!mysql_8_0.contains(&"--no-login-paths".to_owned()));
+        assert!(mysql_8_4.contains(&"--no-login-paths".to_owned()));
+        assert!(mysql_8_0.iter().any(|argument| {
+            argument.starts_with("--defaults-file=/run/secrets/reprodb/client.cnf")
+        }));
     }
 
     #[test]

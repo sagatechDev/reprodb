@@ -38,7 +38,7 @@ docker --context <local> run --rm -i
   --network=container:<ID completo>
   --mount type=bind,src=<private-temp-dir>,dst=/run/secrets/reprodb,readonly
   <imagem MySQL aprovada por digest>
-  mysql --defaults-file=/run/secrets/reprodb/client.cnf --no-login-paths ...
+  mysql --defaults-file=/run/secrets/reprodb/client.cnf [--no-login-paths quando suportado] ...
 ```
 
 Não há shell, `docker cp`, TTY ou SQL cru intermediário. `-i` é obrigatório para manter o stdin do client container aberto; `-t` é proibido porque um pseudo-terminal pode alterar o stream.

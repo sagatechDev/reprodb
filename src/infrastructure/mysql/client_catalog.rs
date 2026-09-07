@@ -30,6 +30,7 @@ pub struct ApprovedMysqlClient {
     version: MysqlVersion,
     image: &'static str,
     repository_digest: &'static str,
+    supports_no_login_paths: bool,
 }
 
 impl ApprovedMysqlClient {
@@ -48,6 +49,10 @@ impl ApprovedMysqlClient {
     pub const fn repository_digest(self) -> &'static str {
         self.repository_digest
     }
+
+    pub const fn supports_no_login_paths(self) -> bool {
+        self.supports_no_login_paths
+    }
 }
 
 const APPROVED_CLIENTS: [ApprovedMysqlClient; 2] = [
@@ -60,6 +65,7 @@ const APPROVED_CLIENTS: [ApprovedMysqlClient; 2] = [
         },
         image: MYSQL_8_0_46_IMAGE,
         repository_digest: MYSQL_8_0_46_REPO_DIGEST,
+        supports_no_login_paths: false,
     },
     ApprovedMysqlClient {
         series: "8.4",
@@ -70,6 +76,7 @@ const APPROVED_CLIENTS: [ApprovedMysqlClient; 2] = [
         },
         image: MYSQL_8_4_4_IMAGE,
         repository_digest: MYSQL_8_4_4_REPO_DIGEST,
+        supports_no_login_paths: true,
     },
 ];
 
@@ -128,6 +135,7 @@ mod tests {
         assert!(client.image().starts_with("mysql:8.4.4@sha256:"));
         assert_eq!(client.image().matches("sha256:").count(), 1);
         assert_eq!(client.repository_digest().len(), "mysql@sha256:".len() + 64);
+        assert!(client.supports_no_login_paths());
     }
 
     #[test]
@@ -135,6 +143,7 @@ mod tests {
         let mysql_8_0 = ClientCatalog::resolve("8.0").unwrap();
         assert_eq!(mysql_8_0.version().to_string(), "8.0.46");
         assert!(mysql_8_0.image().starts_with("mysql:8.0.46@sha256:"));
+        assert!(!mysql_8_0.supports_no_login_paths());
         assert_eq!(
             ClientCatalog::resolve("5.7").unwrap_err(),
             ClientCatalogError::UnsupportedSeries

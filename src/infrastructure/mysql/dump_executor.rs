@@ -168,7 +168,7 @@ fn dump_process_spec(
     mount.push(option_file.parent().unwrap_or(option_file).as_os_str());
     mount.push(format!(",dst={MYSQL_SECRETS_CONTAINER_DIRECTORY},readonly"));
 
-    ProcessSpec::new("docker")
+    let mut spec = ProcessSpec::new("docker")
         .args(["--context", request.docker_context, "run", "--rm", "--name"])
         .args([
             OsString::from(operation_container),
@@ -181,9 +181,11 @@ fn dump_process_spec(
             OsString::from(format!(
                 "--defaults-file={MYSQL_OPTION_FILE_CONTAINER_PATH}"
             )),
-            OsString::from("--no-login-paths"),
-        ])
-        .args(request.plan.arguments().iter().map(OsString::from))
+        ]);
+    if request.client.supports_no_login_paths() {
+        spec = spec.arg("--no-login-paths");
+    }
+    spec.args(request.plan.arguments().iter().map(OsString::from))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

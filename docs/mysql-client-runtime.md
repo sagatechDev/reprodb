@@ -48,6 +48,8 @@ type=bind,src=<diretório-temporário>,dst=/run/secrets/reprodb,readonly
 
 `--defaults-file` é o primeiro argumento do client. A senha não aparece no argv, em variáveis de ambiente do container ou nos erros devolvidos pelo runtime.
 
+O client 8.4 recebe também `--no-login-paths`. O client 8.0.46 não reconhece essa opção, portanto ela é omitida nessa série. Isso não introduz estado implícito: cada operação roda numa imagem oficial imutável em container efêmero, sem montar o diretório home do host; somente o option file privado do reprodb é montado.
+
 O runtime monta o diretório temporário privado em `/run/secrets/reprodb` e usa `/run/secrets/reprodb/client.cnf`. O option file recebe explicitamente um dos cinco modos TLS. CA/cert/key são copiados para nomes internos fixos no mesmo mount read-only, sem colocar o path original no option file ou no argv.
 
 `profile add` usa `REQUIRED` por padrão local. Produção exige `VERIFY_IDENTITY`, CA e confirmação de um cipher negociado; o preflight repete essa confirmação imediatamente antes do dump.

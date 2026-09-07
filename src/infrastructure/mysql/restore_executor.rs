@@ -281,7 +281,7 @@ fn mysql_process_spec(
     if interactive {
         spec = spec.arg("-i");
     }
-    spec.args([
+    spec = spec.args([
         OsString::from("--pull=never"),
         OsString::from(format!("--network=container:{}", target.container_id())),
         OsString::from("--mount"),
@@ -291,8 +291,11 @@ fn mysql_process_spec(
         OsString::from(format!(
             "--defaults-file={MYSQL_OPTION_FILE_CONTAINER_PATH}"
         )),
-        OsString::from("--no-login-paths"),
-    ])
+    ]);
+    if target.client().supports_no_login_paths() {
+        spec = spec.arg("--no-login-paths");
+    }
+    spec
 }
 
 fn spawn(spec: &ProcessSpec, pipe_stdin: bool) -> Result<Child, RestoreExecutorError> {
