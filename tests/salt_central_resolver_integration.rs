@@ -34,6 +34,7 @@ async fn resolves_observed_salt_domains_from_the_real_central_database() {
             username: "root".to_owned(),
             password: local_container_root_password(&context, &expected),
             tls_mode: MysqlTlsMode::Required,
+            tls_material: Default::default(),
             central_database: DatabaseName::try_from("salt_central").unwrap(),
             client: ClientCatalog::resolve("8.4").unwrap(),
         },

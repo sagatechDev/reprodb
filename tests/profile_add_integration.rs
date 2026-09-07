@@ -36,6 +36,7 @@ async fn adds_a_profile_after_verifying_the_real_local_mysql_source() {
         username: "root".to_owned(),
         password,
         tls_mode: MysqlTlsMode::Required,
+        tls_material: Default::default(),
         production: false,
     };
 

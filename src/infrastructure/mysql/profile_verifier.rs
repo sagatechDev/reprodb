@@ -64,12 +64,13 @@ where
         .map_err(map_runtime_error)?;
         let option_file = self
             .runtime
-            .create_option_file(
+            .create_option_file_with_tls_material(
                 &input.host,
                 input.port,
                 &input.username,
                 &input.password,
                 input.tls_mode,
+                &input.tls_material,
             )
             .map_err(map_runtime_error)?;
         let server = self
@@ -95,6 +96,9 @@ fn map_runtime_error(error: DockerClientError) -> SourceVerificationError {
         }
         DockerClientError::SourceNetworkUnavailable => SourceVerificationError::NetworkUnavailable,
         DockerClientError::AuthenticationFailed => SourceVerificationError::AuthenticationFailed,
+        DockerClientError::TlsValidationFailed => {
+            SourceVerificationError::TlsRequiredButNotNegotiated
+        }
         DockerClientError::InvalidServerMetadata => SourceVerificationError::InvalidMetadata,
         DockerClientError::Catalog(_)
         | DockerClientError::ImageUnavailable

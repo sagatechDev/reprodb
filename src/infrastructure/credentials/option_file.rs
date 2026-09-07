@@ -4,14 +4,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::{ExposeSecret, SecretString, zeroize::Zeroize};
 use tempfile::{Builder, TempDir};
 use thiserror::Error;
 
-use crate::domain::MysqlTlsMode;
+use crate::domain::{MysqlTlsMaterialPaths, MysqlTlsMode};
 
-pub const MYSQL_OPTION_FILE_CONTAINER_PATH: &str = "/run/secrets/reprodb.cnf";
+pub const MYSQL_SECRETS_CONTAINER_DIRECTORY: &str = "/run/secrets/reprodb";
+pub const MYSQL_OPTION_FILE_CONTAINER_PATH: &str = "/run/secrets/reprodb/client.cnf";
+pub const MYSQL_CA_CONTAINER_PATH: &str = "/run/secrets/reprodb/ca.pem";
+pub const MYSQL_CERT_CONTAINER_PATH: &str = "/run/secrets/reprodb/client-cert.pem";
+pub const MYSQL_KEY_CONTAINER_PATH: &str = "/run/secrets/reprodb/client-key.pem";
 const OPTION_FILE_NAME: &str = "client.cnf";
+const MAX_TLS_MATERIAL_BYTES: u64 = 1024 * 1024;
 
 pub struct MysqlOptionFile {
     directory: TempDir,
@@ -35,6 +40,24 @@ impl MysqlOptionFile {
         password: &SecretString,
         tls_mode: MysqlTlsMode,
     ) -> Result<Self, OptionFileError> {
+        Self::create_with_tls_material(
+            host,
+            port,
+            username,
+            password,
+            tls_mode,
+            &MysqlTlsMaterialPaths::default(),
+        )
+    }
+
+    pub fn create_with_tls_material(
+        host: &str,
+        port: u16,
+        username: &str,
+        password: &SecretString,
+        tls_mode: MysqlTlsMode,
+        tls_material: &MysqlTlsMaterialPaths,
+    ) -> Result<Self, OptionFileError> {
         validate_value("host", host)?;
         validate_value("username", username)?;
         validate_value("password", password.expose_secret())?;
@@ -53,12 +76,15 @@ impl MysqlOptionFile {
             }
         })?;
         let path = directory.path().join(OPTION_FILE_NAME);
+        copy_tls_material(directory.path(), tls_material)?;
         let file = create_private_file(&path).map_err(|source| OptionFileError::Io {
             operation: "create the MySQL option file",
             source,
         })?;
 
-        if let Err(error) = write_contents(file, host, port, username, password, tls_mode) {
+        if let Err(error) =
+            write_contents(file, host, port, username, password, tls_mode, tls_material)
+        {
             let _ = fs::remove_file(&path);
             return Err(error);
         }
@@ -83,6 +109,9 @@ impl MysqlOptionFile {
 pub enum OptionFileError {
     #[error("invalid MySQL option-file value for `{field}`")]
     InvalidValue { field: &'static str },
+
+    #[error("invalid or unavailable MySQL TLS material for `{field}`")]
+    InvalidTlsMaterial { field: &'static str },
 
     #[error("could not {operation}")]
     Io {
@@ -112,6 +141,7 @@ fn write_contents(
     username: &str,
     password: &SecretString,
     tls_mode: MysqlTlsMode,
+    tls_material: &MysqlTlsMaterialPaths,
 ) -> Result<(), OptionFileError> {
     let mut writer = BufWriter::new(file);
     writer
@@ -122,6 +152,7 @@ fn write_contents(
         .and_then(|_| write_option(&mut writer, "password", password.expose_secret()))
         .and_then(|_| writer.write_all(b"protocol=TCP\n"))
         .and_then(|_| writeln!(writer, "ssl-mode={}", tls_mode.option_value()))
+        .and_then(|_| write_tls_options(&mut writer, tls_material))
         .and_then(|_| writer.flush())
         .map_err(|source| OptionFileError::Io {
             operation: "write the MySQL option file",
@@ -136,6 +167,55 @@ fn write_contents(
         operation: "sync the MySQL option file",
         source,
     })
+}
+
+fn write_tls_options(writer: &mut impl Write, material: &MysqlTlsMaterialPaths) -> io::Result<()> {
+    if material.ca.is_some() {
+        writeln!(writer, "ssl-ca={MYSQL_CA_CONTAINER_PATH}")?;
+    }
+    if material.cert.is_some() {
+        writeln!(writer, "ssl-cert={MYSQL_CERT_CONTAINER_PATH}")?;
+    }
+    if material.key.is_some() {
+        writeln!(writer, "ssl-key={MYSQL_KEY_CONTAINER_PATH}")?;
+    }
+    Ok(())
+}
+
+fn copy_tls_material(
+    directory: &Path,
+    material: &MysqlTlsMaterialPaths,
+) -> Result<(), OptionFileError> {
+    for (field, source, destination) in [
+        ("ca", material.ca.as_deref(), "ca.pem"),
+        ("cert", material.cert.as_deref(), "client-cert.pem"),
+        ("key", material.key.as_deref(), "client-key.pem"),
+    ] {
+        let Some(source) = source else { continue };
+        if !source.is_absolute() {
+            return Err(OptionFileError::InvalidTlsMaterial { field });
+        }
+        let metadata =
+            fs::metadata(source).map_err(|_| OptionFileError::InvalidTlsMaterial { field })?;
+        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_TLS_MATERIAL_BYTES {
+            return Err(OptionFileError::InvalidTlsMaterial { field });
+        }
+        let mut bytes =
+            fs::read(source).map_err(|_| OptionFileError::InvalidTlsMaterial { field })?;
+        if bytes.len() as u64 > MAX_TLS_MATERIAL_BYTES {
+            return Err(OptionFileError::InvalidTlsMaterial { field });
+        }
+        let destination = directory.join(destination);
+        let mut output = create_private_file(&destination)
+            .map_err(|_| OptionFileError::InvalidTlsMaterial { field })?;
+        let result = output
+            .write_all(&bytes)
+            .and_then(|()| output.sync_all())
+            .map_err(|_| OptionFileError::InvalidTlsMaterial { field });
+        bytes.zeroize();
+        result?;
+    }
+    Ok(())
 }
 
 fn write_option(writer: &mut impl Write, name: &str, value: &str) -> io::Result<()> {
@@ -265,7 +345,80 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(option_file.container_path(), "/run/secrets/reprodb.cnf");
+        assert_eq!(
+            option_file.container_path(),
+            MYSQL_OPTION_FILE_CONTAINER_PATH
+        );
+    }
+
+    #[test]
+    fn copies_tls_material_privately_and_references_only_fixed_container_paths() {
+        let sources = TempDir::new().unwrap();
+        let ca = sources.path().join("source-ca.pem");
+        let cert = sources.path().join("source-cert.pem");
+        let key = sources.path().join("source-key.pem");
+        fs::write(&ca, b"test-ca").unwrap();
+        fs::write(&cert, b"test-cert").unwrap();
+        fs::write(&key, b"test-key").unwrap();
+
+        let option_file = MysqlOptionFile::create_with_tls_material(
+            "db.example.test",
+            3306,
+            "reprodb",
+            &SecretString::from("secret"),
+            MysqlTlsMode::VerifyIdentity,
+            &MysqlTlsMaterialPaths {
+                ca: Some(ca.clone()),
+                cert: Some(cert.clone()),
+                key: Some(key.clone()),
+            },
+        )
+        .unwrap();
+
+        let rendered = fs::read_to_string(option_file.path()).unwrap();
+        assert!(rendered.contains(&format!("ssl-ca={MYSQL_CA_CONTAINER_PATH}")));
+        assert!(rendered.contains(&format!("ssl-cert={MYSQL_CERT_CONTAINER_PATH}")));
+        assert!(rendered.contains(&format!("ssl-key={MYSQL_KEY_CONTAINER_PATH}")));
+        assert!(!rendered.contains(ca.to_string_lossy().as_ref()));
+        assert!(!rendered.contains(cert.to_string_lossy().as_ref()));
+        assert!(!rendered.contains(key.to_string_lossy().as_ref()));
+        assert_eq!(
+            fs::read(option_file.directory_path().join("ca.pem")).unwrap(),
+            b"test-ca"
+        );
+        assert_eq!(
+            fs::read(option_file.directory_path().join("client-cert.pem")).unwrap(),
+            b"test-cert"
+        );
+        assert_eq!(
+            fs::read(option_file.directory_path().join("client-key.pem")).unwrap(),
+            b"test-key"
+        );
+    }
+
+    #[test]
+    fn invalid_tls_material_errors_do_not_echo_host_paths() {
+        let marker = "private-certificate-marker";
+        let error = MysqlOptionFile::create_with_tls_material(
+            "db.example.test",
+            3306,
+            "reprodb",
+            &SecretString::from("secret"),
+            MysqlTlsMode::VerifyIdentity,
+            &MysqlTlsMaterialPaths {
+                ca: Some(PathBuf::from(marker)),
+                cert: None,
+                key: None,
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            OptionFileError::InvalidTlsMaterial { field: "ca" }
+        ));
+        assert!(!error.to_string().contains(marker));
+        assert!(!format!("{error:?}").contains(marker));
     }
 
     #[cfg(unix)]

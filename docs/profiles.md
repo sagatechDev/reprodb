@@ -13,19 +13,22 @@ reprodb profile use NAME
 reprodb profile remove NAME
 ```
 
-`profile add` pergunta host, porta, usuário e senha. Durante a senha, a CLI mostra um `*` por caractere para deixar a digitação visível sem revelar seu conteúdo. Texto colado também é aceito; use o atalho do seu terminal (`Cmd+V` normalmente no macOS e `Ctrl+Shift+V` normalmente no Linux). Em seguida a CLI pergunta se o source é produção e define a política TLS — `REQUIRED` é o default e é obrigatório para produção.
+`profile add` pergunta host, porta, usuário e senha. Durante a senha, a CLI mostra um `*` por caractere para deixar a digitação visível sem revelar seu conteúdo. Texto colado também é aceito; use o atalho do seu terminal (`Cmd+V` normalmente no macOS e `Ctrl+Shift+V` normalmente no Linux). Em seguida a CLI pergunta se o source é produção e define a política TLS — `REQUIRED` é o default local. Produção seleciona obrigatoriamente `VERIFY_IDENTITY` e pede o path absoluto da CA. Certificado e chave de cliente também podem ser informados quando o servidor exigir mTLS.
 
 Antes de salvar, o comando:
 
 1. descobre e valida o Docker context atual;
 2. prepara a imagem de client aprovada e fixada por digest;
-3. cria um option file temporário privado com a política TLS;
-4. testa a conexão e detecta versão/vendor do servidor;
-5. recusa uma série ainda ausente do catálogo;
-6. salva a credencial e persiste o profile de forma transacional;
-7. torna o novo profile ativo.
+3. valida e copia o material TLS para um diretório temporário privado;
+4. cria nesse diretório um option file que contém somente paths internos fixos;
+5. testa a conexão, o cipher TLS e detecta versão/vendor do servidor;
+6. recusa uma série ainda ausente do catálogo;
+7. salva a credencial e persiste o profile de forma transacional;
+8. torna o novo profile ativo.
 
 Falha de Docker, rede, autenticação, versão ou configuração não deixa um profile salvo. Se o TOML falhar depois que o credential store for atualizado, o fluxo tenta apagar imediatamente a credencial nova.
+
+O modo não interativo equivalente aceita `--tls verify-identity --tls-ca /path/ca.pem`. `--tls-cert` e `--tls-key` precisam ser usados juntos. Esses flags aceitam paths, não PEM inline; a senha continua entrando exclusivamente por stdin.
 
 `profile list` é somente leitura e mostra apenas nome, endpoint, série MySQL, política e indicação do profile ativo. Ele não consulta nem revela credenciais.
 

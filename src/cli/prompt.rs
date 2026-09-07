@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::{
     application::{NewLocalTargetInput, NewProfileInput, PullTargetChoice},
     cli::{ProfileAddArgs, SetupArgs, setup},
-    domain::{ContainerName, DatabaseName, MysqlTlsMode, ProfileName},
+    domain::{ContainerName, DatabaseName, MysqlTlsMaterialPaths, MysqlTlsMode, ProfileName},
     infrastructure::docker::DockerContainerCandidate,
 };
 
@@ -99,10 +99,12 @@ pub fn collect_new_profile(name: ProfileName) -> Result<NewProfileInput, PromptE
         .interact()
         .map_err(unavailable)?;
     let tls_mode = if production {
-        MysqlTlsMode::Required
+        MysqlTlsMode::VerifyIdentity
     } else {
         let options = [
             "Required — fail unless the connection is encrypted (recommended)",
+            "Verify identity — validate CA and source hostname",
+            "Verify CA — validate CA without hostname matching",
             "Preferred — use TLS when available, otherwise allow fallback",
             "Disabled — allow only an unencrypted connection",
         ];
@@ -114,8 +116,10 @@ pub fn collect_new_profile(name: ProfileName) -> Result<NewProfileInput, PromptE
             .map_err(unavailable)?
         {
             0 => MysqlTlsMode::Required,
-            1 => MysqlTlsMode::Preferred,
-            2 => MysqlTlsMode::Disabled,
+            1 => MysqlTlsMode::VerifyIdentity,
+            2 => MysqlTlsMode::VerifyCa,
+            3 => MysqlTlsMode::Preferred,
+            4 => MysqlTlsMode::Disabled,
             _ => unreachable!("dialoguer returns an index from the provided options"),
         }
     };
@@ -127,8 +131,74 @@ pub fn collect_new_profile(name: ProfileName) -> Result<NewProfileInput, PromptE
         username,
         password,
         tls_mode,
+        tls_material: collect_tls_material(tls_mode)?,
         production,
     })
+}
+
+fn collect_tls_material(tls_mode: MysqlTlsMode) -> Result<MysqlTlsMaterialPaths, PromptError> {
+    if tls_mode == MysqlTlsMode::Disabled {
+        return Ok(MysqlTlsMaterialPaths::default());
+    }
+    let theme = SimpleTheme;
+    let ca = if tls_mode.verifies_certificate_authority() {
+        Some(
+            Input::<String>::with_theme(&theme)
+                .with_prompt("CA certificate path")
+                .validate_with(|value: &String| -> Result<(), &str> {
+                    let path = std::path::Path::new(value);
+                    if path.is_absolute() && path.is_file() {
+                        Ok(())
+                    } else {
+                        Err("enter an absolute path to an existing CA file")
+                    }
+                })
+                .interact_text()
+                .map(std::path::PathBuf::from)
+                .map_err(unavailable)?,
+        )
+    } else {
+        None
+    };
+    let use_client_certificate = Confirm::with_theme(&theme)
+        .with_prompt("Use a client certificate and private key?")
+        .default(false)
+        .interact()
+        .map_err(unavailable)?;
+    let (cert, key) = if use_client_certificate {
+        (
+            Some(collect_existing_absolute_path(
+                &theme,
+                "Client certificate path",
+            )?),
+            Some(collect_existing_absolute_path(
+                &theme,
+                "Client private-key path",
+            )?),
+        )
+    } else {
+        (None, None)
+    };
+    Ok(MysqlTlsMaterialPaths { ca, cert, key })
+}
+
+fn collect_existing_absolute_path(
+    theme: &SimpleTheme,
+    prompt: &str,
+) -> Result<std::path::PathBuf, PromptError> {
+    Input::<String>::with_theme(theme)
+        .with_prompt(prompt)
+        .validate_with(|value: &String| -> Result<(), &str> {
+            let path = std::path::Path::new(value);
+            if path.is_absolute() && path.is_file() {
+                Ok(())
+            } else {
+                Err("enter an absolute path to an existing file")
+            }
+        })
+        .interact_text()
+        .map(std::path::PathBuf::from)
+        .map_err(unavailable)
 }
 
 pub fn collect_new_profile_non_interactive(
@@ -153,6 +223,11 @@ pub fn collect_new_profile_non_interactive(
         username,
         password: read_password_from_stdin()?,
         tls_mode: arguments.tls.into(),
+        tls_material: MysqlTlsMaterialPaths {
+            ca: arguments.tls_ca.clone(),
+            cert: arguments.tls_cert.clone(),
+            key: arguments.tls_key.clone(),
+        },
         production: arguments.production,
     })
 }

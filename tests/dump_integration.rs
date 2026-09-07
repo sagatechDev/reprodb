@@ -51,6 +51,7 @@ async fn dumps_the_real_local_salt_tenant_into_a_managed_zstd_artifact() {
             mysql_series: "8.4".to_owned(),
             production: false,
             tls_mode: MysqlTlsMode::Required,
+            tls_material: Default::default(),
             client: MysqlClientConfig {
                 image: client.image().to_owned(),
             },

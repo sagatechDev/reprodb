@@ -11,7 +11,7 @@ use crate::{
         cancellation::CancellationToken,
         compression::{CompressionError, CompressionMetrics, ZstdCompressor},
         config::SourceProfileConfig,
-        credentials::MYSQL_OPTION_FILE_CONTAINER_PATH,
+        credentials::{MYSQL_OPTION_FILE_CONTAINER_PATH, MYSQL_SECRETS_CONTAINER_DIRECTORY},
         docker::{ephemeral_container_name, terminate_ephemeral_run},
         mysql::{ApprovedMysqlClient, DockerClientError, DockerMysqlClientRuntime},
         process::{ProcessSpec, TokioProcessRunner, read_bounded},
@@ -76,12 +76,13 @@ impl DumpExecutor for DockerMysqlDumpExecutor {
             return Err(DumpExecutorError::Interrupted);
         }
         let runtime = DockerMysqlClientRuntime::new(TokioProcessRunner);
-        let option_file = runtime.create_option_file(
+        let option_file = runtime.create_option_file_with_tls_material(
             &request.profile.host,
             request.profile.port,
             &request.profile.username,
             request.password,
             request.profile.tls_mode,
+            &request.profile.tls_material,
         )?;
         let operation_container = ephemeral_container_name("dump");
         let spec = dump_process_spec(&request, option_file.path(), &operation_container);
@@ -164,8 +165,8 @@ fn dump_process_spec(
     operation_container: &str,
 ) -> ProcessSpec {
     let mut mount = OsString::from("type=bind,src=");
-    mount.push(option_file.as_os_str());
-    mount.push(format!(",dst={MYSQL_OPTION_FILE_CONTAINER_PATH},readonly"));
+    mount.push(option_file.parent().unwrap_or(option_file).as_os_str());
+    mount.push(format!(",dst={MYSQL_SECRETS_CONTAINER_DIRECTORY},readonly"));
 
     ProcessSpec::new("docker")
         .args(["--context", request.docker_context, "run", "--rm", "--name"])
@@ -335,6 +336,7 @@ mod tests {
             mysql_series: "8.4".to_owned(),
             production: false,
             tls_mode: crate::domain::MysqlTlsMode::Disabled,
+            tls_material: Default::default(),
             client: MysqlClientConfig {
                 image: ClientCatalog::resolve("8.4").unwrap().image().to_owned(),
             },
@@ -397,10 +399,10 @@ mod tests {
                 "--pull=never",
                 "--add-host=host.docker.internal:host-gateway",
                 "--mount",
-                "type=bind,src=/tmp/reprodb/client.cnf,dst=/run/secrets/reprodb.cnf,readonly",
+                "type=bind,src=/tmp/reprodb,dst=/run/secrets/reprodb,readonly",
                 ClientCatalog::resolve("8.4").unwrap().image(),
                 "mysqldump",
-                "--defaults-file=/run/secrets/reprodb.cnf",
+                "--defaults-file=/run/secrets/reprodb/client.cnf",
                 "--no-login-paths",
             ]
         );

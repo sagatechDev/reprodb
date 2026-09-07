@@ -877,6 +877,8 @@ Critério da milestone: source de produção é habilitado somente após compati
 
 **Labels:** `priority:p0`, `type:hardening`, `area:mysql`, `area:security`
 
+**Status:** implementada — os cinco modos são tipados e persistidos; produção exige `verify-identity` com CA. CA/cert/key são paths absolutos no TOML, copiados para um diretório temporário privado e montados read-only no client Docker. Certificado e chave precisam formar um par. O cadastro confirma o cipher negociado e o preflight repete a verificação antes de qualquer consulta de metadata ou `mysqldump`. Falhas TLS são classificadas sem devolver stderr, segredo ou path do material.
+
 **Escopo:** `disabled`, `preferred`, `required`, `verify_ca`, `verify_identity`, CA/cert paths sem conteúdo sensível no TOML.
 
 **Aceite:** produção não pode degradar TLS silenciosamente; certificado inválido falha antes do dump.

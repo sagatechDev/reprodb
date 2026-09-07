@@ -3,8 +3,8 @@ use secrecy::SecretString;
 
 use crate::{
     domain::{
-        AppColor, DatabaseName, LocalTenantFeatures, MysqlTlsMode, ResolvedTenant, TenantId,
-        TenantLookup, TenantMatch, TenantResolutionError, TenantResolver,
+        AppColor, DatabaseName, LocalTenantFeatures, MysqlTlsMaterialPaths, MysqlTlsMode,
+        ResolvedTenant, TenantId, TenantLookup, TenantMatch, TenantResolutionError, TenantResolver,
     },
     infrastructure::{
         mysql::{ApprovedMysqlClient, DockerClientError, DockerMysqlClientRuntime},
@@ -21,6 +21,7 @@ pub struct SaltCentralSource {
     pub username: String,
     pub password: SecretString,
     pub tls_mode: MysqlTlsMode,
+    pub tls_material: MysqlTlsMaterialPaths,
     pub central_database: DatabaseName,
     pub client: ApprovedMysqlClient,
 }
@@ -64,12 +65,13 @@ where
             .map_err(map_client_error)?;
         let option_file = self
             .runtime
-            .create_option_file(
+            .create_option_file_with_tls_material(
                 &self.source.host,
                 self.source.port,
                 &self.source.username,
                 &self.source.password,
                 self.source.tls_mode,
+                &self.source.tls_material,
             )
             .map_err(map_client_error)?;
         let query = resolution_query(
@@ -316,6 +318,7 @@ fn map_client_error(error: DockerClientError) -> TenantResolutionError {
         | DockerClientError::InvalidDockerContext
         | DockerClientError::Process(_)
         | DockerClientError::SourceNetworkUnavailable
+        | DockerClientError::TlsValidationFailed
         | DockerClientError::ConnectionProbeFailed => TenantResolutionError::SourceUnavailable,
         DockerClientError::OptionFile(_)
         | DockerClientError::OptionFilePathNotAbsolute
@@ -389,6 +392,7 @@ mod tests {
                 username: "readonly".to_owned(),
                 password: SecretString::from("password-marker"),
                 tls_mode: MysqlTlsMode::Required,
+                tls_material: Default::default(),
                 central_database: DatabaseName::try_from("salt_central").unwrap(),
                 client,
             },
@@ -637,6 +641,7 @@ mod tests {
                     username: "root".to_owned(),
                     password: password.clone(),
                     tls_mode: MysqlTlsMode::Required,
+                    tls_material: Default::default(),
                     central_database: fixture_database.clone(),
                     client,
                 },

@@ -54,6 +54,7 @@ where
                         username: source.profile.username.clone(),
                         password: source.password.clone(),
                         tls_mode: source.profile.tls_mode,
+                        tls_material: source.profile.tls_material.clone(),
                         central_database: central_database.clone(),
                         client: source.client,
                     },
@@ -85,6 +86,7 @@ where
                 username: source.profile.username.clone(),
                 password: source.password.clone(),
                 tls_mode: source.profile.tls_mode,
+                tls_material: source.profile.tls_material.clone(),
                 client: source.client,
             },
         )

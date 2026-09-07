@@ -49,6 +49,7 @@ async fn doctor_validates_the_real_environment_without_changing_configuration() 
                 username: "root".to_owned(),
                 password: local_container_root_password(&context, &expected),
                 tls_mode: MysqlTlsMode::Required,
+                tls_material: Default::default(),
                 production: false,
             },
         )

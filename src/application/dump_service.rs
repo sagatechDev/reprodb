@@ -455,9 +455,17 @@ mod tests {
                 mysql_series: "8.4".to_owned(),
                 production,
                 tls_mode: if production {
-                    MysqlTlsMode::Required
+                    MysqlTlsMode::VerifyIdentity
                 } else {
                     MysqlTlsMode::Disabled
+                },
+                tls_material: if production {
+                    crate::domain::MysqlTlsMaterialPaths {
+                        ca: Some(std::path::PathBuf::from("/tmp/reprodb-test-ca.pem")),
+                        ..Default::default()
+                    }
+                } else {
+                    Default::default()
                 },
                 client: MysqlClientConfig {
                     image: client.image().to_owned(),

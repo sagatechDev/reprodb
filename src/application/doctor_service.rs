@@ -463,6 +463,7 @@ impl DoctorService {
             username: profile.username,
             password,
             tls_mode: profile.tls_mode,
+            tls_material: profile.tls_material,
             production: profile.production,
         };
         match verifier.verify(&input).await {
@@ -722,6 +723,13 @@ fn source_connection_failure(error: SourceVerificationError) -> DoctorCheck {
             "Review host, port, VPN and Docker networking, then rerun doctor.",
             DoctorFailureKind::SourceConnection,
         ),
+        SourceVerificationError::TlsRequiredButNotNegotiated => failed(
+            DoctorSection::Source,
+            "source TLS",
+            "the configured TLS policy was not satisfied",
+            "Review the TLS mode, CA and source hostname, then rerun doctor.",
+            DoctorFailureKind::SourceConnection,
+        ),
         SourceVerificationError::InvalidMetadata => failed(
             DoctorSection::Source,
             "source connection",
@@ -836,6 +844,7 @@ mod tests {
                     mysql_series: "8.4".to_owned(),
                     production: false,
                     tls_mode: MysqlTlsMode::Required,
+                    tls_material: Default::default(),
                     client: MysqlClientConfig {
                         image: client.image().to_owned(),
                     },

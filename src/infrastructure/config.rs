@@ -13,8 +13,8 @@ use tempfile::NamedTempFile;
 use thiserror::Error;
 
 use crate::domain::{
-    ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseName, MysqlTlsMode,
-    PatternTenantResolver, ProfileName, Sha256Digest,
+    ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseName,
+    MysqlTlsMaterialPaths, MysqlTlsMode, PatternTenantResolver, ProfileName, Sha256Digest,
 };
 use crate::infrastructure::mysql::{ClientCatalog, ClientCatalogError};
 
@@ -301,6 +301,8 @@ pub struct SourceProfileConfig {
     pub production: bool,
     #[serde(default)]
     pub tls_mode: MysqlTlsMode,
+    #[serde(default, skip_serializing_if = "MysqlTlsMaterialPaths::is_empty")]
+    pub tls_material: MysqlTlsMaterialPaths,
     pub client: MysqlClientConfig,
     pub tenant_resolver: TenantResolverConfig,
 }
@@ -321,10 +323,11 @@ impl SourceProfileConfig {
             CredentialScope::Source,
         )?;
         validate_mysql_series(&self.mysql_series)?;
-        if self.production && self.tls_mode != MysqlTlsMode::Required {
+        validate_tls_material(self.tls_mode, &self.tls_material)?;
+        if self.production && self.tls_mode != MysqlTlsMode::VerifyIdentity {
             return Err(ConfigError::InvalidField {
                 field: "profile.tls_mode",
-                reason: "must be `required` for a production source",
+                reason: "must be `verify-identity` for a production source",
             });
         }
         self.client.validate()?;
@@ -345,6 +348,42 @@ impl SourceProfileConfig {
         }
         self.tenant_resolver.validate()
     }
+}
+
+fn validate_tls_material(
+    mode: MysqlTlsMode,
+    material: &MysqlTlsMaterialPaths,
+) -> Result<(), ConfigError> {
+    if mode.verifies_certificate_authority() && material.ca.is_none() {
+        return Err(ConfigError::InvalidField {
+            field: "profile.tls_material.ca",
+            reason: "is required when TLS verifies the certificate authority",
+        });
+    }
+    if material.cert.is_some() != material.key.is_some() {
+        return Err(ConfigError::InvalidField {
+            field: "profile.tls_material",
+            reason: "client certificate and key must be configured together",
+        });
+    }
+    if mode == MysqlTlsMode::Disabled && !material.is_empty() {
+        return Err(ConfigError::InvalidField {
+            field: "profile.tls_material",
+            reason: "cannot be configured when TLS is disabled",
+        });
+    }
+    for path in [&material.ca, &material.cert, &material.key]
+        .into_iter()
+        .flatten()
+    {
+        if !path.is_absolute() || path.as_os_str().is_empty() {
+            return Err(ConfigError::InvalidField {
+                field: "profile.tls_material",
+                reason: "paths must be absolute",
+            });
+        }
+    }
+    Ok(())
 }
 
 pub fn source_profile_fingerprint(
@@ -790,6 +829,7 @@ mod tests {
                 mysql_series: "8.4".to_owned(),
                 production: false,
                 tls_mode: MysqlTlsMode::Preferred,
+                tls_material: Default::default(),
                 client: MysqlClientConfig {
                     image: concat!(
                         "mysql:8.4.4@sha256:",
@@ -1051,7 +1091,7 @@ mod tests {
     }
 
     #[test]
-    fn production_profile_must_require_tls() {
+    fn production_profile_must_verify_the_ca_and_hostname() {
         let temp = TempDir::new().unwrap();
         let repository = test_repository(&temp);
         let mut config = valid_config();
@@ -1065,6 +1105,57 @@ mod tests {
             error,
             ConfigError::InvalidField {
                 field: "profile.tls_mode",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn verified_tls_requires_an_absolute_ca_path() {
+        let temp = TempDir::new().unwrap();
+        let repository = test_repository(&temp);
+        let mut config = valid_config();
+        config.profiles.values_mut().next().unwrap().tls_mode = MysqlTlsMode::VerifyIdentity;
+
+        let missing = repository.save(&config).unwrap_err();
+        assert!(matches!(
+            missing,
+            ConfigError::InvalidField {
+                field: "profile.tls_material.ca",
+                ..
+            }
+        ));
+
+        config.profiles.values_mut().next().unwrap().tls_material.ca =
+            Some(PathBuf::from("relative-ca.pem"));
+        let relative = repository.save(&config).unwrap_err();
+        assert!(matches!(
+            relative,
+            ConfigError::InvalidField {
+                field: "profile.tls_material",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn client_tls_certificate_and_key_must_be_configured_together() {
+        let temp = TempDir::new().unwrap();
+        let repository = test_repository(&temp);
+        let mut config = valid_config();
+        config
+            .profiles
+            .values_mut()
+            .next()
+            .unwrap()
+            .tls_material
+            .cert = Some(PathBuf::from("/tmp/client.pem"));
+
+        let error = repository.save(&config).unwrap_err();
+        assert!(matches!(
+            error,
+            ConfigError::InvalidField {
+                field: "profile.tls_material",
                 ..
             }
         ));

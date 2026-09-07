@@ -23,6 +23,6 @@ pub use artifact::{
 };
 pub use value_objects::{
     ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseName, DomainAlias,
-    MysqlServerUuid, MysqlTlsMode, MysqlVersion, ProfileName, Sha256Digest, TenantId, TenantLookup,
-    ValueKind, ValueObjectError,
+    MysqlServerUuid, MysqlTlsMaterialPaths, MysqlTlsMode, MysqlVersion, ProfileName, Sha256Digest,
+    TenantId, TenantLookup, ValueKind, ValueObjectError,
 };

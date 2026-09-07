@@ -131,7 +131,9 @@ where
 fn is_transient_connection_error(error: &DockerClientError) -> bool {
     matches!(
         error,
-        DockerClientError::SourceNetworkUnavailable | DockerClientError::ConnectionProbeFailed
+        DockerClientError::SourceNetworkUnavailable
+            | DockerClientError::ConnectionProbeFailed
+            | DockerClientError::TlsValidationFailed
     )
 }
 
@@ -154,6 +156,7 @@ fn map_runtime_error(error: DockerClientError) -> TargetVerificationError {
         DockerClientError::Process(_)
         | DockerClientError::DockerUnavailable
         | DockerClientError::InvalidDockerContext
+        | DockerClientError::TlsValidationFailed
         | DockerClientError::ConnectionProbeFailed
         | DockerClientError::QueryFailed => TargetVerificationError::ConnectionUnavailable,
         DockerClientError::OptionFile(_)

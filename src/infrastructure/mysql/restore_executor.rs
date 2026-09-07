@@ -20,7 +20,9 @@ use crate::{
     domain::{DumpArtifactMetadata, Sha256Digest},
     infrastructure::{
         cancellation::CancellationToken,
-        credentials::{MYSQL_OPTION_FILE_CONTAINER_PATH, MysqlOptionFile},
+        credentials::{
+            MYSQL_OPTION_FILE_CONTAINER_PATH, MYSQL_SECRETS_CONTAINER_DIRECTORY, MysqlOptionFile,
+        },
         docker::{ephemeral_container_name, terminate_ephemeral_run},
         process::{BoundedBytes, ProcessSpec, read_bounded},
         restore_artifact::ValidatedRestoreArtifact,
@@ -265,8 +267,8 @@ fn mysql_process_spec(
     operation_container: &str,
 ) -> ProcessSpec {
     let mut mount = OsString::from("type=bind,src=");
-    mount.push(option_file.as_os_str());
-    mount.push(format!(",dst={MYSQL_OPTION_FILE_CONTAINER_PATH},readonly"));
+    mount.push(option_file.parent().unwrap_or(option_file).as_os_str());
+    mount.push(format!(",dst={MYSQL_SECRETS_CONTAINER_DIRECTORY},readonly"));
 
     let mut spec = ProcessSpec::new("docker").args([
         OsString::from("--context"),

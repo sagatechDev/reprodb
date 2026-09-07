@@ -36,6 +36,7 @@ async fn cli_lists_and_purges_a_managed_dump_without_accessing_docker_or_credent
         mysql_series: "8.4".to_owned(),
         production: false,
         tls_mode: MysqlTlsMode::Disabled,
+        tls_material: Default::default(),
         client: MysqlClientConfig {
             image: client.image().to_owned(),
         },

@@ -599,6 +599,7 @@ mod tests {
             mysql_series: "8.4".to_owned(),
             production: false,
             tls_mode: MysqlTlsMode::Disabled,
+            tls_material: Default::default(),
             client: MysqlClientConfig {
                 image: client.image().to_owned(),
             },

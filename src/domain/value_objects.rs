@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr};
+use std::{fmt, path::PathBuf, str::FromStr};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
@@ -11,6 +11,8 @@ pub enum MysqlTlsMode {
     #[default]
     Preferred,
     Required,
+    VerifyCa,
+    VerifyIdentity,
 }
 
 impl MysqlTlsMode {
@@ -19,13 +21,40 @@ impl MysqlTlsMode {
             Self::Disabled => "DISABLED",
             Self::Preferred => "PREFERRED",
             Self::Required => "REQUIRED",
+            Self::VerifyCa => "VERIFY_CA",
+            Self::VerifyIdentity => "VERIFY_IDENTITY",
         }
+    }
+
+    pub const fn verifies_certificate_authority(self) -> bool {
+        matches!(self, Self::VerifyCa | Self::VerifyIdentity)
+    }
+
+    pub const fn requires_encrypted_transport(self) -> bool {
+        matches!(self, Self::Required | Self::VerifyCa | Self::VerifyIdentity)
     }
 }
 
 impl fmt::Display for MysqlTlsMode {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.option_value())
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MysqlTlsMaterialPaths {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<PathBuf>,
+}
+
+impl MysqlTlsMaterialPaths {
+    pub const fn is_empty(&self) -> bool {
+        self.ca.is_none() && self.cert.is_none() && self.key.is_none()
     }
 }
 
@@ -566,6 +595,14 @@ mod tests {
         assert_eq!(MysqlTlsMode::Disabled.option_value(), "DISABLED");
         assert_eq!(MysqlTlsMode::Preferred.option_value(), "PREFERRED");
         assert_eq!(MysqlTlsMode::Required.option_value(), "REQUIRED");
+        assert_eq!(MysqlTlsMode::VerifyCa.option_value(), "VERIFY_CA");
+        assert_eq!(
+            MysqlTlsMode::VerifyIdentity.option_value(),
+            "VERIFY_IDENTITY"
+        );
+        assert!(MysqlTlsMode::VerifyCa.verifies_certificate_authority());
+        assert!(MysqlTlsMode::VerifyIdentity.verifies_certificate_authority());
+        assert!(!MysqlTlsMode::Required.verifies_certificate_authority());
         assert_eq!(MysqlTlsMode::default(), MysqlTlsMode::Preferred);
     }
 

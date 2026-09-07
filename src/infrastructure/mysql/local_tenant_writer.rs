@@ -6,7 +6,9 @@ use crate::{
     application::{AuthorizedLocalTarget, LocalTenantWriteError, LocalTenantWriter},
     domain::{LocalTenantFeatures, LocalTenantRegistration},
     infrastructure::{
-        credentials::{MYSQL_OPTION_FILE_CONTAINER_PATH, MysqlOptionFile},
+        credentials::{
+            MYSQL_OPTION_FILE_CONTAINER_PATH, MYSQL_SECRETS_CONTAINER_DIRECTORY, MysqlOptionFile,
+        },
         process::{ProcessOutput, ProcessRunner, ProcessSpec},
     },
 };
@@ -86,8 +88,8 @@ fn mysql_query_spec(
     query: &str,
 ) -> ProcessSpec {
     let mut mount = OsString::from("type=bind,src=");
-    mount.push(option_file.as_os_str());
-    mount.push(format!(",dst={MYSQL_OPTION_FILE_CONTAINER_PATH},readonly"));
+    mount.push(option_file.parent().unwrap_or(option_file).as_os_str());
+    mount.push(format!(",dst={MYSQL_SECRETS_CONTAINER_DIRECTORY},readonly"));
 
     ProcessSpec::new("docker").args([
         OsString::from("--context"),

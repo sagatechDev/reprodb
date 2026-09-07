@@ -170,6 +170,18 @@ pub struct ProfileAddArgs {
     /// Read exactly one password line from stdin.
     #[arg(long, requires = "non_interactive")]
     pub password_stdin: bool,
+
+    /// CA certificate path for verify-ca or verify-identity.
+    #[arg(long, value_name = "PATH", requires = "non_interactive")]
+    pub tls_ca: Option<std::path::PathBuf>,
+
+    /// Optional client certificate path; requires --tls-key.
+    #[arg(long, value_name = "PATH", requires_all = ["tls_key", "non_interactive"])]
+    pub tls_cert: Option<std::path::PathBuf>,
+
+    /// Optional client private-key path; requires --tls-cert.
+    #[arg(long, value_name = "PATH", requires_all = ["tls_cert", "non_interactive"])]
+    pub tls_key: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -178,6 +190,8 @@ pub enum CliTlsMode {
     Preferred,
     #[default]
     Required,
+    VerifyCa,
+    VerifyIdentity,
 }
 
 impl From<CliTlsMode> for MysqlTlsMode {
@@ -186,6 +200,8 @@ impl From<CliTlsMode> for MysqlTlsMode {
             CliTlsMode::Disabled => Self::Disabled,
             CliTlsMode::Preferred => Self::Preferred,
             CliTlsMode::Required => Self::Required,
+            CliTlsMode::VerifyCa => Self::VerifyCa,
+            CliTlsMode::VerifyIdentity => Self::VerifyIdentity,
         }
     }
 }
@@ -380,6 +396,71 @@ mod tests {
         };
         assert_eq!(arguments.name, "salt-source");
         assert!(arguments.yes);
+    }
+
+    #[test]
+    fn parses_verified_tls_material_only_for_non_interactive_profile_add() {
+        let cli = Cli::try_parse_from([
+            "reprodb",
+            "profile",
+            "add",
+            "production",
+            "--non-interactive",
+            "--username",
+            "readonly",
+            "--password-stdin",
+            "--production",
+            "--tls",
+            "verify-identity",
+            "--tls-ca",
+            "/etc/reprodb/ca.pem",
+            "--tls-cert",
+            "/etc/reprodb/client.pem",
+            "--tls-key",
+            "/etc/reprodb/client-key.pem",
+        ])
+        .unwrap();
+        let Commands::Profile(profile) = cli.command else {
+            panic!("expected profile command")
+        };
+        let ProfileCommands::Add(profile) = profile.command else {
+            panic!("expected profile add")
+        };
+
+        assert_eq!(profile.tls, CliTlsMode::VerifyIdentity);
+        assert_eq!(
+            profile.tls_ca.as_deref(),
+            Some(std::path::Path::new("/etc/reprodb/ca.pem"))
+        );
+        assert!(profile.tls_cert.is_some());
+        assert!(profile.tls_key.is_some());
+    }
+
+    #[test]
+    fn rejects_unpaired_or_interactive_client_tls_material() {
+        assert!(
+            Cli::try_parse_from([
+                "reprodb",
+                "profile",
+                "add",
+                "source",
+                "--tls-cert",
+                "/tmp/client.pem",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "reprodb",
+                "profile",
+                "add",
+                "source",
+                "--non-interactive",
+                "--tls-cert",
+                "/tmp/client.pem",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

@@ -135,7 +135,8 @@ impl AppError {
             Self::Profile(ProfileServiceError::Verification(
                 SourceVerificationError::NetworkUnavailable
                 | SourceVerificationError::AuthenticationFailed
-                | SourceVerificationError::InvalidMetadata,
+                | SourceVerificationError::InvalidMetadata
+                | SourceVerificationError::TlsRequiredButNotNegotiated,
             )) => ErrorCategory::SourceConnection,
             Self::Profile(ProfileServiceError::Provision(
                 CredentialProvisionError::Credential(_)
@@ -373,6 +374,7 @@ const fn docker_client_error_category(error: &DockerClientError) -> ErrorCategor
         | DockerClientError::Process(_) => ErrorCategory::Docker,
         DockerClientError::SourceNetworkUnavailable
         | DockerClientError::AuthenticationFailed
+        | DockerClientError::TlsValidationFailed
         | DockerClientError::ConnectionProbeFailed
         | DockerClientError::QueryFailed
         | DockerClientError::InvalidServerMetadata => ErrorCategory::SourceConnection,

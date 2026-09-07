@@ -5,7 +5,7 @@ use crate::{
     domain::{
         ApprovedDumpPlan, DatabaseEncoding, DatabaseName, DatabaseObjectCounts,
         DefinerObjectCounts, DumpPolicyError, DumpPreflight, DumpPreflightMetadataError, GtidMode,
-        Mysql8DumpPolicy, MysqlTlsMode, StorageEngineUsage,
+        Mysql8DumpPolicy, MysqlTlsMaterialPaths, MysqlTlsMode, StorageEngineUsage,
     },
     infrastructure::{
         mysql::{
@@ -46,6 +46,7 @@ pub struct DumpPreflightSource {
     pub username: String,
     pub password: SecretString,
     pub tls_mode: MysqlTlsMode,
+    pub tls_material: MysqlTlsMaterialPaths,
     pub client: ApprovedMysqlClient,
 }
 
@@ -84,17 +85,21 @@ where
                 self.source.client.image(),
             )
             .await?;
-        let option_file = self.runtime.create_option_file(
+        let option_file = self.runtime.create_option_file_with_tls_material(
             &self.source.host,
             self.source.port,
             &self.source.username,
             &self.source.password,
             self.source.tls_mode,
+            &self.source.tls_material,
         )?;
         let server = self
             .runtime
             .probe_connection(&prepared, &option_file)
             .await?;
+        if self.source.tls_mode.requires_encrypted_transport() && server.tls_cipher.is_none() {
+            return Err(DumpPreflightError::TlsRequiredButNotNegotiated);
+        }
         let output = self
             .runtime
             .query_connection(&prepared, &option_file, database, PREFLIGHT_QUERY)
@@ -129,6 +134,9 @@ pub enum DumpPreflightError {
 
     #[error("the source returned incomplete or malformed dump preflight metadata")]
     InvalidMetadata,
+
+    #[error("the source did not negotiate the TLS transport required by its profile")]
+    TlsRequiredButNotNegotiated,
 }
 
 fn parse_preflight(output: &[u8]) -> Result<DumpPreflight, DumpPreflightError> {
@@ -259,6 +267,19 @@ mod tests {
         DockerMysqlDumpPreflight<FakeRunner>,
         Arc<Mutex<Vec<ProcessSpec>>>,
     ) {
+        assessor_with_server(
+            query_output,
+            "8.4.4\tMySQL Community Server - GPL\t11111111-1111-4111-8111-111111111111\nSsl_cipher\tTLS_AES_256_GCM_SHA384\n",
+        )
+    }
+
+    fn assessor_with_server(
+        query_output: impl Into<Vec<u8>>,
+        server_output: impl Into<Vec<u8>>,
+    ) -> (
+        DockerMysqlDumpPreflight<FakeRunner>,
+        Arc<Mutex<Vec<ProcessSpec>>>,
+    ) {
         let client = ClientCatalog::resolve("8.4").unwrap();
         let commands = Arc::new(Mutex::new(Vec::new()));
         let runner = FakeRunner {
@@ -267,9 +288,7 @@ mod tests {
                     serde_json::to_vec(&vec![client.repository_digest()]).unwrap(),
                 ),
                 ProcessOutput::success("mysql  Ver 8.4.4 for Linux on aarch64\n"),
-                ProcessOutput::success(
-                    "8.4.4\tMySQL Community Server - GPL\t11111111-1111-4111-8111-111111111111\nSsl_cipher\tTLS_AES_256_GCM_SHA384\n",
-                ),
+                ProcessOutput::success(server_output),
                 ProcessOutput::success(query_output),
             ])),
             commands: Arc::clone(&commands),
@@ -284,6 +303,7 @@ mod tests {
                     username: "readonly".to_owned(),
                     password: SecretString::from("password-marker"),
                     tls_mode: MysqlTlsMode::Required,
+                    tls_material: Default::default(),
                     client,
                 },
             ),
@@ -353,6 +373,25 @@ mod tests {
         assert_eq!(commands.lock().unwrap().len(), 4);
     }
 
+    #[tokio::test]
+    async fn missing_required_tls_stops_before_the_metadata_query_and_dump() {
+        let (assessor, commands) = assessor_with_server(
+            valid_output(),
+            "8.4.4\tMySQL Community Server - GPL\t11111111-1111-4111-8111-111111111111\n",
+        );
+
+        let error = assessor
+            .assess(&DatabaseName::try_from("salt_polymer").unwrap())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            DumpPreflightError::TlsRequiredButNotNegotiated
+        ));
+        assert_eq!(commands.lock().unwrap().len(), 3);
+    }
+
     #[test]
     fn parses_an_empty_database_and_rejects_missing_duplicate_or_untrusted_metadata() {
         let empty = "DATABASE\t757466386D6234\t757466386D62345F62696E\n\
@@ -392,6 +431,7 @@ mod tests {
                 username: "root".to_owned(),
                 password,
                 tls_mode: MysqlTlsMode::Disabled,
+                tls_material: Default::default(),
                 client,
             },
         );

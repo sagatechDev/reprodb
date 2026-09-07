@@ -19,8 +19,8 @@ use reprodb::{
             TenantResolverConfig,
         },
         credentials::{
-            CredentialStore, MYSQL_OPTION_FILE_CONTAINER_PATH, MemoryCredentialStore,
-            MysqlOptionFile,
+            CredentialStore, MYSQL_OPTION_FILE_CONTAINER_PATH, MYSQL_SECRETS_CONTAINER_DIRECTORY,
+            MemoryCredentialStore, MysqlOptionFile,
         },
         docker::DockerTargetDiscovery,
         mysql::{
@@ -141,6 +141,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
                     mysql_series: "8.4".to_owned(),
                     production: false,
                     tls_mode: MysqlTlsMode::Required,
+                    tls_material: Default::default(),
                     client: MysqlClientConfig {
                         image: client.image().to_owned(),
                     },
@@ -809,8 +810,8 @@ fn run_mysql_query(
     let option_file = MysqlOptionFile::create("127.0.0.1", 3306, "root", password, tls_mode)
         .map_err(|error| error.to_string())?;
     let mount = format!(
-        "type=bind,src={},dst={MYSQL_OPTION_FILE_CONTAINER_PATH},readonly",
-        option_file.path().display()
+        "type=bind,src={},dst={MYSQL_SECRETS_CONTAINER_DIRECTORY},readonly",
+        option_file.directory_path().display()
     );
     let mut command = Command::new("docker");
     command.args([

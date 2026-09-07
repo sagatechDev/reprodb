@@ -4,9 +4,15 @@ use secrecy::SecretString;
 use thiserror::Error;
 
 use crate::{
-    domain::{ContainerId, DatabaseName, MysqlServerUuid, MysqlTlsMode, MysqlVersion},
+    domain::{
+        ContainerId, DatabaseName, MysqlServerUuid, MysqlTlsMaterialPaths, MysqlTlsMode,
+        MysqlVersion,
+    },
     infrastructure::{
-        credentials::{MYSQL_OPTION_FILE_CONTAINER_PATH, MysqlOptionFile, OptionFileError},
+        credentials::{
+            MYSQL_OPTION_FILE_CONTAINER_PATH, MYSQL_SECRETS_CONTAINER_DIRECTORY, MysqlOptionFile,
+            OptionFileError,
+        },
         mysql::{ApprovedMysqlClient, ClientCatalog, ClientCatalogError},
         process::{ProcessError, ProcessOutput, ProcessRunner, ProcessSpec},
     },
@@ -124,6 +130,26 @@ where
             username,
             password,
             tls_mode,
+        )
+        .map_err(Into::into)
+    }
+
+    pub fn create_option_file_with_tls_material(
+        &self,
+        source_host: &str,
+        port: u16,
+        username: &str,
+        password: &SecretString,
+        tls_mode: MysqlTlsMode,
+        tls_material: &MysqlTlsMaterialPaths,
+    ) -> Result<MysqlOptionFile, DockerClientError> {
+        MysqlOptionFile::create_with_tls_material(
+            docker_source_host(source_host),
+            port,
+            username,
+            password,
+            tls_mode,
+            tls_material,
         )
         .map_err(Into::into)
     }
@@ -332,6 +358,9 @@ pub enum DockerClientError {
     #[error("the MySQL source rejected the configured credential")]
     AuthenticationFailed,
 
+    #[error("the MySQL source TLS certificate could not be verified")]
+    TlsValidationFailed,
+
     #[error("the MySQL connection probe failed; run `reprodb doctor` for diagnostics")]
     ConnectionProbeFailed,
 
@@ -396,8 +425,8 @@ fn connection_probe_spec(
     option_file: &Path,
 ) -> ProcessSpec {
     let mut mount = OsString::from("type=bind,src=");
-    mount.push(option_file.as_os_str());
-    mount.push(format!(",dst={MYSQL_OPTION_FILE_CONTAINER_PATH},readonly"));
+    mount.push(option_file.parent().unwrap_or(option_file).as_os_str());
+    mount.push(format!(",dst={MYSQL_SECRETS_CONTAINER_DIRECTORY},readonly"));
 
     docker_spec(context).args([
         OsString::from("run"),
@@ -427,8 +456,8 @@ fn connection_query_spec(
     query: &str,
 ) -> ProcessSpec {
     let mut mount = OsString::from("type=bind,src=");
-    mount.push(option_file.as_os_str());
-    mount.push(format!(",dst={MYSQL_OPTION_FILE_CONTAINER_PATH},readonly"));
+    mount.push(option_file.parent().unwrap_or(option_file).as_os_str());
+    mount.push(format!(",dst={MYSQL_SECRETS_CONTAINER_DIRECTORY},readonly"));
 
     docker_spec(context).args([
         OsString::from("run"),
@@ -458,8 +487,8 @@ fn container_connection_probe_spec(
     option_file: &Path,
 ) -> ProcessSpec {
     let mut mount = OsString::from("type=bind,src=");
-    mount.push(option_file.as_os_str());
-    mount.push(format!(",dst={MYSQL_OPTION_FILE_CONTAINER_PATH},readonly"));
+    mount.push(option_file.parent().unwrap_or(option_file).as_os_str());
+    mount.push(format!(",dst={MYSQL_SECRETS_CONTAINER_DIRECTORY},readonly"));
 
     docker_spec(context).args([
         OsString::from("run"),
@@ -506,6 +535,18 @@ fn classify_connection_failure(output: &ProcessOutput) -> DockerClientError {
     let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
     if stderr.contains("access denied") {
         DockerClientError::AuthenticationFailed
+    } else if [
+        "certificate verify failed",
+        "certificate validation failure",
+        "ssl connection error",
+        "unable to get local issuer certificate",
+        "self-signed certificate",
+        "hostname mismatch",
+    ]
+    .iter()
+    .any(|marker| stderr.contains(marker))
+    {
+        DockerClientError::TlsValidationFailed
     } else if [
         "can't connect",
         "unknown mysql server host",
@@ -828,7 +869,7 @@ mod tests {
         assert_eq!(args[defaults_position - 1], "mysql");
         assert!(args.iter().any(|argument| {
             argument.starts_with("type=bind,src=")
-                && argument.ends_with("dst=/run/secrets/reprodb.cnf,readonly")
+                && argument.ends_with("dst=/run/secrets/reprodb,readonly")
         }));
         assert!(args.contains(&"--add-host=host.docker.internal:host-gateway".to_owned()));
         assert!(args.contains(&"--pull=never".to_owned()));
@@ -887,6 +928,10 @@ mod tests {
             (
                 "Can't connect to MySQL server on '127.0.0.1:65534'; sensitive-marker",
                 DockerClientError::SourceNetworkUnavailable,
+            ),
+            (
+                "SSL connection error: certificate verify failed; sensitive-marker",
+                DockerClientError::TlsValidationFailed,
             ),
         ];
 

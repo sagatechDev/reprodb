@@ -4,7 +4,8 @@ use thiserror::Error;
 
 use crate::{
     domain::{
-        CredentialKey, CredentialScope, DatabaseName, MysqlTlsMode, MysqlVersion, ProfileName,
+        CredentialKey, CredentialScope, DatabaseName, MysqlTlsMaterialPaths, MysqlTlsMode,
+        MysqlVersion, ProfileName,
     },
     infrastructure::{
         config::{
@@ -25,6 +26,7 @@ pub struct NewProfileInput {
     pub username: String,
     pub password: SecretString,
     pub tls_mode: MysqlTlsMode,
+    pub tls_material: MysqlTlsMaterialPaths,
     pub production: bool,
 }
 
@@ -63,6 +65,9 @@ pub enum SourceVerificationError {
 
     #[error("the MySQL source returned invalid connection metadata")]
     InvalidMetadata,
+
+    #[error("the MySQL source did not negotiate the required TLS transport")]
+    TlsRequiredButNotNegotiated,
 
     #[error("the detected MySQL server series is not supported by the approved client catalog")]
     UnsupportedServerSeries,
@@ -172,6 +177,9 @@ impl ProfileService {
         validate_new_profile(&input)?;
 
         let verified = verifier.verify(&input).await?;
+        if input.tls_mode.requires_encrypted_transport() && verified.tls_cipher.is_none() {
+            return Err(SourceVerificationError::TlsRequiredButNotNegotiated.into());
+        }
         let detected_series = format!(
             "{}.{}",
             verified.server_version.major, verified.server_version.minor
@@ -202,6 +210,7 @@ impl ProfileService {
                 mysql_series: detected_series,
                 production: input.production,
                 tls_mode: input.tls_mode,
+                tls_material: input.tls_material,
                 client: MysqlClientConfig {
                     image: verified.client.image().to_owned(),
                 },
@@ -293,11 +302,46 @@ fn validate_new_profile(input: &NewProfileInput) -> Result<(), ProfileServiceErr
             reason: "cannot be empty or contain NUL",
         });
     }
-    if input.production && input.tls_mode != MysqlTlsMode::Required {
+    validate_tls_material(input)?;
+    if input.production && input.tls_mode != MysqlTlsMode::VerifyIdentity {
         return Err(ProfileServiceError::InvalidField {
             field: "tls_mode",
-            reason: "must require TLS for a production source",
+            reason: "must verify CA and hostname for a production source",
         });
+    }
+    Ok(())
+}
+
+fn validate_tls_material(input: &NewProfileInput) -> Result<(), ProfileServiceError> {
+    let material = &input.tls_material;
+    if input.tls_mode.verifies_certificate_authority() && material.ca.is_none() {
+        return Err(ProfileServiceError::InvalidField {
+            field: "tls_ca",
+            reason: "is required for verify-ca or verify-identity",
+        });
+    }
+    if material.cert.is_some() != material.key.is_some() {
+        return Err(ProfileServiceError::InvalidField {
+            field: "tls_cert/tls_key",
+            reason: "must be configured together",
+        });
+    }
+    if input.tls_mode == MysqlTlsMode::Disabled && !material.is_empty() {
+        return Err(ProfileServiceError::InvalidField {
+            field: "tls_material",
+            reason: "cannot be used when TLS is disabled",
+        });
+    }
+    for path in [&material.ca, &material.cert, &material.key]
+        .into_iter()
+        .flatten()
+    {
+        if !path.is_absolute() {
+            return Err(ProfileServiceError::InvalidField {
+                field: "tls_material",
+                reason: "paths must be absolute",
+            });
+        }
     }
     Ok(())
 }
@@ -366,9 +410,17 @@ mod tests {
             mysql_series: "8.4".to_owned(),
             production,
             tls_mode: if production {
-                MysqlTlsMode::Required
+                MysqlTlsMode::VerifyIdentity
             } else {
                 MysqlTlsMode::Preferred
+            },
+            tls_material: if production {
+                MysqlTlsMaterialPaths {
+                    ca: Some(std::path::PathBuf::from("/tmp/reprodb-test-ca.pem")),
+                    ..Default::default()
+                }
+            } else {
+                Default::default()
             },
             client: MysqlClientConfig {
                 image: client.image().to_owned(),
@@ -402,6 +454,7 @@ mod tests {
             username: "root".to_owned(),
             password: SecretString::from("password-that-must-not-leak"),
             tls_mode: MysqlTlsMode::Preferred,
+            tls_material: Default::default(),
             production: false,
         }
     }
@@ -540,6 +593,37 @@ mod tests {
         assert!(matches!(
             error,
             ProfileServiceError::Verification(SourceVerificationError::AuthenticationFailed)
+        ));
+        assert_eq!(repository.load().unwrap(), AppConfig::default());
+        assert!(!repository.paths().config_file().exists());
+    }
+
+    #[tokio::test]
+    async fn required_tls_without_a_negotiated_cipher_is_not_persisted() {
+        let temp = TempDir::new().unwrap();
+        let repository = repository(&temp);
+        let mut input = new_profile_input("tls-source");
+        input.tls_mode = MysqlTlsMode::Required;
+        let verifier = FakeVerifier {
+            calls: AtomicUsize::new(0),
+            result: Ok(VerifiedSource {
+                tls_cipher: None,
+                ..FakeVerifier::successful().result.unwrap()
+            }),
+        };
+
+        let error = ProfileService::new(repository.clone())
+            .add(
+                &crate::infrastructure::credentials::MemoryCredentialStore::default(),
+                &verifier,
+                input,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProfileServiceError::Verification(SourceVerificationError::TlsRequiredButNotNegotiated)
         ));
         assert_eq!(repository.load().unwrap(), AppConfig::default());
         assert!(!repository.paths().config_file().exists());
