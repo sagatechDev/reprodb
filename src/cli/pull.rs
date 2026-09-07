@@ -1,9 +1,9 @@
-use std::io::Write as _;
+use std::io::{IsTerminal as _, Write as _};
 
 use crate::{
     application::{
-        PullCacheUse, PullProgress, PullProgressObserver, PullReady, RestoreProgress,
-        RestoreProgressObserver,
+        PullCacheUse, PullDatabaseSelectionError, PullDatabaseSelector, PullProgress,
+        PullProgressObserver, PullReady, RestoreProgress, RestoreProgressObserver,
     },
     cli::{dump::CliDumpProgress, output::OutputStyle, restore},
     infrastructure::{
@@ -11,6 +11,38 @@ use crate::{
         compression::{CompressionProgress, CompressionProgressObserver},
     },
 };
+
+use crate::domain::DatabaseName;
+
+pub struct CliPullDatabaseSelector {
+    requested: Option<DatabaseName>,
+    interactive: bool,
+}
+
+impl CliPullDatabaseSelector {
+    pub fn new(requested: Option<DatabaseName>) -> Self {
+        Self {
+            requested,
+            interactive: std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+        }
+    }
+}
+
+impl PullDatabaseSelector for CliPullDatabaseSelector {
+    fn select(
+        &self,
+        source_database: &DatabaseName,
+    ) -> Result<DatabaseName, PullDatabaseSelectionError> {
+        if let Some(requested) = &self.requested {
+            return Ok(requested.clone());
+        }
+        if !self.interactive {
+            return Ok(source_database.clone());
+        }
+        crate::cli::prompt::select_pull_database(source_database)
+            .map_err(|_| PullDatabaseSelectionError)
+    }
+}
 
 pub fn render_start(style: &OutputStyle) -> String {
     format!("{} pull\n", style.brand("reprodb"))
@@ -175,6 +207,7 @@ mod tests {
                     profile: ProfileName::try_from("salt-local").unwrap(),
                     tenant_lookup: TenantLookup::try_from("sagatec").unwrap(),
                     tenant_id: TenantId::try_from("salt_sagatec").unwrap(),
+                    source_database: DatabaseName::try_from("salt_sagatec").unwrap(),
                     database: DatabaseName::try_from("salt_sagatec").unwrap(),
                     dump_id: DumpId::new(),
                     source_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
@@ -214,5 +247,24 @@ mod tests {
         assert_eq!(format_age(34), "34s");
         assert_eq!(format_age(2_100), "35m");
         assert_eq!(format_age(7_500), "2h 5m");
+    }
+
+    #[test]
+    fn database_selection_uses_an_explicit_name_or_the_source_default_non_interactively() {
+        let source = DatabaseName::try_from("salt_sagatec").unwrap();
+        let default = CliPullDatabaseSelector {
+            requested: None,
+            interactive: false,
+        };
+        let custom = CliPullDatabaseSelector {
+            requested: Some(DatabaseName::try_from("salt_sagatec_debug").unwrap()),
+            interactive: false,
+        };
+
+        assert_eq!(default.select(&source).unwrap(), source);
+        assert_eq!(
+            custom.select(&source).unwrap().as_str(),
+            "salt_sagatec_debug"
+        );
     }
 }

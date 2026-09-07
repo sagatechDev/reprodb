@@ -26,6 +26,7 @@ pub struct RestorePlan {
     pub profile: ProfileName,
     pub tenant_lookup: TenantLookup,
     pub tenant_id: TenantId,
+    pub source_database: DatabaseName,
     pub database: DatabaseName,
     pub dump_id: DumpId,
     pub source_version: MysqlVersion,
@@ -57,6 +58,12 @@ pub struct RestoreService {
     progress: Arc<dyn RestoreProgressObserver>,
 }
 
+pub struct RestoreRequest {
+    pub tenant: TenantLookup,
+    pub dump_id: DumpId,
+    pub target_database: Option<DatabaseName>,
+}
+
 impl RestoreService {
     pub fn new(repository: ConfigRepository) -> Self {
         Self {
@@ -83,23 +90,57 @@ impl RestoreService {
         E: RestoreExecutor,
         W: LocalTenantWriter,
     {
+        self.restore_to(
+            credentials,
+            attestor,
+            executor,
+            writer,
+            RestoreRequest {
+                tenant,
+                dump_id,
+                target_database: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn restore_to<E, W>(
+        &self,
+        credentials: &dyn CredentialStore,
+        attestor: &dyn LocalTargetAttestor,
+        executor: E,
+        writer: W,
+        request: RestoreRequest,
+    ) -> Result<RestoreReady, RestoreServiceError>
+    where
+        E: RestoreExecutor,
+        W: LocalTenantWriter,
+    {
         let artifact = LocalRestoreArtifactValidator::new(self.repository.paths().cache_dir())
             .validate_by_id(RestoreArtifactLookup {
-                tenant: &tenant,
-                dump_id,
+                tenant: &request.tenant,
+                dump_id: request.dump_id,
             })
             .await?;
-        let registration = LocalTenantRegistration::from_artifact(artifact.metadata())?;
+        let source_database = artifact.metadata().database.clone();
+        let target_database = request
+            .target_database
+            .unwrap_or_else(|| source_database.clone());
+        let registration = LocalTenantRegistration::from_artifact_for_database(
+            artifact.metadata(),
+            target_database.clone(),
+        )?;
 
         let guarded = LocalTargetGate::new(self.repository.clone())
             .verify(credentials, attestor)
             .await?;
-        let target = guarded.authorize_tenant_database(artifact.metadata().database.clone())?;
+        let target = guarded.authorize_tenant_database(target_database.clone())?;
         let plan = RestorePlan {
             profile: artifact.metadata().profile.clone(),
             tenant_lookup: artifact.metadata().tenant_lookup.clone(),
             tenant_id: artifact.metadata().tenant_id.clone(),
-            database: artifact.metadata().database.clone(),
+            source_database,
+            database: target_database,
             dump_id: artifact.metadata().dump_id,
             source_version: artifact.metadata().source_version,
             client_version: artifact.metadata().client_version,
@@ -255,10 +296,11 @@ mod tests {
             _target: &AuthorizedLocalTarget,
             registration: &LocalTenantRegistration,
         ) -> Result<(), LocalTenantWriteError> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(registration.tenant_id().to_string());
+            self.calls.lock().unwrap().push(format!(
+                "{}:{}",
+                registration.tenant_id(),
+                registration.target_database()
+            ));
             Ok(())
         }
     }
@@ -376,10 +418,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(ready.plan.database.as_str(), "salt_sagatec");
+        assert_eq!(ready.plan.source_database.as_str(), "salt_sagatec");
         assert_eq!(ready.plan.local_domain.as_str(), "sagatec");
         assert_eq!(*attestor_calls.lock().unwrap(), 1);
         assert_eq!(*executor_calls.lock().unwrap(), ["recreate", "import"]);
-        assert_eq!(*writer_calls.lock().unwrap(), ["salt_sagatec"]);
+        assert_eq!(*writer_calls.lock().unwrap(), ["salt_sagatec:salt_sagatec"]);
         assert!(matches!(
             progress.lock().unwrap().as_slice(),
             [
@@ -388,6 +431,41 @@ mod tests {
                 RestoreProgress::RegisteringTenant
             ]
         ));
+    }
+
+    #[tokio::test]
+    async fn custom_target_database_is_authorized_restored_and_registered() {
+        let directory = tempdir().unwrap();
+        let (repository, credentials, dump_id) = configured_fixture(directory.path()).await;
+        let writer_calls = Arc::new(Mutex::new(Vec::new()));
+
+        let ready = RestoreService::new(repository)
+            .restore_to(
+                &credentials,
+                &FakeAttestor {
+                    calls: Arc::new(Mutex::new(0)),
+                },
+                FakeExecutor {
+                    calls: Arc::new(Mutex::new(Vec::new())),
+                },
+                FakeWriter {
+                    calls: Arc::clone(&writer_calls),
+                },
+                RestoreRequest {
+                    tenant: TenantLookup::try_from("sagatec").unwrap(),
+                    dump_id,
+                    target_database: Some(DatabaseName::try_from("salt_sagatec_debug").unwrap()),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(ready.plan.source_database.as_str(), "salt_sagatec");
+        assert_eq!(ready.plan.database.as_str(), "salt_sagatec_debug");
+        assert_eq!(
+            *writer_calls.lock().unwrap(),
+            ["salt_sagatec:salt_sagatec_debug"]
+        );
     }
 
     #[tokio::test]

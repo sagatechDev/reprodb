@@ -37,9 +37,6 @@ where
         artifact: &ValidatedRestoreArtifact,
     ) -> Result<RestoreCompleted, RestoreEngineError> {
         let metadata = artifact.metadata();
-        if target.database() != &metadata.database {
-            return Err(RestoreEngineError::DatabaseMismatch);
-        }
         if mysql_series(target.server_version()) != mysql_series(metadata.source_version)
             || mysql_series(target.client().version()) != mysql_series(metadata.client_version)
         {
@@ -66,7 +63,7 @@ where
 
         Ok(RestoreCompleted {
             tenant_id: metadata.tenant_id.clone(),
-            database: metadata.database.clone(),
+            database: target.database().clone(),
             dump_id: metadata.dump_id,
             imported_bytes: metrics.imported_bytes(),
         })
@@ -115,8 +112,6 @@ impl RestoreCompleted {
 
 #[derive(Debug, Error)]
 pub enum RestoreEngineError {
-    #[error("the authorized target database differs from the managed dump database")]
-    DatabaseMismatch,
     #[error("the target server/client series is incompatible with the managed dump")]
     VersionMismatch,
     #[error(transparent)]
@@ -329,7 +324,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn database_mismatch_is_rejected_before_executor_or_state() {
+    async fn a_validated_dump_can_be_restored_into_another_authorized_database() {
         let directory = tempdir().unwrap();
         let artifact = artifact(&directory.path().join("cache")).await;
         let target =
@@ -344,11 +339,13 @@ mod tests {
             directory.path().join("data"),
         );
 
-        assert!(matches!(
-            engine.restore(&target, &artifact).await,
-            Err(RestoreEngineError::DatabaseMismatch)
-        ));
-        assert!(calls.lock().unwrap().is_empty());
-        assert!(!directory.path().join("data").exists());
+        let completed = engine.restore(&target, &artifact).await.unwrap();
+
+        assert_eq!(completed.database().as_str(), "salt_polymer");
+        assert_eq!(*calls.lock().unwrap(), ["recreate", "import"]);
+        assert_eq!(
+            engine.states.load(&target).unwrap().status,
+            RestoreStatus::Ready
+        );
     }
 }

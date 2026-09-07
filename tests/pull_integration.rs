@@ -3,7 +3,10 @@
 use std::process::{Command, Stdio};
 
 use reprodb::{
-    application::{PullCacheUse, PullDumpDependencies, PullRestoreDependencies, PullService},
+    application::{
+        PullCacheUse, PullDatabaseSelectionError, PullDatabaseSelector, PullDumpDependencies,
+        PullRestoreDependencies, PullService,
+    },
     domain::{
         CredentialKey, CredentialScope, DatabaseName, DomainAlias, MysqlTlsMode, ProfileName,
         TenantLookup,
@@ -29,6 +32,17 @@ use reprodb::{
 use secrecy::{SecretString, zeroize::Zeroize};
 use tempfile::TempDir;
 use uuid::Uuid;
+
+struct SourceDatabase;
+
+impl PullDatabaseSelector for SourceDatabase {
+    fn select(
+        &self,
+        source_database: &DatabaseName,
+    ) -> Result<DatabaseName, PullDatabaseSelectionError> {
+        Ok(source_database.clone())
+    }
+}
 
 #[tokio::test]
 #[ignore = "creates, pulls twice and removes a unique Salt tenant in the local mysql-8 container"]
@@ -163,6 +177,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
                     target_attestor: &attestor,
                     executor: DockerMysqlRestoreExecutor,
                     tenant_writer: DockerLocalTenantWriter::new(TokioProcessRunner),
+                    database_selector: &SourceDatabase,
                 },
                 TenantLookup::try_from(domain.as_str()).unwrap(),
                 false,
@@ -185,6 +200,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
                     target_attestor: &attestor,
                     executor: DockerMysqlRestoreExecutor,
                     tenant_writer: DockerLocalTenantWriter::new(TokioProcessRunner),
+                    database_selector: &SourceDatabase,
                 },
                 TenantLookup::try_from(domain.as_str()).unwrap(),
                 false,

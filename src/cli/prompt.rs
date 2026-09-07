@@ -28,6 +28,9 @@ pub enum PromptError {
 
     #[error("the local central database name is invalid")]
     InvalidCentralDatabase,
+
+    #[error("the local restore database name is invalid")]
+    InvalidRestoreDatabase,
 }
 
 pub fn collect_new_profile(name: ProfileName) -> Result<NewProfileInput, PromptError> {
@@ -233,6 +236,20 @@ pub fn confirm_profile_removal(name: &ProfileName) -> Result<bool, PromptError> 
         .default(false)
         .interact()
         .map_err(|source| PromptError::Unavailable { source })
+}
+
+pub fn select_pull_database(default: &DatabaseName) -> Result<DatabaseName, PromptError> {
+    let value = Input::<String>::with_theme(&SimpleTheme)
+        .with_prompt("Local restore database")
+        .default(default.as_str().to_owned())
+        .validate_with(|value: &String| -> Result<(), &str> {
+            DatabaseName::try_from(value.as_str())
+                .map(|_| ())
+                .map_err(|_| "enter a safe non-administrative database name")
+        })
+        .interact_text()
+        .map_err(unavailable)?;
+    DatabaseName::try_from(value).map_err(|_| PromptError::InvalidRestoreDatabase)
 }
 
 #[cfg(test)]

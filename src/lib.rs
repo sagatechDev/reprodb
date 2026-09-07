@@ -192,6 +192,10 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
         Commands::Restore(arguments) => {
             let tenant = TenantLookup::try_from(arguments.tenant)?;
             let dump_id = arguments.dump_id.parse::<domain::DumpId>()?;
+            let target_database = arguments
+                .database
+                .map(domain::DatabaseName::try_from)
+                .transpose()?;
             print!("{}", cli::restore::render_start(&style));
             std::io::stdout().flush().map_err(AppError::Output)?;
 
@@ -199,7 +203,7 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
             let progress = std::sync::Arc::new(cli::restore::CliRestoreProgress::new(style));
             let service = application::RestoreService::new(repository).with_progress(progress);
             let restored = service
-                .restore(
+                .restore_to(
                     &infrastructure::credentials::OsCredentialStore,
                     &infrastructure::mysql::DockerLocalTargetAttestor::new(
                         infrastructure::process::TokioProcessRunner,
@@ -208,8 +212,11 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
                     infrastructure::mysql::DockerLocalTenantWriter::new(
                         infrastructure::process::TokioProcessRunner,
                     ),
-                    tenant,
-                    dump_id,
+                    application::RestoreRequest {
+                        tenant,
+                        dump_id,
+                        target_database,
+                    },
                 )
                 .await?;
             print!("{}", cli::restore::render_complete(&style, &restored));
@@ -217,11 +224,23 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
         }
         Commands::Pull(arguments) if arguments.preview => {
             let tenant = TenantLookup::try_from(arguments.tenant)?;
-            print!("{}", cli::preview::pull(&style, &tenant, arguments.fresh));
+            let target_database = arguments
+                .database
+                .map(domain::DatabaseName::try_from)
+                .transpose()?;
+            print!(
+                "{}",
+                cli::preview::pull(&style, &tenant, arguments.fresh, target_database.as_ref())
+            );
             Ok(())
         }
         Commands::Pull(arguments) => {
             let tenant = TenantLookup::try_from(arguments.tenant)?;
+            let target_database = arguments
+                .database
+                .map(domain::DatabaseName::try_from)
+                .transpose()?;
+            let database_selector = cli::pull::CliPullDatabaseSelector::new(target_database);
             print!("{}", cli::pull::render_start(&style));
             std::io::stdout().flush().map_err(AppError::Output)?;
 
@@ -250,6 +269,7 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
                         tenant_writer: infrastructure::mysql::DockerLocalTenantWriter::new(
                             infrastructure::process::TokioProcessRunner,
                         ),
+                        database_selector: &database_selector,
                     },
                     tenant,
                     arguments.fresh,

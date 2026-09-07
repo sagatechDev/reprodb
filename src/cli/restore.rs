@@ -15,12 +15,12 @@ pub fn render_start(style: &OutputStyle) -> String {
 
 pub fn render_plan(style: &OutputStyle, plan: &RestorePlan) -> String {
     format!(
-        "\n{}\n  Source:     {}\n  Lookup:     {}\n  Tenant ID:  {}\n  Database:   {}\n  Dump ID:    {}\n  MySQL:      {} (client {})\n  Target:     {}/{}\n  Domain:     {}\n\n{} The configured local tenant database will be replaced.\n",
+        "\n{}\n  Source:     {} / {}\n  Lookup:     {}\n  Tenant ID:  {}\n  Dump ID:    {}\n  MySQL:      {} (client {})\n  Target:     {}/{}\n  Domain:     {}\n\n{} The selected local target database will be replaced.\n",
         style.section("Restore plan"),
         style.value(plan.profile.as_str()),
+        style.value(plan.source_database.as_str()),
         style.value(plan.tenant_lookup.as_str()),
         style.value(plan.tenant_id.as_str()),
-        style.value(plan.database.as_str()),
         style.value(&plan.dump_id.to_string()),
         plan.source_version,
         plan.client_version,
@@ -88,6 +88,7 @@ mod tests {
             profile: ProfileName::try_from("salt-local").unwrap(),
             tenant_lookup: TenantLookup::try_from("sagatec").unwrap(),
             tenant_id: TenantId::try_from("salt_sagatec").unwrap(),
+            source_database: DatabaseName::try_from("salt_sagatec").unwrap(),
             database: DatabaseName::try_from("salt_sagatec").unwrap(),
             dump_id: DumpId::new(),
             source_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
@@ -101,9 +102,9 @@ mod tests {
     fn plan_makes_the_destructive_local_scope_visible() {
         let output = render_plan(&OutputStyle::plain(), &plan());
 
-        assert!(output.contains("Source:     salt-local"));
+        assert!(output.contains("Source:     salt-local / salt_sagatec"));
         assert!(output.contains("Target:     mysql-8/salt_sagatec"));
-        assert!(output.contains("configured local tenant database will be replaced"));
+        assert!(output.contains("selected local target database will be replaced"));
         assert!(!output.to_ascii_lowercase().contains("password"));
     }
 

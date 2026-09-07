@@ -136,6 +136,10 @@ pub struct RestoreArgs {
     /// ID of a dump managed by reprodb.
     #[arg(long, value_name = "ID")]
     pub dump_id: String,
+
+    /// Restore into this local database instead of the source database name.
+    #[arg(long, value_name = "DATABASE")]
+    pub database: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -143,6 +147,10 @@ pub struct PullArgs {
     /// Tenant ID or local domain alias.
     #[arg(value_name = "TENANT")]
     pub tenant: String,
+
+    /// Restore into this local database instead of the source database name.
+    #[arg(long, value_name = "DATABASE")]
+    pub database: Option<String>,
 
     /// Ignore a valid cache entry and create a fresh dump.
     #[arg(long)]
@@ -186,6 +194,7 @@ mod tests {
         };
         assert_eq!(arguments.tenant, "sagatec");
         assert!(arguments.fresh);
+        assert!(arguments.database.is_none());
         assert!(!arguments.preview);
         assert_eq!(cli.color, ColorChoice::Auto);
     }
@@ -237,5 +246,37 @@ mod tests {
         };
         assert_eq!(arguments.tenant, "sagatec");
         assert_eq!(arguments.dump_id, "dump-123");
+        assert!(arguments.database.is_none());
+    }
+
+    #[test]
+    fn parses_a_custom_local_database_for_pull_and_restore() {
+        let pull = Cli::try_parse_from([
+            "reprodb",
+            "pull",
+            "sagatec",
+            "--database",
+            "salt_sagatec_debug",
+        ])
+        .unwrap();
+        let Commands::Pull(pull) = pull.command else {
+            panic!("expected pull command")
+        };
+        assert_eq!(pull.database.as_deref(), Some("salt_sagatec_debug"));
+
+        let restore = Cli::try_parse_from([
+            "reprodb",
+            "restore",
+            "sagatec",
+            "--dump-id",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "--database",
+            "salt_sagatec_debug",
+        ])
+        .unwrap();
+        let Commands::Restore(restore) = restore.command else {
+            panic!("expected restore command")
+        };
+        assert_eq!(restore.database.as_deref(), Some("salt_sagatec_debug"));
     }
 }

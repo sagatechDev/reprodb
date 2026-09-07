@@ -250,6 +250,29 @@ fn pull_preview_can_show_the_fresh_path() {
 }
 
 #[test]
+fn pull_preview_shows_a_custom_local_database() {
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .args([
+            "pull",
+            "sagatec",
+            "--database",
+            "salt_sagatec_debug",
+            "--preview",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Source DB  salt_sagatec")
+                .and(predicate::str::contains(
+                    "Target DB  mysql-8/salt_sagatec_debug",
+                ))
+                .and(predicate::str::contains("Database   salt_sagatec_debug")),
+        );
+}
+
+#[test]
 fn pull_without_an_active_profile_fails_before_source_or_docker_access() {
     let home = tempfile::tempdir().unwrap();
     let mut command = Command::cargo_bin("reprodb").unwrap();
@@ -262,6 +285,23 @@ fn pull_without_an_active_profile_fails_before_source_or_docker_access() {
         .code(10)
         .stdout(predicate::str::contains("reprodb pull"))
         .stderr(predicate::str::contains("no active source profile"));
+}
+
+#[test]
+fn pull_rejects_an_administrative_target_database_before_external_access() {
+    let home = tempfile::tempdir().unwrap();
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .env("REPRODB_HOME", home.path())
+        .args(["pull", "sagatec", "--database", "mysql"])
+        .assert()
+        .failure()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "database name is reserved and cannot be used",
+        ));
 }
 
 #[test]

@@ -154,8 +154,14 @@ pub fn doctor(style: &OutputStyle) -> String {
     )
 }
 
-pub fn pull(style: &OutputStyle, tenant: &TenantLookup, fresh: bool) -> String {
+pub fn pull(
+    style: &OutputStyle,
+    tenant: &TenantLookup,
+    fresh: bool,
+    target_database: Option<&crate::domain::DatabaseName>,
+) -> String {
     let (tenant_id, database) = preview_resolution(tenant);
+    let target_database = target_database.map_or(database, |database| database.as_str());
     let cache_message = if fresh {
         style.attention("! Fresh dump requested; the local cache will be ignored.")
     } else {
@@ -172,7 +178,7 @@ pub fn pull(style: &OutputStyle, tenant: &TenantLookup, fresh: bool) -> String {
     let profile = style.value("salt-source");
     let tenant_value = style.value(tenant.as_str());
     let source_value = style.value(database);
-    let target_value = style.value(&format!("mysql-8/{database}"));
+    let target_value = style.value(&format!("mysql-8/{target_database}"));
 
     format!(
         r#"{brand} pull {preview}
@@ -195,7 +201,7 @@ Target DB  {target_value}
 
 {ready}
 
-Database   {database}
+Database   {target_database}
 Container  mysql-8
 
 {footer}
@@ -231,7 +237,7 @@ mod tests {
     #[test]
     fn fresh_pull_preview_resolves_the_observed_sagatec_database() {
         let tenant = TenantLookup::try_from("sagatec").unwrap();
-        let output = pull(&OutputStyle::plain(), &tenant, true);
+        let output = pull(&OutputStyle::plain(), &tenant, true, None);
 
         assert!(output.contains("Fresh dump requested"));
         assert!(output.contains("Source DB  salt_sagatec"));
@@ -242,7 +248,7 @@ mod tests {
     #[test]
     fn preview_does_not_invent_a_resolution_for_an_unknown_domain() {
         let tenant = TenantLookup::try_from("unknown").unwrap();
-        let output = pull(&OutputStyle::plain(), &tenant, false);
+        let output = pull(&OutputStyle::plain(), &tenant, false, None);
 
         assert!(output.contains("Source DB  <resolved-database>"));
         assert!(!output.contains("salt_unknown"));

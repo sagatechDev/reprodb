@@ -221,6 +221,7 @@ const fn pull_error_category(error: &PullServiceError) -> ErrorCategory {
             ErrorCategory::Configuration
         }
         PullServiceError::Clock(_) => ErrorCategory::General,
+        PullServiceError::DatabaseSelection(_) => ErrorCategory::Usage,
         PullServiceError::Cache(_) => ErrorCategory::Cache,
         PullServiceError::Dump(error) => dump_error_category(error),
         PullServiceError::Restore(error) => restore_error_category(error),
@@ -241,9 +242,9 @@ const fn restore_error_category(error: &RestoreServiceError) -> ErrorCategory {
         RestoreServiceError::Engine(RestoreEngineError::Execution(error)) => {
             restore_executor_error_category(error)
         }
-        RestoreServiceError::Engine(
-            RestoreEngineError::DatabaseMismatch | RestoreEngineError::ImportedSizeMismatch,
-        ) => ErrorCategory::Restore,
+        RestoreServiceError::Engine(RestoreEngineError::ImportedSizeMismatch) => {
+            ErrorCategory::Restore
+        }
         RestoreServiceError::Registration(error) => match error {
             LocalTenantRegistrationServiceError::RestoreIdentityMismatch => ErrorCategory::Restore,
             LocalTenantRegistrationServiceError::Write(

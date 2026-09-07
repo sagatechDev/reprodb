@@ -797,6 +797,8 @@ Contrato e evidências: [`docs/cache-commands.md`](cache-commands.md).
 
 **Labels:** `priority:p0`, `type:feature`, `area:cli`, `area:restore`, `area:docker`
 
+**Status:** em andamento — o core já separa source/target database, `pull` pergunta o nome local com default correto e `pull`/`restore` aceitam `--database` validado; seleção do container, múltiplos targets persistidos e detecção do mesmo servidor source/target ainda são obrigatórios antes da conclusão.
+
 **Escopo:** permitir múltiplos targets locais cadastrados pelo `setup`, com um target default. Em terminal interativo, `pull` mostra os targets MySQL disponíveis/configurados e pergunta o container e o nome do database de destino; os defaults são o target ativo e o database vindo do dump. Flags explícitas equivalentes devem manter automação possível.
 
 **Barreiras:** o target continua sendo um container Docker atestado; database customizado passa pelo value object, bloqueio de schemas administrativos e política de prefixo local. Quando um source profile local puder ser associado a um container Docker, persistir sua identidade e impedir `DROP` no mesmo container/database do source.

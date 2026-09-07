@@ -6,7 +6,7 @@ use crate::{
     application::{
         Clock, ClockError, DumpPreflightGateway, DumpService, DumpServiceError, DumpTenantResolver,
         LocalTargetAttestor, LocalTenantWriter, RestoreProgressObserver, RestoreReady,
-        RestoreService, RestoreServiceError, SystemClock,
+        RestoreRequest, RestoreService, RestoreServiceError, SystemClock,
     },
     domain::{DumpId, MYSQL_8_DUMP_POLICY_VERSION, TenantLookup},
     infrastructure::{
@@ -35,6 +35,17 @@ pub trait PullProgressObserver: Send + Sync {
     fn update(&self, progress: PullProgress);
 }
 
+pub trait PullDatabaseSelector: Send + Sync {
+    fn select(
+        &self,
+        source_database: &crate::domain::DatabaseName,
+    ) -> Result<crate::domain::DatabaseName, PullDatabaseSelectionError>;
+}
+
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+#[error("could not select the local restore database")]
+pub struct PullDatabaseSelectionError;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoPullProgress;
 
@@ -60,6 +71,7 @@ pub struct PullRestoreDependencies<'a, RE, W> {
     pub target_attestor: &'a dyn LocalTargetAttestor,
     pub executor: RE,
     pub tenant_writer: W,
+    pub database_selector: &'a dyn PullDatabaseSelector,
 }
 
 impl PullService<SystemClock> {
@@ -143,7 +155,7 @@ where
                     fresh,
                 })?;
 
-        let (dump_id, cache_use, _cache_lease) = match cache {
+        let (dump_id, source_database, cache_use, _cache_lease) = match cache {
             CacheLookupResult::Hit(hit) => {
                 let dump_id = hit.metadata().dump_id;
                 let age_seconds = hit.age_seconds();
@@ -151,7 +163,12 @@ where
                     dump_id,
                     age_seconds,
                 });
-                (dump_id, PullCacheUse::Hit { age_seconds }, Some(hit))
+                (
+                    dump_id,
+                    hit.metadata().database.clone(),
+                    PullCacheUse::Hit { age_seconds },
+                    Some(hit),
+                )
             }
             CacheLookupResult::Miss(reason) => {
                 self.progress.update(PullProgress::CacheMiss(reason));
@@ -168,19 +185,28 @@ where
                     .await?;
                 self.progress
                     .update(PullProgress::DumpReady(created.dump_id));
-                (created.dump_id, PullCacheUse::Created, None)
+                (
+                    created.dump_id,
+                    created.database,
+                    PullCacheUse::Created,
+                    None,
+                )
             }
         };
+        let target_database = restore.database_selector.select(&source_database)?;
 
         let restored = RestoreService::new(self.repository.clone())
             .with_progress(Arc::clone(&self.restore_progress))
-            .restore(
+            .restore_to(
                 credentials,
                 restore.target_attestor,
                 restore.executor,
                 restore.tenant_writer,
-                tenant,
-                dump_id,
+                RestoreRequest {
+                    tenant,
+                    dump_id,
+                    target_database: Some(target_database),
+                },
             )
             .await?;
 
@@ -224,6 +250,9 @@ pub enum PullServiceError {
 
     #[error(transparent)]
     Restore(#[from] RestoreServiceError),
+
+    #[error(transparent)]
+    DatabaseSelection(#[from] PullDatabaseSelectionError),
 }
 
 #[cfg(test)]
@@ -465,6 +494,17 @@ mod tests {
         }
     }
 
+    struct TestDatabaseSelector(Option<DatabaseName>);
+
+    impl PullDatabaseSelector for TestDatabaseSelector {
+        fn select(
+            &self,
+            source_database: &DatabaseName,
+        ) -> Result<DatabaseName, PullDatabaseSelectionError> {
+            Ok(self.0.clone().unwrap_or_else(|| source_database.clone()))
+        }
+    }
+
     async fn cached_fixture(root: &Path) -> (ConfigRepository, MemoryCredentialStore, DumpId) {
         let paths = AppPaths::new(root.join("config"), root.join("cache"), root.join("data"));
         let repository = ConfigRepository::new(paths.clone());
@@ -589,6 +629,7 @@ mod tests {
                     target_attestor: &FakeAttestor,
                     executor: FakeRestore,
                     tenant_writer: FakeWriter,
+                    database_selector: &TestDatabaseSelector(None),
                 },
                 TenantLookup::try_from("sagatec").unwrap(),
                 false,
@@ -650,6 +691,9 @@ mod tests {
                     target_attestor: &FakeAttestor,
                     executor: FakeRestore,
                     tenant_writer: FakeWriter,
+                    database_selector: &TestDatabaseSelector(Some(
+                        DatabaseName::try_from("salt_sagatec_debug").unwrap(),
+                    )),
                 },
                 TenantLookup::try_from("sagatec").unwrap(),
                 true,
@@ -659,6 +703,7 @@ mod tests {
 
         assert_eq!(ready.cache, PullCacheUse::Created);
         assert_ne!(ready.restored.plan.dump_id, cached_dump_id);
+        assert_eq!(ready.restored.plan.database.as_str(), "salt_sagatec_debug");
         assert_eq!(source_calls.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
 }

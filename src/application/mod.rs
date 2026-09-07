@@ -37,13 +37,14 @@ pub use profile_service::{
     ProfileSummary, SourceProfileVerifier, SourceVerificationError, VerifiedSource,
 };
 pub use pull_service::{
-    NoPullProgress, PullCacheUse, PullDumpDependencies, PullProgress, PullProgressObserver,
-    PullReady, PullRestoreDependencies, PullService, PullServiceError,
+    NoPullProgress, PullCacheUse, PullDatabaseSelectionError, PullDatabaseSelector,
+    PullDumpDependencies, PullProgress, PullProgressObserver, PullReady, PullRestoreDependencies,
+    PullService, PullServiceError,
 };
 pub use restore_engine::{RestoreCompleted, RestoreEngine, RestoreEngineError};
 pub use restore_service::{
     NoRestoreProgress, RestorePlan, RestoreProgress, RestoreProgressObserver, RestoreReady,
-    RestoreService, RestoreServiceError,
+    RestoreRequest, RestoreService, RestoreServiceError,
 };
 pub use setup_service::{
     LocalTargetConfigured, LocalTargetVerifier, NewLocalTargetInput, SetupService,

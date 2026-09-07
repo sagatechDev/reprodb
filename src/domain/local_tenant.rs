@@ -117,9 +117,16 @@ impl LocalTenantRegistration {
     pub fn from_artifact(
         metadata: &DumpArtifactMetadata,
     ) -> Result<Self, LocalTenantRegistrationError> {
+        Self::from_artifact_for_database(metadata, metadata.database.clone())
+    }
+
+    pub fn from_artifact_for_database(
+        metadata: &DumpArtifactMetadata,
+        target_database: DatabaseName,
+    ) -> Result<Self, LocalTenantRegistrationError> {
         let resolved = ResolvedTenant {
             tenant_id: metadata.tenant_id.clone(),
-            database: metadata.database.clone(),
+            database: target_database,
             matched_by: if metadata.tenant_lookup.as_str() == metadata.tenant_id.as_str() {
                 TenantMatch::TenantId
             } else {
