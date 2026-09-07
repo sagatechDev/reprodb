@@ -990,6 +990,45 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn failed_publish_rename_cleans_the_stage_and_never_exposes_a_complete_dump() {
+        let directory = tempdir().unwrap();
+        let store = LocalArtifactStore::new(directory.path().join("cache"));
+        let stage = store.begin(&profile(), &tenant_id()).unwrap();
+        let dump_id = stage.dump_id();
+        let stage_path = stage.stage_path.clone();
+        let collision = stage.published_path.clone();
+        let metrics = ZstdCompressor::default()
+            .compress(
+                Cursor::new(b"valid stream"),
+                stage.create_dump_writer().unwrap(),
+                Arc::new(NoCompressionProgress),
+            )
+            .await
+            .unwrap();
+        fs::create_dir(&collision).unwrap();
+        fs::write(collision.join("blocks-directory-replacement"), b"occupied").unwrap();
+
+        let error = stage
+            .publish(&metadata(dump_id, &metrics), &metrics)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ArtifactStoreError::Io {
+                operation: "publish the completed artifact directory",
+                ..
+            }
+        ));
+        assert!(!stage_path.exists());
+        assert!(
+            store
+                .list_complete(&profile(), &tenant_id())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn cache_directories_and_files_are_private_on_unix() {

@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    process::{Child, ChildStderr, Command},
+    io::AsyncWriteExt,
+    process::{Child, Command},
     sync::mpsc,
     task::JoinError,
 };
@@ -22,7 +22,7 @@ use crate::{
         cancellation::CancellationToken,
         credentials::{MYSQL_OPTION_FILE_CONTAINER_PATH, MysqlOptionFile},
         docker::{ephemeral_container_name, terminate_ephemeral_run},
-        process::ProcessSpec,
+        process::{BoundedBytes, ProcessSpec, read_bounded},
         restore_artifact::ValidatedRestoreArtifact,
     },
 };
@@ -124,7 +124,7 @@ impl RestoreExecutor for DockerMysqlRestoreExecutor {
             .stderr
             .take()
             .ok_or(RestoreExecutorError::MissingStderr)?;
-        let stderr_task = tokio::spawn(read_bounded_stderr(stderr));
+        let stderr_task = tokio::spawn(read_bounded(stderr, MAX_STDERR_BYTES));
 
         let path = artifact.dump_path().to_owned();
         let (sender, mut receiver) = mpsc::channel::<Vec<u8>>(BUFFERED_CHUNKS);
@@ -313,13 +313,13 @@ async fn run_without_stdin(
     cancellation: &CancellationToken,
     docker_context: &str,
     operation_container: &str,
-) -> Result<(std::process::ExitStatus, BoundedStderr), RestoreExecutorError> {
+) -> Result<(std::process::ExitStatus, BoundedBytes), RestoreExecutorError> {
     let mut child = spawn(spec, false)?;
     let stderr = child
         .stderr
         .take()
         .ok_or(RestoreExecutorError::MissingStderr)?;
-    let stderr_task = tokio::spawn(read_bounded_stderr(stderr));
+    let stderr_task = tokio::spawn(read_bounded(stderr, MAX_STDERR_BYTES));
     let status = tokio::select! {
         biased;
         () = cancellation.cancelled() => {
@@ -371,27 +371,6 @@ fn decode_chunks(
         bytes,
         sha256: Sha256Digest::from_bytes(hasher.finalize().into()),
     })
-}
-
-struct BoundedStderr {
-    bytes: Vec<u8>,
-    truncated: bool,
-}
-
-async fn read_bounded_stderr(mut stderr: ChildStderr) -> Result<BoundedStderr, io::Error> {
-    let mut bytes = Vec::with_capacity(MAX_STDERR_BYTES);
-    let mut buffer = [0_u8; 8 * 1024];
-    let mut truncated = false;
-    loop {
-        let count = stderr.read(&mut buffer).await?;
-        if count == 0 {
-            break;
-        }
-        let remaining = MAX_STDERR_BYTES.saturating_sub(bytes.len());
-        bytes.extend_from_slice(&buffer[..count.min(remaining)]);
-        truncated |= count > remaining;
-    }
-    Ok(BoundedStderr { bytes, truncated })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -3,7 +3,7 @@ use std::{ffi::OsString, io, process::Stdio, sync::Arc};
 use async_trait::async_trait;
 use secrecy::SecretString;
 use thiserror::Error;
-use tokio::{io::AsyncReadExt, process::Command, task::JoinError};
+use tokio::{process::Command, task::JoinError};
 
 use crate::{
     domain::{ApprovedDumpPlan, ProfileName},
@@ -14,12 +14,11 @@ use crate::{
         credentials::MYSQL_OPTION_FILE_CONTAINER_PATH,
         docker::{ephemeral_container_name, terminate_ephemeral_run},
         mysql::{ApprovedMysqlClient, DockerClientError, DockerMysqlClientRuntime},
-        process::{ProcessSpec, TokioProcessRunner},
+        process::{ProcessSpec, TokioProcessRunner, read_bounded},
     },
 };
 
 const MAX_STDERR_BYTES: usize = 64 * 1024;
-const STDERR_BUFFER_BYTES: usize = 8 * 1024;
 
 pub struct DumpExecutionRequest<'a> {
     pub profile_name: &'a ProfileName,
@@ -87,7 +86,7 @@ impl DumpExecutor for DockerMysqlDumpExecutor {
             .stderr
             .take()
             .ok_or(DumpExecutorError::MissingStderr)?;
-        let stderr_task = tokio::spawn(read_bounded_stderr(stderr));
+        let stderr_task = tokio::spawn(read_bounded(stderr, MAX_STDERR_BYTES));
 
         let compression = ZstdCompressor::default()
             .compress_with_cancellation(
@@ -169,29 +168,6 @@ fn dump_process_spec(
             OsString::from("--no-login-paths"),
         ])
         .args(request.plan.arguments().iter().map(OsString::from))
-}
-
-struct BoundedStderr {
-    bytes: Vec<u8>,
-    truncated: bool,
-}
-
-async fn read_bounded_stderr(
-    mut stderr: tokio::process::ChildStderr,
-) -> Result<BoundedStderr, io::Error> {
-    let mut bytes = Vec::with_capacity(MAX_STDERR_BYTES);
-    let mut buffer = [0_u8; STDERR_BUFFER_BYTES];
-    let mut truncated = false;
-    loop {
-        let count = stderr.read(&mut buffer).await?;
-        if count == 0 {
-            break;
-        }
-        let remaining = MAX_STDERR_BYTES.saturating_sub(bytes.len());
-        bytes.extend_from_slice(&buffer[..count.min(remaining)]);
-        truncated |= count > remaining;
-    }
-    Ok(BoundedStderr { bytes, truncated })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

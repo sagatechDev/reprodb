@@ -192,7 +192,9 @@ pub enum CompressionError {
     #[error("dump compression interrupted")]
     Interrupted,
 
-    #[error("could not initialize, write, or finish the Zstd stream")]
+    #[error(
+        "could not create the compressed dump; verify free space and permissions in the reprodb home"
+    )]
     Encode(#[source] io::Error),
 }
 
@@ -389,7 +391,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reports_output_failure_without_claiming_success() {
+    async fn reports_a_full_disk_without_claiming_compression_success() {
         let error = ZstdCompressor::default()
             .compress(
                 Cursor::new(vec![b'x'; STREAM_BUFFER_BYTES * 4]),
@@ -399,7 +401,11 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, CompressionError::Encode(_)));
+        assert!(matches!(
+            error,
+            CompressionError::Encode(ref source)
+                if source.kind() == io::ErrorKind::StorageFull
+        ));
     }
 
     #[tokio::test]
@@ -563,7 +569,10 @@ mod tests {
     impl Write for FailingWriter {
         fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
             if self.remaining == 0 {
-                return Err(io::Error::other("synthetic full disk"));
+                return Err(io::Error::new(
+                    io::ErrorKind::StorageFull,
+                    "synthetic full disk",
+                ));
             }
             let written = self.remaining.min(buffer.len());
             self.remaining -= written;

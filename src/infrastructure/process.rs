@@ -2,7 +2,36 @@ use std::{ffi::OsString, io, process::Stdio};
 
 use async_trait::async_trait;
 use thiserror::Error;
-use tokio::process::{Child, Command};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt},
+    process::{Child, Command},
+};
+
+const READ_BUFFER_BYTES: usize = 8 * 1024;
+
+pub struct BoundedBytes {
+    pub bytes: Vec<u8>,
+    pub truncated: bool,
+}
+
+pub async fn read_bounded<R>(mut reader: R, limit: usize) -> io::Result<BoundedBytes>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut bytes = Vec::with_capacity(limit);
+    let mut buffer = [0_u8; READ_BUFFER_BYTES];
+    let mut truncated = false;
+    loop {
+        let count = reader.read(&mut buffer).await?;
+        if count == 0 {
+            break;
+        }
+        let remaining = limit.saturating_sub(bytes.len());
+        bytes.extend_from_slice(&buffer[..count.min(remaining)]);
+        truncated |= count > remaining;
+    }
+    Ok(BoundedBytes { bytes, truncated })
+}
 
 pub async fn terminate_and_wait(child: &mut Child) -> io::Result<std::process::ExitStatus> {
     if let Err(kill_error) = child.start_kill() {
@@ -116,6 +145,8 @@ impl ProcessRunner for TokioProcessRunner {
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::AsyncWriteExt;
+
     use super::*;
 
     #[test]
@@ -149,5 +180,21 @@ mod tests {
 
         assert!(!status.success());
         assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_drains_large_diagnostics_without_retaining_them() {
+        let (mut writer, reader) = tokio::io::duplex(256);
+        let producer = tokio::spawn(async move {
+            writer.write_all(&vec![b'x'; 128 * 1024]).await.unwrap();
+            writer.shutdown().await.unwrap();
+        });
+
+        let diagnostic = read_bounded(reader, 1024).await.unwrap();
+        producer.await.unwrap();
+
+        assert_eq!(diagnostic.bytes.len(), 1024);
+        assert!(diagnostic.bytes.iter().all(|byte| *byte == b'x'));
+        assert!(diagnostic.truncated);
     }
 }
