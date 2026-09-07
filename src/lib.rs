@@ -55,7 +55,9 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
                     .start_container(&docker_context, &candidate.id)
                     .await?;
             }
-            if service.has_local_target()? && !cli::prompt::confirm_target_replacement()? {
+            if service.has_target_named(&candidate.name)?
+                && !cli::prompt::confirm_target_replacement(candidate)?
+            {
                 print!("{}", cli::setup::render_cancelled(&style));
                 return Ok(());
             }
@@ -192,6 +194,10 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
         Commands::Restore(arguments) => {
             let tenant = TenantLookup::try_from(arguments.tenant)?;
             let dump_id = arguments.dump_id.parse::<domain::DumpId>()?;
+            let target_container = arguments
+                .target
+                .map(domain::ContainerName::try_from)
+                .transpose()?;
             let target_database = arguments
                 .database
                 .map(domain::DatabaseName::try_from)
@@ -215,6 +221,7 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
                     application::RestoreRequest {
                         tenant,
                         dump_id,
+                        target_container,
                         target_database,
                     },
                 )
@@ -224,23 +231,38 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
         }
         Commands::Pull(arguments) if arguments.preview => {
             let tenant = TenantLookup::try_from(arguments.tenant)?;
+            let target_container = arguments
+                .target
+                .map(domain::ContainerName::try_from)
+                .transpose()?;
             let target_database = arguments
                 .database
                 .map(domain::DatabaseName::try_from)
                 .transpose()?;
             print!(
                 "{}",
-                cli::preview::pull(&style, &tenant, arguments.fresh, target_database.as_ref())
+                cli::preview::pull(
+                    &style,
+                    &tenant,
+                    arguments.fresh,
+                    target_container.as_ref(),
+                    target_database.as_ref(),
+                )
             );
             Ok(())
         }
         Commands::Pull(arguments) => {
             let tenant = TenantLookup::try_from(arguments.tenant)?;
+            let target_container = arguments
+                .target
+                .map(domain::ContainerName::try_from)
+                .transpose()?;
             let target_database = arguments
                 .database
                 .map(domain::DatabaseName::try_from)
                 .transpose()?;
             let database_selector = cli::pull::CliPullDatabaseSelector::new(target_database);
+            let target_selector = cli::pull::CliPullTargetSelector::new(target_container);
             print!("{}", cli::pull::render_start(&style));
             std::io::stdout().flush().map_err(AppError::Output)?;
 
@@ -269,6 +291,7 @@ pub async fn execute(cli: Cli) -> Result<(), AppError> {
                         tenant_writer: infrastructure::mysql::DockerLocalTenantWriter::new(
                             infrastructure::process::TokioProcessRunner,
                         ),
+                        target_selector: &target_selector,
                         database_selector: &database_selector,
                     },
                     tenant,

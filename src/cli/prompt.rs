@@ -6,9 +6,9 @@ use secrecy::SecretString;
 use thiserror::Error;
 
 use crate::{
-    application::{NewLocalTargetInput, NewProfileInput},
+    application::{NewLocalTargetInput, NewProfileInput, PullTargetChoice},
     cli::setup,
-    domain::{DatabaseName, MysqlTlsMode, ProfileName},
+    domain::{ContainerName, DatabaseName, MysqlTlsMode, ProfileName},
     infrastructure::docker::DockerContainerCandidate,
 };
 
@@ -209,9 +209,14 @@ pub fn collect_local_target(
     })
 }
 
-pub fn confirm_target_replacement() -> Result<bool, PromptError> {
+pub fn confirm_target_replacement(
+    candidate: &DockerContainerCandidate,
+) -> Result<bool, PromptError> {
     Confirm::with_theme(&SimpleTheme)
-        .with_prompt("Replace the currently configured local target?")
+        .with_prompt(format!(
+            "Reconfigure the saved target `{}` and replace its credential?",
+            candidate.name
+        ))
         .default(false)
         .interact()
         .map_err(unavailable)
@@ -250,6 +255,30 @@ pub fn select_pull_database(default: &DatabaseName) -> Result<DatabaseName, Prom
         .interact_text()
         .map_err(unavailable)?;
     DatabaseName::try_from(value).map_err(|_| PromptError::InvalidRestoreDatabase)
+}
+
+pub fn select_pull_target(choices: &[PullTargetChoice]) -> Result<ContainerName, PromptError> {
+    let labels = choices
+        .iter()
+        .map(|choice| {
+            if choice.is_default {
+                format!("{} (default)", choice.container)
+            } else {
+                choice.container.to_string()
+            }
+        })
+        .collect::<Vec<_>>();
+    let default = choices
+        .iter()
+        .position(|choice| choice.is_default)
+        .unwrap_or(0);
+    let selected = Select::with_theme(&SimpleTheme)
+        .with_prompt("Local restore container")
+        .items(&labels)
+        .default(default)
+        .interact()
+        .map_err(unavailable)?;
+    Ok(choices[selected].container.clone())
 }
 
 #[cfg(test)]

@@ -79,11 +79,25 @@ impl LocalTargetGate {
         credentials: &dyn CredentialStore,
         attestor: &dyn LocalTargetAttestor,
     ) -> Result<GuardedLocalTarget, LocalTargetGateError> {
+        self.verify_named(credentials, attestor, None).await
+    }
+
+    pub async fn verify_named(
+        &self,
+        credentials: &dyn CredentialStore,
+        attestor: &dyn LocalTargetAttestor,
+        target_name: Option<&ContainerName>,
+    ) -> Result<GuardedLocalTarget, LocalTargetGateError> {
         let config = self.repository.load()?;
-        let configured = config
-            .local_target
-            .as_ref()
-            .ok_or(LocalTargetGateError::NotConfigured)?;
+        let configured = match target_name {
+            Some(name) => config
+                .local_target_named(name)
+                .ok_or(LocalTargetGateError::UnknownTarget)?,
+            None => config
+                .local_target
+                .as_ref()
+                .ok_or(LocalTargetGateError::NotConfigured)?,
+        };
         let runtime_context = config
             .client_runtime
             .docker_context
@@ -277,6 +291,9 @@ pub enum LocalTargetGateError {
     #[error("no local restore target is configured; run `reprodb setup`")]
     NotConfigured,
 
+    #[error("the selected local restore target is not configured; run `reprodb setup`")]
+    UnknownTarget,
+
     #[error("the MySQL client Docker context is missing; run `reprodb setup`")]
     RuntimeContextMissing,
 
@@ -427,6 +444,50 @@ mod tests {
         assert_eq!(authorized.container_name().as_str(), "mysql-8");
         assert_eq!(authorized.database().as_str(), "salt_polymer");
         assert_eq!(authorized.server_version().to_string(), "8.4.4");
+        assert_eq!(attestor.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn verifies_a_named_non_default_target_by_its_own_identity_and_credential() {
+        let temp = TempDir::new().unwrap();
+        let repository = repository(&temp, LocalTargetTrust::UserConfirmed);
+        let mut config = repository.load().unwrap();
+        let name = ContainerName::try_from("mysql-target").unwrap();
+        let key = CredentialKey::new(crate::domain::CredentialScope::Target);
+        config.local_targets.insert(
+            name.clone(),
+            LocalTargetConfig {
+                docker_context: "desktop-linux".to_owned(),
+                container_name: name.clone(),
+                container_id: ContainerId::try_from("b".repeat(64)).unwrap(),
+                username: "root".to_owned(),
+                credential_key: key,
+                central_database: DatabaseName::try_from("salt_central").unwrap(),
+                trust: LocalTargetTrust::UserConfirmed,
+                tenant_database_prefix: DEFAULT_TENANT_DATABASE_PREFIX.to_owned(),
+            },
+        );
+        repository.save(&config).unwrap();
+        let credentials = MemoryCredentialStore::default();
+        credentials
+            .set(&key, SecretString::from("target-password"))
+            .await
+            .unwrap();
+        let attestor = FakeAttestor {
+            calls: AtomicUsize::new(0),
+            result: Ok(LocalTargetAttestation {
+                container_name: name.clone(),
+                container_id: ContainerId::try_from("b".repeat(64)).unwrap(),
+                ..attestation(false)
+            }),
+        };
+
+        let guarded = LocalTargetGate::new(repository)
+            .verify_named(&credentials, &attestor, Some(&name))
+            .await
+            .unwrap();
+
+        assert_eq!(guarded.container_name(), &name);
         assert_eq!(attestor.calls.load(Ordering::SeqCst), 1);
     }
 

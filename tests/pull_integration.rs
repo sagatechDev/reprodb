@@ -5,7 +5,8 @@ use std::process::{Command, Stdio};
 use reprodb::{
     application::{
         PullCacheUse, PullDatabaseSelectionError, PullDatabaseSelector, PullDumpDependencies,
-        PullRestoreDependencies, PullService,
+        PullRestoreDependencies, PullService, PullTargetChoice, PullTargetSelectionError,
+        PullTargetSelector,
     },
     domain::{
         CredentialKey, CredentialScope, DatabaseName, DomainAlias, MysqlTlsMode, ProfileName,
@@ -41,6 +42,21 @@ impl PullDatabaseSelector for SourceDatabase {
         source_database: &DatabaseName,
     ) -> Result<DatabaseName, PullDatabaseSelectionError> {
         Ok(source_database.clone())
+    }
+}
+
+struct DefaultTarget;
+
+impl PullTargetSelector for DefaultTarget {
+    fn select(
+        &self,
+        choices: &[PullTargetChoice],
+    ) -> Result<reprodb::domain::ContainerName, PullTargetSelectionError> {
+        choices
+            .iter()
+            .find(|choice| choice.is_default)
+            .map(|choice| choice.container.clone())
+            .ok_or(PullTargetSelectionError)
     }
 }
 
@@ -177,6 +193,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
                     target_attestor: &attestor,
                     executor: DockerMysqlRestoreExecutor,
                     tenant_writer: DockerLocalTenantWriter::new(TokioProcessRunner),
+                    target_selector: &DefaultTarget,
                     database_selector: &SourceDatabase,
                 },
                 TenantLookup::try_from(domain.as_str()).unwrap(),
@@ -200,6 +217,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
                     target_attestor: &attestor,
                     executor: DockerMysqlRestoreExecutor,
                     tenant_writer: DockerLocalTenantWriter::new(TokioProcessRunner),
+                    target_selector: &DefaultTarget,
                     database_selector: &SourceDatabase,
                 },
                 TenantLookup::try_from(domain.as_str()).unwrap(),

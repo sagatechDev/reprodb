@@ -53,6 +53,11 @@ pub async fn persist_config_with_credential(
         .filter(|target| target.credential_key == key)
         .count()
         + config
+            .local_targets
+            .values()
+            .filter(|target| target.credential_key == key)
+            .count()
+        + config
             .profiles
             .values()
             .filter(|profile| profile.credential_key == key)

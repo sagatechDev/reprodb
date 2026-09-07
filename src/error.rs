@@ -221,7 +221,9 @@ const fn pull_error_category(error: &PullServiceError) -> ErrorCategory {
             ErrorCategory::Configuration
         }
         PullServiceError::Clock(_) => ErrorCategory::General,
-        PullServiceError::DatabaseSelection(_) => ErrorCategory::Usage,
+        PullServiceError::DatabaseSelection(_) | PullServiceError::TargetSelection(_) => {
+            ErrorCategory::Usage
+        }
         PullServiceError::Cache(_) => ErrorCategory::Cache,
         PullServiceError::Dump(error) => dump_error_category(error),
         PullServiceError::Restore(error) => restore_error_category(error),
@@ -262,6 +264,7 @@ const fn local_target_error_category(error: &LocalTargetGateError) -> ErrorCateg
     match error {
         LocalTargetGateError::Config(_)
         | LocalTargetGateError::NotConfigured
+        | LocalTargetGateError::UnknownTarget
         | LocalTargetGateError::RuntimeContextMissing
         | LocalTargetGateError::DatabaseOutsideAllowlist => ErrorCategory::Configuration,
         LocalTargetGateError::Credential(_) => ErrorCategory::Credential,

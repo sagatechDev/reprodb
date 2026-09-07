@@ -17,7 +17,8 @@ O comando:
 7. pede usuário, senha mascarada por `*`, database central local e prefixo permitido para databases de tenant;
 8. prepara o client MySQL aprovado;
 9. conecta ao namespace de rede do container pelo ID completo e valida versão/vendor;
-10. salva o ID, nome, context, tipo de confiança, allowlist e chave da credencial no TOML, mantendo a senha no credential store do sistema.
+10. salva o ID, nome, context, tipo de confiança, allowlist e chave da credencial no TOML, mantendo a senha no credential store do sistema;
+11. torna o container escolhido o target default e preserva os outros targets já configurados.
 
 O ID completo é a identidade de segurança. O nome fica salvo para apresentação, mas `reprodb restore` recusa um container recriado com o mesmo nome e outro ID.
 
@@ -27,7 +28,9 @@ Contrato completo: [`docs/local-target-safety.md`](local-target-safety.md).
 
 Containers parados aparecem na lista. Se um deles for escolhido, a CLI pede confirmação, inicia exatamente o ID selecionado e tenta a conexão por até 10 segundos enquanto o MySQL fica pronto. A criação de um container dedicado pelo próprio reprodb continua pendente na RDB-025.
 
-Se já houver um target, o comando pede confirmação antes de substituí-lo. A nova configuração e credencial são publicadas antes da remoção da credencial antiga; uma falha de cleanup informa a chave órfã sem desfazer o target válido.
+Cada container precisa passar pelo `setup` uma vez para que identidade, política e credencial sejam verificadas. Escolher um container ainda não cadastrado o adiciona e o torna default sem remover os anteriores. Escolher novamente um container cadastrado pede confirmação antes de substituir somente a configuração e credencial desse target. A nova configuração e credencial são publicadas antes da remoção da credencial antiga; uma falha de cleanup informa a chave órfã sem desfazer o target válido.
+
+Com dois targets configurados, o `pull` interativo pergunta qual receberá o restore. Para automação, use `--target CONTAINER`.
 
 ## Limites atuais
 

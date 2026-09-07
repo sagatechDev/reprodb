@@ -273,6 +273,31 @@ fn pull_preview_shows_a_custom_local_database() {
 }
 
 #[test]
+fn pull_preview_shows_a_custom_container_and_database() {
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .args([
+            "pull",
+            "polymer",
+            "--target",
+            "mysql-target",
+            "--database",
+            "salt_polymer_debug",
+            "--preview",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Source DB  salt_polymer")
+                .and(predicate::str::contains(
+                    "Target DB  mysql-target/salt_polymer_debug",
+                ))
+                .and(predicate::str::contains("Container  mysql-target")),
+        );
+}
+
+#[test]
 fn pull_without_an_active_profile_fails_before_source_or_docker_access() {
     let home = tempfile::tempdir().unwrap();
     let mut command = Command::cargo_bin("reprodb").unwrap();

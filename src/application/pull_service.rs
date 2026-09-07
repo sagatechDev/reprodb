@@ -8,7 +8,7 @@ use crate::{
         LocalTargetAttestor, LocalTenantWriter, RestoreProgressObserver, RestoreReady,
         RestoreRequest, RestoreService, RestoreServiceError, SystemClock,
     },
-    domain::{DumpId, MYSQL_8_DUMP_POLICY_VERSION, TenantLookup},
+    domain::{ContainerName, DumpId, MYSQL_8_DUMP_POLICY_VERSION, TenantLookup},
     infrastructure::{
         artifact_store::LocalArtifactStore,
         cache::{
@@ -46,6 +46,23 @@ pub trait PullDatabaseSelector: Send + Sync {
 #[error("could not select the local restore database")]
 pub struct PullDatabaseSelectionError;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PullTargetChoice {
+    pub container: ContainerName,
+    pub is_default: bool,
+}
+
+pub trait PullTargetSelector: Send + Sync {
+    fn select(
+        &self,
+        choices: &[PullTargetChoice],
+    ) -> Result<ContainerName, PullTargetSelectionError>;
+}
+
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+#[error("no matching local restore target is configured; run `reprodb setup`")]
+pub struct PullTargetSelectionError;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoPullProgress;
 
@@ -71,6 +88,7 @@ pub struct PullRestoreDependencies<'a, RE, W> {
     pub target_attestor: &'a dyn LocalTargetAttestor,
     pub executor: RE,
     pub tenant_writer: W,
+    pub target_selector: &'a dyn PullTargetSelector,
     pub database_selector: &'a dyn PullDatabaseSelector,
 }
 
@@ -140,6 +158,14 @@ where
             .profiles
             .get(profile_name)
             .ok_or(PullServiceError::NoActiveProfile)?;
+        let target_choices = config
+            .configured_local_targets()
+            .map(|(target, is_default)| PullTargetChoice {
+                container: target.container_name.clone(),
+                is_default,
+            })
+            .collect::<Vec<_>>();
+        let target_container = restore.target_selector.select(&target_choices)?;
         let now = self.clock.now_unix_seconds()?;
 
         self.progress.update(PullProgress::CheckingCache);
@@ -205,6 +231,7 @@ where
                 RestoreRequest {
                     tenant,
                     dump_id,
+                    target_container: Some(target_container),
                     target_database: Some(target_database),
                 },
             )
@@ -253,6 +280,9 @@ pub enum PullServiceError {
 
     #[error(transparent)]
     DatabaseSelection(#[from] PullDatabaseSelectionError),
+
+    #[error(transparent)]
+    TargetSelection(#[from] PullTargetSelectionError),
 }
 
 #[cfg(test)]
@@ -505,6 +535,21 @@ mod tests {
         }
     }
 
+    struct DefaultTargetSelector;
+
+    impl PullTargetSelector for DefaultTargetSelector {
+        fn select(
+            &self,
+            choices: &[PullTargetChoice],
+        ) -> Result<ContainerName, PullTargetSelectionError> {
+            choices
+                .iter()
+                .find(|choice| choice.is_default)
+                .map(|choice| choice.container.clone())
+                .ok_or(PullTargetSelectionError)
+        }
+    }
+
     async fn cached_fixture(root: &Path) -> (ConfigRepository, MemoryCredentialStore, DumpId) {
         let paths = AppPaths::new(root.join("config"), root.join("cache"), root.join("data"));
         let repository = ConfigRepository::new(paths.clone());
@@ -629,6 +674,7 @@ mod tests {
                     target_attestor: &FakeAttestor,
                     executor: FakeRestore,
                     tenant_writer: FakeWriter,
+                    target_selector: &DefaultTargetSelector,
                     database_selector: &TestDatabaseSelector(None),
                 },
                 TenantLookup::try_from("sagatec").unwrap(),
@@ -691,6 +737,7 @@ mod tests {
                     target_attestor: &FakeAttestor,
                     executor: FakeRestore,
                     tenant_writer: FakeWriter,
+                    target_selector: &DefaultTargetSelector,
                     database_selector: &TestDatabaseSelector(Some(
                         DatabaseName::try_from("salt_sagatec_debug").unwrap(),
                     )),

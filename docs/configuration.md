@@ -36,6 +36,17 @@ central_database = "salt_central"
 trust = "user-confirmed"
 tenant_database_prefix = "salt_"
 
+# Targets adicionais cadastrados anteriormente pelo setup.
+[local_targets.mysql-target]
+docker_context = "desktop-linux"
+container_name = "mysql-target"
+container_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+username = "root"
+credential_key = "target:550e8400-e29b-41d4-a716-446655440002"
+central_database = "salt_central"
+trust = "user-confirmed"
+tenant_database_prefix = "salt_"
+
 [profiles.salt-local]
 host = "127.0.0.1"
 port = 3306
@@ -59,7 +70,7 @@ Senha não é um campo válido do schema. O TOML armazena apenas chaves opacas c
 
 O Docker context detectado durante o cadastro fica em `client_runtime.docker_context`. O `setup` seleciona um target no mesmo context, impedindo que verificação, dump e restore sejam executados acidentalmente em Engines diferentes.
 
-`local_target.trust` registra se o container foi criado/rotulado pelo reprodb ou se um container existente foi explicitamente confirmado. `tenant_database_prefix` é a allowlist inicial para restores de tenant; o database central fica sempre fora dela, mesmo quando compartilha o prefixo.
+`local_target` é o target default (o último confirmado pelo `setup`). `local_targets` preserva os demais pelo nome validado do container. Cada entrada mantém identidade e credential key próprias; a senha continua fora do TOML. `trust` registra se o container foi criado/rotulado pelo reprodb ou se um container existente foi explicitamente confirmado. `tenant_database_prefix` é a allowlist inicial para restores de tenant; o database central fica sempre fora dela, mesmo quando compartilha o prefixo.
 
 Os modos TLS iniciais são `required`, `preferred` e `disabled`. Um profile marcado como `production = true` somente é válido com `tls_mode = "required"`. O modo padrão de novos profiles é `required`; `preferred` e `disabled` precisam ser escolhidos explicitamente para fontes que não sejam de produção.
 

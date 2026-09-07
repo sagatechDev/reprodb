@@ -120,6 +120,10 @@ impl SetupService {
         Ok(self.repository.load()?.local_target.is_some())
     }
 
+    pub fn has_target_named(&self, name: &ContainerName) -> Result<bool, SetupServiceError> {
+        Ok(self.repository.load()?.local_target_named(name).is_some())
+    }
+
     pub async fn configure(
         &self,
         store: &dyn CredentialStore,
@@ -147,11 +151,19 @@ impl SetupService {
         }
 
         let previous_credential = config
-            .local_target
-            .as_ref()
+            .local_target_named(&input.container_name)
             .map(|target| target.credential_key);
         let credential_key = CredentialKey::new(CredentialScope::Target);
         config.client_runtime.docker_context = Some(input.docker_context.clone());
+
+        if let Some(previous_default) = config.local_target.take()
+            && previous_default.container_name != input.container_name
+        {
+            config
+                .local_targets
+                .insert(previous_default.container_name.clone(), previous_default);
+        }
+        config.local_targets.remove(&input.container_name);
         config.local_target = Some(LocalTargetConfig {
             docker_context: input.docker_context.clone(),
             container_name: input.container_name.clone(),
@@ -452,5 +464,55 @@ mod tests {
             .unwrap()
             .credential_key;
         assert!(store.get(&current_key).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn adding_another_target_preserves_the_previous_target_and_credential() {
+        let temp = TempDir::new().unwrap();
+        let repository = repository(&temp);
+        let store = MemoryCredentialStore::default();
+        let verifier = FakeVerifier::successful();
+        let service = SetupService::new(repository.clone());
+
+        service.configure(&store, &verifier, input()).await.unwrap();
+        let previous_key = repository
+            .load()
+            .unwrap()
+            .local_target
+            .unwrap()
+            .credential_key;
+        let mut second = input();
+        second.container_name = ContainerName::try_from("mysql-target").unwrap();
+        second.container_id = ContainerId::try_from("b".repeat(64)).unwrap();
+        second.password = SecretString::from("another-local-password");
+
+        let configured = service.configure(&store, &verifier, second).await.unwrap();
+        let config = repository.load().unwrap();
+
+        assert!(!configured.replaced_existing);
+        assert_eq!(
+            config
+                .local_target
+                .as_ref()
+                .unwrap()
+                .container_name
+                .as_str(),
+            "mysql-target"
+        );
+        assert_eq!(
+            config
+                .local_targets
+                .get(&ContainerName::try_from("mysql-8").unwrap())
+                .unwrap()
+                .credential_key,
+            previous_key
+        );
+        assert!(store.get(&previous_key).await.is_ok());
+        assert!(
+            store
+                .get(&config.local_target.unwrap().credential_key)
+                .await
+                .is_ok()
+        );
     }
 }

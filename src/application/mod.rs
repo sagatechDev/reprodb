@@ -39,7 +39,7 @@ pub use profile_service::{
 pub use pull_service::{
     NoPullProgress, PullCacheUse, PullDatabaseSelectionError, PullDatabaseSelector,
     PullDumpDependencies, PullProgress, PullProgressObserver, PullReady, PullRestoreDependencies,
-    PullService, PullServiceError,
+    PullService, PullServiceError, PullTargetChoice, PullTargetSelectionError, PullTargetSelector,
 };
 pub use restore_engine::{RestoreCompleted, RestoreEngine, RestoreEngineError};
 pub use restore_service::{

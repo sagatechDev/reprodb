@@ -3,7 +3,8 @@ use std::io::{IsTerminal as _, Write as _};
 use crate::{
     application::{
         PullCacheUse, PullDatabaseSelectionError, PullDatabaseSelector, PullProgress,
-        PullProgressObserver, PullReady, RestoreProgress, RestoreProgressObserver,
+        PullProgressObserver, PullReady, PullTargetChoice, PullTargetSelectionError,
+        PullTargetSelector, RestoreProgress, RestoreProgressObserver,
     },
     cli::{dump::CliDumpProgress, output::OutputStyle, restore},
     infrastructure::{
@@ -12,7 +13,45 @@ use crate::{
     },
 };
 
-use crate::domain::DatabaseName;
+use crate::domain::{ContainerName, DatabaseName};
+
+pub struct CliPullTargetSelector {
+    requested: Option<ContainerName>,
+    interactive: bool,
+}
+
+impl CliPullTargetSelector {
+    pub fn new(requested: Option<ContainerName>) -> Self {
+        Self {
+            requested,
+            interactive: std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+        }
+    }
+}
+
+impl PullTargetSelector for CliPullTargetSelector {
+    fn select(
+        &self,
+        choices: &[PullTargetChoice],
+    ) -> Result<ContainerName, PullTargetSelectionError> {
+        if let Some(requested) = &self.requested {
+            return choices
+                .iter()
+                .find(|choice| choice.container == *requested)
+                .map(|choice| choice.container.clone())
+                .ok_or(PullTargetSelectionError);
+        }
+        let default = choices
+            .iter()
+            .find(|choice| choice.is_default)
+            .or_else(|| choices.first())
+            .ok_or(PullTargetSelectionError)?;
+        if !self.interactive || choices.len() == 1 {
+            return Ok(default.container.clone());
+        }
+        crate::cli::prompt::select_pull_target(choices).map_err(|_| PullTargetSelectionError)
+    }
+}
 
 pub struct CliPullDatabaseSelector {
     requested: Option<DatabaseName>,
@@ -265,6 +304,39 @@ mod tests {
         assert_eq!(
             custom.select(&source).unwrap().as_str(),
             "salt_sagatec_debug"
+        );
+    }
+
+    #[test]
+    fn target_selection_uses_an_explicit_container_or_the_default_non_interactively() {
+        let choices = vec![
+            PullTargetChoice {
+                container: ContainerName::try_from("mysql-source").unwrap(),
+                is_default: false,
+            },
+            PullTargetChoice {
+                container: ContainerName::try_from("mysql-8").unwrap(),
+                is_default: true,
+            },
+        ];
+        let requested = CliPullTargetSelector {
+            requested: Some(ContainerName::try_from("mysql-source").unwrap()),
+            interactive: false,
+        };
+        let default = CliPullTargetSelector {
+            requested: None,
+            interactive: false,
+        };
+
+        assert_eq!(requested.select(&choices).unwrap().as_str(), "mysql-source");
+        assert_eq!(default.select(&choices).unwrap().as_str(), "mysql-8");
+        assert!(
+            CliPullTargetSelector {
+                requested: Some(ContainerName::try_from("mysql-unknown").unwrap()),
+                interactive: false,
+            }
+            .select(&choices)
+            .is_err()
         );
     }
 }

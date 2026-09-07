@@ -9,9 +9,10 @@ reprodb setup
 reprodb dump sagatec
 reprodb restore sagatec --dump-id 550e8400-e29b-41d4-a716-446655440000
 reprodb restore sagatec --dump-id 550e8400-e29b-41d4-a716-446655440000 --database salt_sagatec_debug
+reprodb restore sagatec --dump-id 550e8400-e29b-41d4-a716-446655440000 --target mysql-target
 ```
 
-O comando não aceita path de arquivo, host ou container. O UUID precisa identificar exatamente um dump completo dentro de `~/.reprodb/cache`. `--database` pode trocar somente o nome do database local dentro da allowlist configurada; sem a opção, o nome original do dump é usado.
+O comando não aceita path de arquivo nem host. O UUID precisa identificar exatamente um dump completo dentro de `~/.reprodb/cache`. `--target` escolhe somente um container já cadastrado pelo `setup`; sem a opção, o target default é usado. `--database` pode trocar somente o nome do database local dentro da allowlist do target escolhido; sem a opção, o nome original do dump é usado.
 
 ## Fluxo
 
@@ -51,7 +52,7 @@ Restore plan
 ! The selected local target database will be replaced.
 ```
 
-Não existe confirmation prompt: executar `restore` com um UUID gerenciado já expressa a intenção. A barreira efetiva é estrutural e limita o `DROP` ao database validado dentro do target selecionado pelo `setup`.
+Não existe confirmation prompt: executar `restore` com um UUID gerenciado já expressa a intenção. A barreira efetiva é estrutural e limita o `DROP` ao database validado dentro de um target selecionado e atestado pelo `setup`.
 
 O resultado mostra database, container, domain, bytes importados e dump ID. A CLI não inventa uma URL: o reprodb não conhece a porta HTTP nem o `APP_CENTRAL_DOMAIN` usados pela instância local do Salt.
 

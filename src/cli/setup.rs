@@ -115,8 +115,13 @@ pub fn render_configured(style: &OutputStyle, configured: &LocalTargetConfigured
     );
     if configured.replaced_existing {
         output.push_str(&format!(
-            "{} Previous local target replaced.\n",
+            "{} Existing target configuration replaced; other saved targets were preserved.\n",
             style.attention("!")
+        ));
+    } else {
+        output.push_str(&format!(
+            "{} This is now the default target; other saved targets were preserved.\n",
+            style.selected("›")
         ));
     }
     if configured.previous_credential_was_missing {

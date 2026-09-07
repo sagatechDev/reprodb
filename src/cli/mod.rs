@@ -137,6 +137,10 @@ pub struct RestoreArgs {
     #[arg(long, value_name = "ID")]
     pub dump_id: String,
 
+    /// Restore into this configured local MySQL container.
+    #[arg(long, value_name = "CONTAINER")]
+    pub target: Option<String>,
+
     /// Restore into this local database instead of the source database name.
     #[arg(long, value_name = "DATABASE")]
     pub database: Option<String>,
@@ -147,6 +151,10 @@ pub struct PullArgs {
     /// Tenant ID or local domain alias.
     #[arg(value_name = "TENANT")]
     pub tenant: String,
+
+    /// Restore into this configured local MySQL container.
+    #[arg(long, value_name = "CONTAINER")]
+    pub target: Option<String>,
 
     /// Restore into this local database instead of the source database name.
     #[arg(long, value_name = "DATABASE")]
@@ -194,6 +202,7 @@ mod tests {
         };
         assert_eq!(arguments.tenant, "sagatec");
         assert!(arguments.fresh);
+        assert!(arguments.target.is_none());
         assert!(arguments.database.is_none());
         assert!(!arguments.preview);
         assert_eq!(cli.color, ColorChoice::Auto);
@@ -246,6 +255,7 @@ mod tests {
         };
         assert_eq!(arguments.tenant, "sagatec");
         assert_eq!(arguments.dump_id, "dump-123");
+        assert!(arguments.target.is_none());
         assert!(arguments.database.is_none());
     }
 
@@ -278,5 +288,30 @@ mod tests {
             panic!("expected restore command")
         };
         assert_eq!(restore.database.as_deref(), Some("salt_sagatec_debug"));
+    }
+
+    #[test]
+    fn parses_a_configured_target_for_pull_and_restore() {
+        let pull = Cli::try_parse_from(["reprodb", "pull", "sagatec", "--target", "mysql-target"])
+            .unwrap();
+        let Commands::Pull(pull) = pull.command else {
+            panic!("expected pull command")
+        };
+        assert_eq!(pull.target.as_deref(), Some("mysql-target"));
+
+        let restore = Cli::try_parse_from([
+            "reprodb",
+            "restore",
+            "sagatec",
+            "--dump-id",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "--target",
+            "mysql-target",
+        ])
+        .unwrap();
+        let Commands::Restore(restore) = restore.command else {
+            panic!("expected restore command")
+        };
+        assert_eq!(restore.target.as_deref(), Some("mysql-target"));
     }
 }

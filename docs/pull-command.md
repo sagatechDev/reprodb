@@ -7,6 +7,7 @@ reprodb pull sagatec
 reprodb pull polymer
 reprodb pull sagatec --fresh
 reprodb pull sagatec --database salt_sagatec_debug
+reprodb pull polymer --target mysql-target --database salt_polymer_debug
 ```
 
 ## Cache primeiro
@@ -43,7 +44,9 @@ config + profile ativo
 
 O target continua exigindo sua própria credencial mesmo num cache hit. Cache local evita acesso ao source; ele não desabilita as barreiras do restore.
 
-Em um terminal interativo, depois do cache hit ou do novo dump, a CLI pergunta `Local restore database` usando o nome do source como default. Pressionar Enter preserva esse nome. `--database` escolhe antecipadamente outro nome e evita a pergunta; em execução não interativa, o default é aplicado automaticamente.
+Em um terminal interativo com mais de um target configurado, a CLI pergunta primeiro `Local restore container` e destaca o default definido pelo último `reprodb setup`. Com um único target, ele é escolhido sem um prompt redundante. `--target CONTAINER` faz a seleção explicitamente e falha antes do dump se o container ainda não foi cadastrado pelo setup.
+
+Depois do cache hit ou do novo dump, a CLI pergunta `Local restore database` usando o nome do source como default. Pressionar Enter preserva esse nome. `--database` escolhe antecipadamente outro nome e evita a pergunta; em execução não interativa, o default é aplicado automaticamente.
 
 O nome escolhido ainda precisa estar dentro da allowlist `salt_*` do target configurado. A CLI mantém “source database” e “target database” separados no plano, usa o nome local no lock e atualiza `tenancy_db_name` no `salt_central` somente depois do import completo.
 

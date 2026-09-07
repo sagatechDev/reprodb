@@ -216,9 +216,10 @@ $REPRODB pull sagatec
 $REPRODB pull sagatec
 $REPRODB pull sagatec --fresh
 $REPRODB pull sagatec --database salt_sagatec_debug
+$REPRODB pull polymer --target mysql-target --database salt_polymer_debug
 ```
 
-Compare a indicação `new dump`/`reused`, a idade do cache e o aviso antes da substituição local. Num terminal, o prompt de database deve oferecer `salt_sagatec`; pressionar Enter mantém o default. `--fresh` deve gerar outro UUID. A opção `--database` deve restaurar no nome alternativo permitido e atualizar o registro correspondente no `salt_central` do target configurado.
+Compare a indicação `new dump`/`reused`, a idade do cache e o aviso antes da substituição local. Com dois containers cadastrados por `setup`, o prompt de container deve listar ambos e marcar o default; `--target` deve pular essa escolha. Em seguida, o prompt de database deve oferecer `salt_sagatec`; pressionar Enter mantém o default. `--fresh` deve gerar outro UUID. A opção `--database` deve restaurar no nome alternativo permitido e atualizar o registro correspondente no `salt_central` do target escolhido.
 
 Inspecione então a pasta local e compare os UUIDs, idades e estados de integridade:
 

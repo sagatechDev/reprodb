@@ -8,8 +8,8 @@ use crate::{
         LocalTenantRegistrationServiceError, LocalTenantWriter, RestoreEngine, RestoreEngineError,
     },
     domain::{
-        DatabaseName, DomainAlias, DumpId, LocalTenantRegistration, LocalTenantRegistrationError,
-        MysqlVersion, ProfileName, TenantId, TenantLookup,
+        ContainerName, DatabaseName, DomainAlias, DumpId, LocalTenantRegistration,
+        LocalTenantRegistrationError, MysqlVersion, ProfileName, TenantId, TenantLookup,
     },
     infrastructure::{
         config::ConfigRepository,
@@ -61,6 +61,7 @@ pub struct RestoreService {
 pub struct RestoreRequest {
     pub tenant: TenantLookup,
     pub dump_id: DumpId,
+    pub target_container: Option<ContainerName>,
     pub target_database: Option<DatabaseName>,
 }
 
@@ -98,6 +99,7 @@ impl RestoreService {
             RestoreRequest {
                 tenant,
                 dump_id,
+                target_container: None,
                 target_database: None,
             },
         )
@@ -132,7 +134,7 @@ impl RestoreService {
         )?;
 
         let guarded = LocalTargetGate::new(self.repository.clone())
-            .verify(credentials, attestor)
+            .verify_named(credentials, attestor, request.target_container.as_ref())
             .await?;
         let target = guarded.authorize_tenant_database(target_database.clone())?;
         let plan = RestorePlan {
@@ -454,6 +456,7 @@ mod tests {
                 RestoreRequest {
                     tenant: TenantLookup::try_from("sagatec").unwrap(),
                     dump_id,
+                    target_container: None,
                     target_database: Some(DatabaseName::try_from("salt_sagatec_debug").unwrap()),
                 },
             )

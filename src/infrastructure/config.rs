@@ -121,6 +121,13 @@ pub struct AppConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_target: Option<LocalTargetConfig>,
 
+    /// Configured targets other than the default `local_target`.
+    ///
+    /// Keeping the default target in its original field preserves compatibility
+    /// with configuration files written before multi-target support.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub local_targets: BTreeMap<ContainerName, LocalTargetConfig>,
+
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<ProfileName, SourceProfileConfig>,
 }
@@ -132,6 +139,7 @@ impl Default for AppConfig {
             active_profile: None,
             client_runtime: ClientRuntimeConfig::default(),
             local_target: None,
+            local_targets: BTreeMap::new(),
             profiles: BTreeMap::new(),
         }
     }
@@ -164,6 +172,34 @@ impl AppConfig {
             }
         }
 
+        for (name, target) in &self.local_targets {
+            target.validate()?;
+            if name != &target.container_name {
+                return Err(ConfigError::InvalidField {
+                    field: "local_targets",
+                    reason: "map key must match the configured container name",
+                });
+            }
+            if self
+                .local_target
+                .as_ref()
+                .is_some_and(|active| active.container_name == *name)
+            {
+                return Err(ConfigError::InvalidField {
+                    field: "local_targets",
+                    reason: "default target cannot also be stored as an additional target",
+                });
+            }
+            if let Some(runtime_context) = &self.client_runtime.docker_context
+                && runtime_context != &target.docker_context
+            {
+                return Err(ConfigError::InvalidField {
+                    field: "local_targets.docker_context",
+                    reason: "must match the MySQL client runtime Docker context",
+                });
+            }
+        }
+
         if let Some(context) = &self.client_runtime.docker_context {
             validate_docker_context("client_runtime.docker_context", context)?;
         }
@@ -173,6 +209,20 @@ impl AppConfig {
         }
 
         Ok(())
+    }
+
+    pub fn configured_local_targets(&self) -> impl Iterator<Item = (&LocalTargetConfig, bool)> {
+        self.local_target
+            .iter()
+            .map(|target| (target, true))
+            .chain(self.local_targets.values().map(|target| (target, false)))
+    }
+
+    pub fn local_target_named(&self, name: &ContainerName) -> Option<&LocalTargetConfig> {
+        self.local_target
+            .as_ref()
+            .filter(|target| &target.container_name == name)
+            .or_else(|| self.local_targets.get(name))
     }
 }
 
@@ -822,6 +872,63 @@ mod tests {
         let contents = fs::read_to_string(repository.paths().config_file()).unwrap();
         assert!(contents.contains("schema_version = 1"));
         assert!(!contents.contains("password"));
+    }
+
+    #[test]
+    fn saves_multiple_targets_without_duplicating_the_default() {
+        let temp = TempDir::new().unwrap();
+        let repository = test_repository(&temp);
+        let mut expected = valid_config();
+        let mut additional = expected.local_target.as_ref().unwrap().clone();
+        additional.container_name = ContainerName::try_from("mysql-target").unwrap();
+        additional.container_id = ContainerId::try_from("b".repeat(64)).unwrap();
+        additional.credential_key = CredentialKey::new(CredentialScope::Target);
+        expected
+            .local_targets
+            .insert(additional.container_name.clone(), additional);
+
+        repository.save(&expected).unwrap();
+        let loaded = repository.load().unwrap();
+        let choices = loaded.configured_local_targets().collect::<Vec<_>>();
+
+        assert_eq!(loaded, expected);
+        assert_eq!(choices.len(), 2);
+        assert!(choices[0].1);
+        assert_eq!(
+            loaded
+                .local_target_named(&ContainerName::try_from("mysql-target").unwrap())
+                .unwrap()
+                .container_id
+                .as_str(),
+            "b".repeat(64)
+        );
+    }
+
+    #[test]
+    fn rejects_a_target_duplicated_or_misnamed_in_the_registry() {
+        let temp = TempDir::new().unwrap();
+        let repository = test_repository(&temp);
+        let mut duplicated = valid_config();
+        let active = duplicated.local_target.as_ref().unwrap().clone();
+        duplicated
+            .local_targets
+            .insert(active.container_name.clone(), active);
+        assert!(matches!(
+            repository.save(&duplicated),
+            Err(ConfigError::InvalidField {
+                field: "local_targets",
+                ..
+            })
+        ));
+
+        let mut misnamed = valid_config();
+        let mut target = misnamed.local_target.as_ref().unwrap().clone();
+        target.container_name = ContainerName::try_from("mysql-target").unwrap();
+        target.container_id = ContainerId::try_from("b".repeat(64)).unwrap();
+        misnamed
+            .local_targets
+            .insert(ContainerName::try_from("mysql-other").unwrap(), target);
+        assert!(repository.save(&misnamed).is_err());
     }
 
     #[test]
