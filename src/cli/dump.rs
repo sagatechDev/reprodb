@@ -148,7 +148,7 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
     }
 }
 
-fn format_duration(duration: Duration) -> String {
+pub(crate) fn format_duration(duration: Duration) -> String {
     let seconds = duration.as_secs();
     format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }

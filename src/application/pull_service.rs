@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use thiserror::Error;
 
@@ -149,6 +149,7 @@ where
         RE: RestoreExecutor,
         W: LocalTenantWriter,
     {
+        let total_started = std::time::Instant::now();
         let config = self.repository.load()?;
         let profile_name = config
             .active_profile
@@ -181,7 +182,7 @@ where
                     fresh,
                 })?;
 
-        let (dump_id, source_database, cache_use, _cache_lease) = match cache {
+        let (dump_id, source_database, cache_use, dump_metrics, _cache_lease) = match cache {
             CacheLookupResult::Hit(hit) => {
                 let dump_id = hit.metadata().dump_id;
                 let age_seconds = hit.age_seconds();
@@ -193,6 +194,7 @@ where
                     dump_id,
                     hit.metadata().database.clone(),
                     PullCacheUse::Hit { age_seconds },
+                    None,
                     Some(hit),
                 )
             }
@@ -211,16 +213,23 @@ where
                     .await?;
                 self.progress
                     .update(PullProgress::DumpReady(created.dump_id));
+                let dump_metrics = PullDumpMetrics {
+                    elapsed: created.elapsed,
+                    uncompressed_bytes: created.uncompressed_bytes,
+                    compressed_bytes: created.compressed_bytes,
+                };
                 (
                     created.dump_id,
                     created.database,
                     PullCacheUse::Created,
+                    Some(dump_metrics),
                     None,
                 )
             }
         };
         let target_database = restore.database_selector.select(&source_database)?;
 
+        let restore_started = std::time::Instant::now();
         let restored = RestoreService::new(self.repository.clone())
             .with_progress(Arc::clone(&self.restore_progress))
             .restore_to(
@@ -236,10 +245,16 @@ where
                 },
             )
             .await?;
+        let restore_elapsed = restore_started.elapsed();
 
         Ok(PullReady {
             cache: cache_use,
             restored,
+            metrics: PullMetrics {
+                dump: dump_metrics,
+                restore_elapsed,
+                total_elapsed: total_started.elapsed(),
+            },
         })
     }
 }
@@ -254,6 +269,21 @@ pub enum PullCacheUse {
 pub struct PullReady {
     pub cache: PullCacheUse,
     pub restored: RestoreReady,
+    pub metrics: PullMetrics,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PullMetrics {
+    pub dump: Option<PullDumpMetrics>,
+    pub restore_elapsed: Duration,
+    pub total_elapsed: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PullDumpMetrics {
+    pub elapsed: Duration,
+    pub uncompressed_bytes: u64,
+    pub compressed_bytes: u64,
 }
 
 #[derive(Debug, Error)]

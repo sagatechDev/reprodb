@@ -95,13 +95,31 @@ pub fn render_complete(style: &OutputStyle, ready: &PullReady) -> String {
         PullCacheUse::Created => "new dump".to_owned(),
     };
     let plan = &ready.restored.plan;
+    let timing = ready.metrics.dump.map_or_else(
+        || {
+            format!(
+                "restore {} · total {}",
+                crate::cli::dump::format_duration(ready.metrics.restore_elapsed),
+                crate::cli::dump::format_duration(ready.metrics.total_elapsed),
+            )
+        },
+        |dump| {
+            format!(
+                "dump {} · restore {} · total {}",
+                crate::cli::dump::format_duration(dump.elapsed),
+                crate::cli::dump::format_duration(ready.metrics.restore_elapsed),
+                crate::cli::dump::format_duration(ready.metrics.total_elapsed),
+            )
+        },
+    );
     format!(
-        "\n{} Tenant ready\n\n  Database:   {}\n  Container:  {}\n  Domain:     {}\n  Cache:      {}\n  Dump ID:    {}\n",
+        "\n{} Tenant ready\n\n  Database:   {}\n  Container:  {}\n  Domain:     {}\n  Cache:      {}\n  Timing:     {}\n  Dump ID:    {}\n",
         style.success("✓"),
         style.value(plan.database.as_str()),
         style.value(plan.container.as_str()),
         style.value(plan.local_domain.as_str()),
         cache,
+        timing,
         style.value(&plan.dump_id.to_string()),
     )
 }
@@ -232,8 +250,10 @@ fn format_age(seconds: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::{
-        application::{PullCacheUse, RestorePlan, RestoreReady},
+        application::{PullCacheUse, PullDumpMetrics, PullMetrics, RestorePlan, RestoreReady},
         domain::{
             ContainerName, DatabaseName, DomainAlias, DumpId, MysqlVersion, ProfileName, TenantId,
             TenantLookup,
@@ -260,6 +280,15 @@ mod tests {
                 },
                 imported_bytes: 1024,
             },
+            metrics: PullMetrics {
+                dump: (cache == PullCacheUse::Created).then_some(PullDumpMetrics {
+                    elapsed: Duration::from_secs(4),
+                    uncompressed_bytes: 2_000_000,
+                    compressed_bytes: 1_000_000,
+                }),
+                restore_elapsed: Duration::from_secs(3),
+                total_elapsed: Duration::from_secs(8),
+            },
         }
     }
 
@@ -272,7 +301,9 @@ mod tests {
         let created = render_complete(&OutputStyle::plain(), &ready(PullCacheUse::Created));
 
         assert!(reused.contains("Cache:      reused (35m)"));
+        assert!(reused.contains("Timing:     restore 00:03 · total 00:08"));
         assert!(created.contains("Cache:      new dump"));
+        assert!(created.contains("Timing:     dump 00:04 · restore 00:03 · total 00:08"));
         assert!(reused.contains("✓ Tenant ready"));
         assert!(!reused.to_ascii_lowercase().contains("password"));
     }

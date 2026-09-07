@@ -39,14 +39,29 @@ pub trait DumpExecutor: Send + Sync {
     ) -> Result<CompressionMetrics, DumpExecutorError>;
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct DockerMysqlDumpExecutor {
     cancellation: CancellationToken,
+    compression_level: i32,
+}
+
+impl Default for DockerMysqlDumpExecutor {
+    fn default() -> Self {
+        Self::new(CancellationToken::default())
+    }
 }
 
 impl DockerMysqlDumpExecutor {
     pub fn new(cancellation: CancellationToken) -> Self {
-        Self { cancellation }
+        Self {
+            cancellation,
+            compression_level: crate::infrastructure::compression::DEFAULT_ZSTD_LEVEL,
+        }
+    }
+
+    pub fn with_compression_level(mut self, compression_level: i32) -> Self {
+        self.compression_level = compression_level;
+        self
     }
 }
 
@@ -88,7 +103,7 @@ impl DumpExecutor for DockerMysqlDumpExecutor {
             .ok_or(DumpExecutorError::MissingStderr)?;
         let stderr_task = tokio::spawn(read_bounded(stderr, MAX_STDERR_BYTES));
 
-        let compression = ZstdCompressor::default()
+        let compression = ZstdCompressor::new(self.compression_level)
             .compress_with_cancellation(
                 stdout,
                 output,

@@ -18,14 +18,14 @@ A UI mostra tamanho, throughput e duração. Depois de dois segundos de amostrag
 
 ## Nível inicial
 
-O nível inicial é Zstd 1. Em 5 de setembro de 2026, um ensaio local reproduzível com 64 MiB de SQL sintético e altamente repetitivo mediu:
+O nível inicial é Zstd 1. Em 7 de setembro de 2026, o ensaio sintético em build release mediu:
 
 | Nível | Throughput no build de teste | Tamanho comprimido |
 |---|---:|---:|
-| 1 | 20,1 MiB/s | 6.241 bytes |
-| 3 | 19,9 MiB/s | 6.241 bytes |
+| 1 | 313,2 MiB/s | 6.241 bytes |
+| 3 | 308,7 MiB/s | 6.241 bytes |
 
-Esse ensaio serve apenas para escolher o default inicial: o input sintético comprime muito melhor que um dump real e o build de teste não representa a performance do binário release. O teste ignorado `benchmarks_candidate_zstd_levels_on_sql_like_input` permite repetir a comparação. Antes de produção, a escolha deve ser reavaliada com dumps reais pequenos e sem guardar seu conteúdo como fixture.
+O input acima comprime muito melhor que um dump real. Por isso, a decisão também foi medida no [benchmark MySQL](performance-benchmark.md) com 244.138.406 bytes de SQL e 230.399.010 bytes de payload pseudoaleatório. Nessa massa, nível 1 gerou 120.904.230 bytes em 6,924 s; nível 3 gerou 125.268.601 bytes em 9,171 s. O nível 1 permanece como default. Antes de produção, a escolha ainda deve ser confirmada com um tenant Salt real e autorizado, sem guardar seu conteúdo como fixture.
 
 ## Falhas e lifecycle
 

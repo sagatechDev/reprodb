@@ -97,6 +97,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
         .expect("the temporary target MySQL container was not discovered");
     let database = DatabaseName::try_from(format!("salt_reprodb_pull_{suffix}")).unwrap();
     let domain = DomainAlias::try_from(format!("reprodb-pull-{}", &suffix[..16])).unwrap();
+    let benchmark_rows = benchmark_row_count();
     let profile_name = ProfileName::try_from("pull-local-source").unwrap();
     let client = ClientCatalog::resolve("8.4").unwrap();
     let temp = TempDir::new().unwrap();
@@ -215,8 +216,8 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
         None,
         &format!(
             "CREATE DATABASE `{database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; \
-             CREATE TABLE `{database}`.`reprodb_pull_items` (`id` BIGINT NOT NULL PRIMARY KEY, `label` VARCHAR(255) NOT NULL) ENGINE=InnoDB; \
-             INSERT INTO `{database}`.`reprodb_pull_items` VALUES (1, CONVERT(0x5361676174656320F09FA782 USING utf8mb4)), (2, 'Polymer'); \
+             CREATE TABLE `{database}`.`reprodb_pull_items` (`id` BIGINT NOT NULL PRIMARY KEY, `label` VARCHAR(255) NOT NULL, `payload` MEDIUMTEXT NOT NULL) ENGINE=InnoDB; \
+             INSERT INTO `{database}`.`reprodb_pull_items` VALUES (1, CONVERT(0x5361676174656320F09FA782 USING utf8mb4), 'small-fixture-one'), (2, 'Polymer', 'small-fixture-two'); \
              INSERT INTO `salt_central`.`tenants` (`id`, `created_at`, `updated_at`, `data`) VALUES (CONVERT(0x{tenant} USING utf8mb4), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, JSON_OBJECT('tenancy_db_name', CONVERT(0x{database_hex} USING utf8mb4), 'tenancy_app_color', 'green')); \
              INSERT INTO `salt_central`.`domains` (`domain`, `tenant_id`, `created_at`, `updated_at`) VALUES (CONVERT(0x{domain} USING utf8mb4), CONVERT(0x{tenant} USING utf8mb4), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             tenant = hex_utf8(database.as_str()),
@@ -224,12 +225,43 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
             domain = hex_utf8(domain.as_str()),
         ),
     );
+    let generated_fixture = fixture.and_then(|_| {
+        if benchmark_rows == 2 {
+            Ok(Vec::new())
+        } else {
+            run_mysql_query(
+                &context,
+                source_candidate.id.as_str(),
+                client.image(),
+                &source_password,
+                MysqlTlsMode::Required,
+                Some(&database),
+                &generated_rows_sql(benchmark_rows),
+            )
+        }
+    });
+    let logical_payload_bytes = generated_fixture.as_ref().ok().and_then(|_| {
+        run_mysql_query(
+            &context,
+            source_candidate.id.as_str(),
+            client.image(),
+            &source_password,
+            MysqlTlsMode::Required,
+            Some(&database),
+            "SELECT COALESCE(SUM(OCTET_LENGTH(payload)), 0) FROM reprodb_pull_items",
+        )
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+    });
 
     let workflow = DockerDumpWorkflow::new(TokioProcessRunner);
     let attestor = DockerLocalTargetAttestor::new(TokioProcessRunner);
-    let dump_executor = DockerMysqlDumpExecutor::default();
+    let compression_level = benchmark_compression_level();
+    let dump_executor =
+        DockerMysqlDumpExecutor::default().with_compression_level(compression_level);
     let service = PullService::new(repository);
-    let first = match fixture {
+    let first = match generated_fixture {
         Ok(_) => service
             .pull(
                 &credentials,
@@ -285,7 +317,20 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
             &target_password,
             MysqlTlsMode::Required,
             Some(&database),
-            "SELECT id, HEX(label) FROM reprodb_pull_items ORDER BY id",
+            "SELECT id, HEX(label) FROM reprodb_pull_items WHERE id <= 2 ORDER BY id",
+        ))
+    } else {
+        None
+    };
+    let row_count_verification = if second.is_ok() {
+        Some(run_mysql_query(
+            &context,
+            target_candidate.id.as_str(),
+            client.image(),
+            &target_password,
+            MysqlTlsMode::Required,
+            Some(&database),
+            "SELECT COUNT(*) FROM reprodb_pull_items",
         ))
     } else {
         None
@@ -315,6 +360,21 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
     assert_eq!(first.restored.plan.dump_id, second.restored.plan.dump_id);
     assert_eq!(first.restored.plan.database, database);
     assert_eq!(first.restored.plan.container, target_candidate.name);
+    let dump_metrics = first
+        .metrics
+        .dump
+        .expect("a cache miss must report dump metrics");
+    eprintln!(
+        "rows={benchmark_rows} zstd_level={compression_level} logical_payload_bytes={} dump_input_bytes={} compressed_bytes={} ratio={:.4} dump_seconds={:.3} restore_seconds={:.3} total_seconds={:.3} cache_hit_seconds={:.3}",
+        logical_payload_bytes.unwrap_or_default(),
+        dump_metrics.uncompressed_bytes,
+        dump_metrics.compressed_bytes,
+        dump_metrics.compressed_bytes as f64 / dump_metrics.uncompressed_bytes as f64,
+        dump_metrics.elapsed.as_secs_f64(),
+        first.metrics.restore_elapsed.as_secs_f64(),
+        first.metrics.total_elapsed.as_secs_f64(),
+        second.metrics.total_elapsed.as_secs_f64(),
+    );
     assert_eq!(
         String::from_utf8(verification.unwrap().unwrap()).unwrap(),
         "1\t5361676174656320F09FA782\n2\t506F6C796D6572\n"
@@ -323,6 +383,59 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
         String::from_utf8(central_verification.unwrap().unwrap()).unwrap(),
         format!("{database}\tgreen\n")
     );
+    assert_eq!(
+        String::from_utf8(row_count_verification.unwrap().unwrap()).unwrap(),
+        format!("{benchmark_rows}\n")
+    );
+}
+
+fn benchmark_row_count() -> u64 {
+    let Some(value) = std::env::var_os("REPRODB_BENCHMARK_ROWS") else {
+        return 2;
+    };
+    let rows = value
+        .to_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .expect("REPRODB_BENCHMARK_ROWS must be an integer");
+    assert!(
+        (2..=500_000).contains(&rows),
+        "REPRODB_BENCHMARK_ROWS must be between 2 and 500000"
+    );
+    rows
+}
+
+fn benchmark_compression_level() -> i32 {
+    let Some(value) = std::env::var_os("REPRODB_BENCHMARK_ZSTD_LEVEL") else {
+        return reprodb::infrastructure::compression::DEFAULT_ZSTD_LEVEL;
+    };
+    let level = value
+        .to_str()
+        .and_then(|value| value.parse::<i32>().ok())
+        .expect("REPRODB_BENCHMARK_ZSTD_LEVEL must be an integer");
+    assert!(
+        matches!(level, 1 | 3),
+        "REPRODB_BENCHMARK_ZSTD_LEVEL must be 1 or 3"
+    );
+    level
+}
+
+fn generated_rows_sql(rows: u64) -> String {
+    let highest_sequence = rows - 1;
+    let digit = "(SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9)";
+    format!(
+        "INSERT INTO reprodb_pull_items (id, label, payload) \
+         SELECT sequence + 1, CONCAT('generated-', sequence + 1), \
+                CONCAT(SHA2(CONCAT(sequence, 'a'), 256), SHA2(CONCAT(sequence, 'b'), 256), \
+                       SHA2(CONCAT(sequence, 'c'), 256), SHA2(CONCAT(sequence, 'd'), 256), \
+                       SHA2(CONCAT(sequence, 'e'), 256), SHA2(CONCAT(sequence, 'f'), 256), \
+                       SHA2(CONCAT(sequence, 'g'), 256), SHA2(CONCAT(sequence, 'h'), 256)) \
+         FROM (SELECT ones.n + tens.n * 10 + hundreds.n * 100 + thousands.n * 1000 + \
+                      ten_thousands.n * 10000 + hundred_thousands.n * 100000 AS sequence \
+               FROM {digit} ones CROSS JOIN {digit} tens CROSS JOIN {digit} hundreds \
+               CROSS JOIN {digit} thousands CROSS JOIN {digit} ten_thousands \
+               CROSS JOIN {digit} hundred_thousands) AS generated_rows \
+         WHERE sequence BETWEEN 2 AND {highest_sequence}"
+    )
 }
 
 #[cfg(feature = "test-file-credential-store")]

@@ -19,6 +19,7 @@ O projeto está no início da implementação. O backlog e as decisões técnica
 - [`docs/local-tenant-registration.md`](docs/local-tenant-registration.md), para o cadastro seguro pós-restore no `salt_central` local;
 - [`docs/ui-ux-test-guide.md`](docs/ui-ux-test-guide.md), para experimentar a CLI sem alterar a máquina.
 - [`docs/macos-smoke.md`](docs/macos-smoke.md), para validar a integração local no macOS.
+- [`docs/performance-benchmark.md`](docs/performance-benchmark.md), para medir dump, restore, cache, compressão e memória.
 
 ## Desenvolvimento
 

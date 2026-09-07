@@ -863,6 +863,8 @@ Critério da milestone: falhas deixam estado compreensível e o fluxo é comprov
 
 **Labels:** `priority:p1`, `type:test`, `area:mysql`, `area:cache`
 
+**Status:** implementada para a fixture determinística — o harness opt-in compara duas linhas com 450 mil linhas/219,7 MiB lógicos, mede dump, restore, pull total, cache hit, compressão e RSS, e compara Zstd 1/3 sobre exatamente a mesma massa. O RSS ficou entre 58,1 e 59,0 MiB apesar do dump SQL crescer de 2 KiB para 232,8 MiB. Zstd 1 foi mais rápido e menor nessa fixture e permanece como default. Uma medição com tenant Salt real e autorizado continua sendo barreira separada antes de produção.
+
 **Métricas:** duração do dump/restore, bytes, ratio, throughput, pico de RAM, cache hit/miss e tempo total.
 
 **Aceite:** benchmark com tenant pequeno e outro de pelo menos centenas de MiB; nível Zstd escolhido com dados.

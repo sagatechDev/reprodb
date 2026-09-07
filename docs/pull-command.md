@@ -96,3 +96,5 @@ cargo test --features test-file-credential-store \
 ```
 
 A feature `test-file-credential-store` e `REPRODB_TEST_CREDENTIAL_DIR` são somente infraestrutura de teste. Elas permitem que processos do binário compartilhem credenciais fictícias sem depender do Keychain/Secret Service do runner. O diretório deve ser absoluto e descartável. Builds normais não compilam esse backend; uso humano continua no credential store nativo do sistema operacional.
+
+O resumo final do `pull` também informa tempos separados. Em cache miss mostra `dump`, `restore` e `total`; em cache hit mostra `restore` e `total`, pois não houve dump naquela execução. Essas métricas são durações observadas, enquanto o ETA durante o dump continua sendo uma projeção aproximada.
