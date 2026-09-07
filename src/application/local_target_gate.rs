@@ -145,7 +145,6 @@ impl LocalTargetGate {
             username: configured.username.clone(),
             password,
             central_database: configured.central_database.clone(),
-            tenant_database_prefix: configured.tenant_database_prefix.clone(),
             server_version: attested.server_version,
             server_uuid: attested.server_uuid,
             vendor: attested.vendor,
@@ -161,7 +160,6 @@ pub struct GuardedLocalTarget {
     username: String,
     password: SecretString,
     central_database: DatabaseName,
-    tenant_database_prefix: String,
     server_version: MysqlVersion,
     server_uuid: MysqlServerUuid,
     vendor: String,
@@ -177,7 +175,6 @@ impl std::fmt::Debug for GuardedLocalTarget {
             .field("container_id", &self.container_id)
             .field("username", &self.username)
             .field("central_database", &self.central_database)
-            .field("tenant_database_prefix", &self.tenant_database_prefix)
             .field("server_version", &self.server_version)
             .field("server_uuid", &self.server_uuid)
             .field("vendor", &self.vendor)
@@ -207,11 +204,6 @@ impl GuardedLocalTarget {
         self,
         database: DatabaseName,
     ) -> Result<AuthorizedLocalTarget, LocalTargetGateError> {
-        if database == self.central_database
-            || !database.as_str().starts_with(&self.tenant_database_prefix)
-        {
-            return Err(LocalTargetGateError::DatabaseOutsideAllowlist);
-        }
         Ok(AuthorizedLocalTarget {
             target: self,
             database,
@@ -285,7 +277,6 @@ impl AuthorizedLocalTarget {
                 username: "root".to_owned(),
                 password: SecretString::from("local-test-password"),
                 central_database: DatabaseName::try_from("salt_central").unwrap(),
-                tenant_database_prefix: "salt_".to_owned(),
                 server_version: "8.4.4".parse().unwrap(),
                 server_uuid: "22222222-2222-4222-8222-222222222222".parse().unwrap(),
                 vendor: "MySQL Community Server - GPL".to_owned(),
@@ -337,9 +328,6 @@ pub enum LocalTargetGateError {
 
     #[error("the local restore target version is incompatible with the approved MySQL client")]
     UnsupportedServerSeries,
-
-    #[error("the database is outside the local target tenant allowlist")]
-    DatabaseOutsideAllowlist,
 }
 
 #[cfg(test)]
@@ -355,10 +343,7 @@ mod tests {
     use crate::{
         domain::CredentialKey,
         infrastructure::{
-            config::{
-                AppConfig, AppPaths, ClientRuntimeConfig, DEFAULT_TENANT_DATABASE_PREFIX,
-                LocalTargetTrust,
-            },
+            config::{AppConfig, AppPaths, ClientRuntimeConfig, LocalTargetTrust},
             credentials::MemoryCredentialStore,
             mysql::ClientCatalog,
         },
@@ -397,7 +382,7 @@ mod tests {
             credential_key: target_key(),
             central_database: DatabaseName::try_from("salt_central").unwrap(),
             trust,
-            tenant_database_prefix: DEFAULT_TENANT_DATABASE_PREFIX.to_owned(),
+            legacy_tenant_database_prefix: None,
         }
     }
 
@@ -485,7 +470,7 @@ mod tests {
                 credential_key: key,
                 central_database: DatabaseName::try_from("salt_central").unwrap(),
                 trust: LocalTargetTrust::UserConfirmed,
-                tenant_database_prefix: DEFAULT_TENANT_DATABASE_PREFIX.to_owned(),
+                legacy_tenant_database_prefix: None,
             },
         );
         repository.save(&config).unwrap();
@@ -513,8 +498,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_central_and_out_of_namespace_databases() {
-        for database in ["salt_central", "customer_data"] {
+    async fn allows_every_valid_non_administrative_database_name() {
+        for database in ["customer_data", "demo_sagatec", "salt_central"] {
             let temp = TempDir::new().unwrap();
             let guarded = LocalTargetGate::new(repository(&temp, LocalTargetTrust::UserConfirmed))
                 .verify(
@@ -527,10 +512,11 @@ mod tests {
                 .await
                 .unwrap();
 
-            assert!(matches!(
-                guarded.authorize_tenant_database(DatabaseName::try_from(database).unwrap()),
-                Err(LocalTargetGateError::DatabaseOutsideAllowlist)
-            ));
+            assert!(
+                guarded
+                    .authorize_tenant_database(DatabaseName::try_from(database).unwrap())
+                    .is_ok()
+            );
         }
     }
 

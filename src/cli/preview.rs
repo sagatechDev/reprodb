@@ -31,8 +31,6 @@ pub fn setup(style: &OutputStyle) -> String {
 ? Use mysql-8 as the local restore target?  {yes}
 ? Local MySQL username                   {root}
 ? Local MySQL password                   ********
-? Local central database                 salt_central
-? Tenant database prefix                 salt_
 
 {review}
   Container   mysql-8
@@ -56,7 +54,7 @@ pub fn profile_add(style: &OutputStyle, profile: &ProfileName) -> String {
     let profile_section = style.section("Profile");
     let connection = style.section("Source connection");
     let detection = style.section("Automatic detection");
-    let tenant_resolution = style.section("Tenant resolution");
+    let database_selection = style.section("Database selection");
     let review = style.section("Review");
     let ok = style.success("✓");
     let pending = style.attention("○");
@@ -82,16 +80,15 @@ pub fn profile_add(style: &OutputStyle, profile: &ProfileName) -> String {
   {ok} MySQL Community Server 8.4.4 detected
   {ok} Approved MySQL 8.4.4 client selected
 
-{tenant_resolution}
-  Resolver    Salt Central
-  Database    salt_central
-  Examples    sagatec → salt_sagatec; polymer → salt_polymer
+{database_selection}
+  Input       Exact source database name
+  Example     demo_sagatec
 
 {review}
   Source      readonly_user@mysql.salt.internal:3306
   Server      MySQL 8.4.4
   Client      approved Docker image, pinned by digest
-  Resolver    Salt Central
+  Selection   Direct database
   Password    OS credential store
 
 {pending} Save password in Keychain / Secret Service
@@ -139,7 +136,7 @@ pub fn doctor(style: &OutputStyle) -> String {
 
 {target}
   {ok} local target configuration
-      mysql-8 · context desktop-linux · central database salt_central
+      mysql-8 · context desktop-linux
   {ok} target credential
       credential is available in the OS store
   {ok} target container identity
@@ -161,7 +158,7 @@ pub fn pull(
     target_container: Option<&crate::domain::ContainerName>,
     target_database: Option<&crate::domain::DatabaseName>,
 ) -> String {
-    let (tenant_id, database) = preview_resolution(tenant);
+    let database = tenant.as_str();
     let target_database = target_database.map_or(database, |database| database.as_str());
     let target_container = target_container.map_or("mysql-8", |container| container.as_str());
     let cache_message = if fresh {
@@ -178,7 +175,6 @@ pub fn pull(
     let footer = style
         .attention("! Preview only — source, cache, Docker and local databases were not accessed.");
     let profile = style.value("salt-source");
-    let tenant_value = style.value(tenant.as_str());
     let source_value = style.value(database);
     let target_value = style.value(&format!("{target_container}/{target_database}"));
 
@@ -186,8 +182,6 @@ pub fn pull(
         r#"{brand} pull {preview}
 
 Profile    {profile}
-Domain     {tenant_value}
-Tenant ID  {tenant_id}
 Source DB  {source_value}
 Target DB  {target_value}
 
@@ -199,7 +193,6 @@ Target DB  {target_value}
 {restoring}
   {ok} database recreated with source charset and collation
   {ok} import completed
-  {ok} local tenant registration updated
 
 {ready}
 
@@ -209,14 +202,6 @@ Container  {target_container}
 {footer}
 "#
     )
-}
-
-fn preview_resolution(tenant: &TenantLookup) -> (&str, &str) {
-    match tenant.as_str() {
-        "sagatec" => ("salt_sagatec", "salt_sagatec"),
-        "polymer" => ("salt_polymer", "salt_polymer"),
-        _ => ("<resolved-tenant-id>", "<resolved-database>"),
-    }
 }
 
 #[cfg(test)]
@@ -229,8 +214,8 @@ mod tests {
         let output = profile_add(&OutputStyle::plain(), &profile);
 
         assert!(output.contains("Profile\n  Name        salt-source"));
-        assert!(output.contains("sagatec → salt_sagatec"));
-        assert!(output.contains("polymer → salt_polymer"));
+        assert!(output.contains("Exact source database name"));
+        assert!(output.contains("demo_sagatec"));
         assert!(output.contains("MySQL password          ********"));
         assert!(output.contains("nothing was saved"));
         assert!(!output.contains("readonly_password"));
@@ -242,17 +227,17 @@ mod tests {
         let output = pull(&OutputStyle::plain(), &tenant, true, None, None);
 
         assert!(output.contains("Fresh dump requested"));
-        assert!(output.contains("Source DB  salt_sagatec"));
-        assert!(output.contains("Target DB  mysql-8/salt_sagatec"));
+        assert!(output.contains("Source DB  sagatec"));
+        assert!(output.contains("Target DB  mysql-8/sagatec"));
         assert!(output.contains("were not accessed"));
     }
 
     #[test]
-    fn preview_does_not_invent_a_resolution_for_an_unknown_domain() {
+    fn preview_uses_the_supplied_database_name_without_inventing_a_prefix() {
         let tenant = TenantLookup::try_from("unknown").unwrap();
         let output = pull(&OutputStyle::plain(), &tenant, false, None, None);
 
-        assert!(output.contains("Source DB  <resolved-database>"));
+        assert!(output.contains("Source DB  unknown"));
         assert!(!output.contains("salt_unknown"));
     }
 

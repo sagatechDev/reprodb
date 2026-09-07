@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::{
     application::{
-        LocalTargetAttestor, LocalTargetGate, LocalTargetGateError, LocalTenantRegistrationService,
+        LocalTargetAttestor, LocalTargetGate, LocalTargetGateError,
         LocalTenantRegistrationServiceError, LocalTenantWriter, RestoreEngine, RestoreEngineError,
     },
     domain::{
@@ -39,7 +39,6 @@ pub struct RestorePlan {
 pub enum RestoreProgress {
     PlanReady(RestorePlan),
     RestoringDatabase,
-    RegisteringTenant,
 }
 
 pub trait RestoreProgressObserver: Send + Sync {
@@ -111,7 +110,7 @@ impl RestoreService {
         credentials: &dyn CredentialStore,
         attestor: &dyn LocalTargetAttestor,
         executor: E,
-        writer: W,
+        _writer: W,
         request: RestoreRequest,
     ) -> Result<RestoreReady, RestoreServiceError>
     where
@@ -160,12 +159,6 @@ impl RestoreService {
         )
         .restore(&target, &artifact)
         .await?;
-
-        self.progress.update(&RestoreProgress::RegisteringTenant);
-        LocalTenantRegistrationService::new(writer)
-            .register_after_restore(&target, &completed, &registration)
-            .await
-            .map_err(RestoreServiceError::Registration)?;
 
         Ok(RestoreReady {
             plan,
@@ -334,7 +327,7 @@ mod tests {
                     credential_key,
                     central_database: DatabaseName::try_from("salt_central").unwrap(),
                     trust: LocalTargetTrust::UserConfirmed,
-                    tenant_database_prefix: "salt_".to_owned(),
+                    legacy_tenant_database_prefix: None,
                 }),
                 profiles: BTreeMap::new(),
                 ..AppConfig::default()
@@ -426,19 +419,18 @@ mod tests {
         assert_eq!(ready.plan.local_domain.as_str(), "sagatec");
         assert_eq!(*attestor_calls.lock().unwrap(), 1);
         assert_eq!(*executor_calls.lock().unwrap(), ["recreate", "import"]);
-        assert_eq!(*writer_calls.lock().unwrap(), ["salt_sagatec:salt_sagatec"]);
+        assert!(writer_calls.lock().unwrap().is_empty());
         assert!(matches!(
             progress.lock().unwrap().as_slice(),
             [
                 RestoreProgress::PlanReady(_),
-                RestoreProgress::RestoringDatabase,
-                RestoreProgress::RegisteringTenant
+                RestoreProgress::RestoringDatabase
             ]
         ));
     }
 
     #[tokio::test]
-    async fn custom_target_database_is_authorized_restored_and_registered() {
+    async fn custom_target_database_is_authorized_and_restored_without_a_central_write() {
         let directory = tempdir().unwrap();
         let (repository, credentials, dump_id) = configured_fixture(directory.path()).await;
         let writer_calls = Arc::new(Mutex::new(Vec::new()));
@@ -467,10 +459,7 @@ mod tests {
 
         assert_eq!(ready.plan.source_database.as_str(), "salt_sagatec");
         assert_eq!(ready.plan.database.as_str(), "salt_sagatec_debug");
-        assert_eq!(
-            *writer_calls.lock().unwrap(),
-            ["salt_sagatec:salt_sagatec_debug"]
-        );
+        assert!(writer_calls.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

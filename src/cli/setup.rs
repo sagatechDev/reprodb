@@ -97,7 +97,7 @@ pub fn render_configured(style: &OutputStyle, configured: &LocalTargetConfigured
     let mut output = format!(
         "{ok} Target connection verified: {vendor} {version}\n\
          {ok} Docker context: {context}\n\
-         {ok} Tenant database allowlist: {prefix}*\n\
+         {ok} Restore policy: any valid non-administrative database name\n\
          {ok} Target trust: {trust}\n\
          {ok} Password saved in the OS credential store\n\
          {ok} Local target {container} saved\n",
@@ -105,7 +105,6 @@ pub fn render_configured(style: &OutputStyle, configured: &LocalTargetConfigured
         vendor = configured.vendor,
         version = configured.server_version,
         context = configured.docker_context,
-        prefix = configured.tenant_database_prefix,
         trust = if configured.managed_by_reprodb {
             "reprodb-managed container"
         } else {
@@ -211,13 +210,12 @@ mod tests {
     }
 
     #[test]
-    fn configured_output_explains_allowlist_and_target_trust() {
+    fn configured_output_explains_database_policy_and_target_trust() {
         let configured = LocalTargetConfigured {
             container_name: ContainerName::try_from("mysql-8").unwrap(),
             server_version: "8.4.4".parse().unwrap(),
             vendor: "MySQL Community Server".to_owned(),
             docker_context: "desktop-linux".to_owned(),
-            tenant_database_prefix: "salt_".to_owned(),
             managed_by_reprodb: false,
             replaced_existing: false,
             previous_credential_was_missing: false,
@@ -225,7 +223,8 @@ mod tests {
 
         let output = render_configured(&OutputStyle::plain(), &configured);
 
-        assert!(output.contains("Tenant database allowlist: salt_*"));
+        assert!(output.contains("any valid non-administrative database name"));
+        assert!(output.contains("non-administrative database name"));
         assert!(output.contains("existing container confirmed during setup"));
     }
 }

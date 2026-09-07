@@ -7,8 +7,8 @@ use reprodb::{
     domain::{CredentialKey, CredentialScope, DatabaseName},
     infrastructure::{
         config::{
-            AppConfig, AppPaths, ClientRuntimeConfig, ConfigRepository,
-            DEFAULT_TENANT_DATABASE_PREFIX, LocalTargetConfig, LocalTargetTrust,
+            AppConfig, AppPaths, ClientRuntimeConfig, ConfigRepository, LocalTargetConfig,
+            LocalTargetTrust,
         },
         credentials::{CredentialStore, MemoryCredentialStore},
         docker::DockerTargetDiscovery,
@@ -57,7 +57,7 @@ async fn attests_the_exact_local_container_before_authorizing_a_tenant_database(
                 } else {
                     LocalTargetTrust::UserConfirmed
                 },
-                tenant_database_prefix: DEFAULT_TENANT_DATABASE_PREFIX.to_owned(),
+                legacy_tenant_database_prefix: None,
             }),
             ..AppConfig::default()
         })

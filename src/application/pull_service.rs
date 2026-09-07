@@ -649,7 +649,7 @@ mod tests {
                     credential_key: target_key,
                     central_database: DatabaseName::try_from("salt_central").unwrap(),
                     trust: LocalTargetTrust::UserConfirmed,
-                    tenant_database_prefix: "salt_".to_owned(),
+                    legacy_tenant_database_prefix: None,
                 }),
                 profiles: BTreeMap::from([(profile_name.clone(), profile)]),
                 ..AppConfig::default()

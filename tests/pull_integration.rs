@@ -129,7 +129,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
                 } else {
                     LocalTargetTrust::UserConfirmed
                 },
-                tenant_database_prefix: "salt_".to_owned(),
+                legacy_tenant_database_prefix: None,
             }),
             profiles: std::collections::BTreeMap::from([(
                 profile_name,

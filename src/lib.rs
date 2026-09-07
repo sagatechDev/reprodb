@@ -16,7 +16,7 @@ pub mod infrastructure;
 use cli::output::OutputStyle;
 use cli::{CacheCommands, ProfileCommands, TenantCommands};
 pub use cli::{Cli, Commands};
-use domain::{DatabaseName, ProfileName, TenantLookup};
+use domain::{ProfileName, TenantLookup};
 pub use error::{AppError, ErrorCategory};
 use infrastructure::config::ConfigRepository;
 
@@ -188,17 +188,6 @@ pub async fn execute_with_cancellation(
                 print!("{}", cli::profile::render_activated(&style, &name));
                 Ok(())
             }
-            ProfileCommands::Edit(arguments) => {
-                let name = ProfileName::try_from(arguments.name)?;
-                let central_database = DatabaseName::try_from(arguments.central_database)?;
-                let service = application::ProfileService::new(ConfigRepository::discover()?);
-                let updated = service.update_central_database(&name, central_database)?;
-                print!(
-                    "{}",
-                    cli::profile::render_central_database_updated(&style, &updated)
-                );
-                Ok(())
-            }
             ProfileCommands::Remove(arguments) => {
                 let name = ProfileName::try_from(arguments.name)?;
                 let confirmed = arguments.yes || cli::prompt::confirm_profile_removal(&name)?;
@@ -216,7 +205,7 @@ pub async fn execute_with_cancellation(
             print!("{}", cli::preview::doctor(&style));
             Ok(())
         }
-        Commands::Tenant(arguments) => match arguments.command {
+        Commands::Database(arguments) => match arguments.command {
             TenantCommands::List(arguments) => {
                 print!("{}", cli::tenant::render_start(&style));
                 std::io::stdout().flush().map_err(AppError::Output)?;

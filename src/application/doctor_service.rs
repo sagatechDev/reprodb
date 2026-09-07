@@ -225,11 +225,9 @@ impl DoctorService {
                 DoctorSection::Target,
                 "local target configuration",
                 format!(
-                    "{} · context {} · central database {} · allowlist {}* · {}",
+                    "{} · context {} · {}",
                     target.container_name,
                     target.docker_context,
-                    target.central_database,
-                    target.tenant_database_prefix,
                     match target.trust {
                         crate::infrastructure::config::LocalTargetTrust::ReprodbManaged => {
                             "reprodb-managed"
@@ -456,23 +454,12 @@ impl DoctorService {
         let configured_series = profile.mysql_series.clone();
         let tls_mode = profile.tls_mode;
         let production = profile.production;
-        let central_database = match profile.tenant_resolver {
-            crate::infrastructure::config::TenantResolverConfig::SaltCentral {
-                central_database,
-                ..
-            } => central_database,
-            crate::infrastructure::config::TenantResolverConfig::Pattern { .. } => {
-                crate::domain::DatabaseName::try_from("salt_central")
-                    .expect("the fallback central database name is valid")
-            }
-        };
         let input = NewProfileInput {
             name,
             host: profile.host,
             port: profile.port,
             username: profile.username,
             password,
-            central_database,
             tls_mode: profile.tls_mode,
             tls_material: profile.tls_material,
             production: profile.production,
@@ -558,7 +545,6 @@ impl DoctorService {
             username: target.username,
             password,
             central_database: target.central_database,
-            tenant_database_prefix: target.tenant_database_prefix,
             managed_by_reprodb: matches!(
                 target.trust,
                 crate::infrastructure::config::LocalTargetTrust::ReprodbManaged
@@ -842,7 +828,7 @@ mod tests {
                 credential_key: target_key,
                 central_database: DatabaseName::try_from("salt_central").unwrap(),
                 trust: crate::infrastructure::config::LocalTargetTrust::UserConfirmed,
-                tenant_database_prefix: "salt_".to_owned(),
+                legacy_tenant_database_prefix: None,
             }),
             profiles: BTreeMap::from([(
                 profile_name,

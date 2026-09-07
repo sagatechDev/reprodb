@@ -231,7 +231,7 @@ where
                 client.docker_context(),
                 client.approved(),
                 option_file.path(),
-                database,
+                Some(database),
                 query,
             ))
             .await?;
@@ -239,6 +239,31 @@ where
             return Err(classify_query_failure(&output));
         }
 
+        Ok(output.stdout)
+    }
+
+    pub(super) async fn query_server(
+        &self,
+        client: &PreparedMysqlClient,
+        option_file: &MysqlOptionFile,
+        query: &str,
+    ) -> Result<Vec<u8>, DockerClientError> {
+        if !option_file.path().is_absolute() {
+            return Err(DockerClientError::OptionFilePathNotAbsolute);
+        }
+        let output = self
+            .runner
+            .output(&connection_query_spec(
+                client.docker_context(),
+                client.approved(),
+                option_file.path(),
+                None,
+                query,
+            ))
+            .await?;
+        if !output.success {
+            return Err(classify_query_failure(&output));
+        }
         Ok(output.stdout)
     }
 
@@ -456,7 +481,7 @@ fn connection_query_spec(
     context: &str,
     client: ApprovedMysqlClient,
     option_file: &Path,
-    database: &DatabaseName,
+    database: Option<&DatabaseName>,
     query: &str,
 ) -> ProcessSpec {
     let mut mount = OsString::from("type=bind,src=");
@@ -479,13 +504,14 @@ fn connection_query_spec(
     if client.supports_no_login_paths() {
         spec = spec.arg("--no-login-paths");
     }
-    spec.args([
+    spec = spec.args([
         OsString::from("--batch"),
         OsString::from("--skip-column-names"),
-        OsString::from(format!("--database={}", database.as_str())),
-        OsString::from("--execute"),
-        OsString::from(query),
-    ])
+    ]);
+    if let Some(database) = database {
+        spec = spec.arg(OsString::from(format!("--database={}", database.as_str())));
+    }
+    spec.args([OsString::from("--execute"), OsString::from(query)])
 }
 
 fn container_connection_probe_spec(

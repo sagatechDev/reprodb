@@ -8,6 +8,7 @@ const MAX_PATTERN_CHARACTERS: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TenantMatch {
+    Database,
     Pattern,
     TenantId,
     Domain,

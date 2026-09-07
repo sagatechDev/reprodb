@@ -97,7 +97,7 @@ impl LocalTenantRegistration {
     ) -> Result<Self, LocalTenantRegistrationError> {
         let local_domain = match resolved.matched_by {
             TenantMatch::Domain => DomainAlias::try_from(lookup.as_str())?,
-            TenantMatch::TenantId | TenantMatch::Pattern => {
+            TenantMatch::Database | TenantMatch::TenantId | TenantMatch::Pattern => {
                 let normalized = resolved
                     .tenant_id
                     .as_str()

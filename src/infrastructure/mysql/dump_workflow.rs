@@ -45,7 +45,7 @@ where
                 central_database,
                 allow_domain_lookup,
             } => {
-                DockerSaltCentralTenantResolver::new(
+                let resolver = DockerSaltCentralTenantResolver::new(
                     self.runner.clone(),
                     SaltCentralSource {
                         docker_context: source.docker_context.to_owned(),
@@ -59,9 +59,11 @@ where
                         client: source.client,
                     },
                     *allow_domain_lookup,
-                )
-                .resolve(lookup)
-                .await
+                );
+                if let Some(resolved) = resolver.resolve_existing_database(lookup).await? {
+                    return Ok(resolved);
+                }
+                Err(TenantResolutionError::NotFound)
             }
         }
     }

@@ -5,7 +5,7 @@ use crate::{
         TenantCatalogEntry, TenantCatalogPage, TenantCatalogReadError, TenantCatalogReader,
         TenantCatalogSource,
     },
-    domain::{DatabaseName, TenantId},
+    domain::DatabaseName,
     infrastructure::{mysql::DockerClientError, process::ProcessRunner},
 };
 
@@ -61,19 +61,13 @@ where
         let requested = u32::from(limit) + 1;
         let output = self
             .runtime
-            .query_connection(
-                &prepared,
-                &option_file,
-                &source.central_database,
-                &catalog_query(requested),
-            )
+            .query_server(&prepared, &option_file, &catalog_query(requested))
             .await
             .map_err(map_client_error)?;
         let (entries, truncated) = parse_catalog(&output, usize::from(limit))?;
 
         Ok(TenantCatalogPage {
             profile_name: source.profile_name.clone(),
-            central_database: source.central_database.clone(),
             entries,
             truncated,
         })
@@ -82,19 +76,10 @@ where
 
 fn catalog_query(limit: u32) -> String {
     format!(
-        "SELECT HEX(t.id),\
-         CASE WHEN t.data IS NULL THEN 0 \
-              WHEN JSON_VALID(t.data) THEN \
-                CASE WHEN JSON_EXTRACT(t.data, '$.tenancy_db_name') IS NULL THEN 0 \
-                     WHEN JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_db_name')) = 'STRING' THEN 1 \
-                     ELSE 2 END \
-              ELSE 3 END,\
-         CASE WHEN t.data IS NOT NULL AND JSON_VALID(t.data) \
-                   AND JSON_TYPE(JSON_EXTRACT(t.data, '$.tenancy_db_name')) = 'STRING' \
-              THEN HEX(JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.tenancy_db_name'))) ELSE '' END,\
-         COALESCE((SELECT HEX(d.domain) FROM domains AS d \
-                   WHERE d.tenant_id = t.id ORDER BY HEX(d.domain) LIMIT 1), '') \
-         FROM tenants AS t ORDER BY HEX(t.id) LIMIT {limit}"
+        "SELECT HEX(SCHEMA_NAME) FROM information_schema.SCHEMATA \
+         WHERE LOWER(SCHEMA_NAME) NOT IN \
+         ('mysql','information_schema','performance_schema','sys') \
+         ORDER BY SCHEMA_NAME LIMIT {limit}"
     )
 }
 
@@ -109,37 +94,13 @@ fn parse_catalog(
         std::str::from_utf8(output).map_err(|_| TenantCatalogReadError::InvalidMetadata)?;
     let mut entries = Vec::new();
     for row in output.lines().take(limit + 1) {
-        let columns = row.split('\t').collect::<Vec<_>>();
-        let [tenant_id, database_kind, database_override, primary_domain] = columns.as_slice()
-        else {
+        if row.contains('\t') {
             return Err(TenantCatalogReadError::InvalidMetadata);
-        };
-        let tenant_id = decode_hex(tenant_id, 255)
-            .and_then(|value| TenantId::try_from(value).ok())
+        }
+        let database = decode_hex(row, 64)
+            .and_then(|value| DatabaseName::try_from(value).ok())
             .ok_or(TenantCatalogReadError::InvalidMetadata)?;
-        let database = match *database_kind {
-            "0" => DatabaseName::try_from(tenant_id.as_str())
-                .map_err(|_| TenantCatalogReadError::InvalidMetadata)?,
-            "1" => decode_hex(database_override, 64)
-                .and_then(|value| DatabaseName::try_from(value).ok())
-                .ok_or(TenantCatalogReadError::InvalidMetadata)?,
-            _ => return Err(TenantCatalogReadError::InvalidMetadata),
-        };
-        let primary_domain = if primary_domain.is_empty() {
-            None
-        } else {
-            let value =
-                decode_hex(primary_domain, 255).ok_or(TenantCatalogReadError::InvalidMetadata)?;
-            if value.is_empty() || value.chars().any(char::is_control) {
-                return Err(TenantCatalogReadError::InvalidMetadata);
-            }
-            Some(value)
-        };
-        entries.push(TenantCatalogEntry {
-            tenant_id,
-            database,
-            primary_domain,
-        });
+        entries.push(TenantCatalogEntry { database });
     }
     let truncated = entries.len() > limit;
     entries.truncate(limit);
@@ -198,22 +159,18 @@ mod tests {
 
     #[test]
     fn parses_only_allowlisted_catalog_fields_and_honors_the_limit() {
-        let output = concat!(
-            "73616C745F73616761746563\t0\t\t73616761746563\n",
-            "73616C745F706F6C796D6572\t1\t73616C745F706F6C796D65725F64656D6F\t706F6C796D6572\n",
-        );
+        let output = concat!("64656D6F5F73616761746563\n", "64656D6F5F706F6C796D6572\n");
 
         let (entries, truncated) = parse_catalog(output.as_bytes(), 1).unwrap();
 
         assert!(truncated);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].tenant_id.as_str(), "salt_sagatec");
-        assert_eq!(entries[0].database.as_str(), "salt_sagatec");
-        assert_eq!(entries[0].primary_domain.as_deref(), Some("sagatec"));
+        assert_eq!(entries[0].database.as_str(), "demo_sagatec");
         let query = catalog_query(101);
         assert!(query.starts_with("SELECT "));
-        assert!(!query.contains("SELECT t.data"));
-        assert!(!query.contains("tenancy_db_password"));
+        assert!(query.contains("information_schema.SCHEMATA"));
+        assert!(!query.contains("tenants"));
+        assert!(!query.contains("domains"));
         for mutation in [
             "INSERT ", "UPDATE ", "DELETE ", "DROP ", "ALTER ", "CREATE ",
         ] {
@@ -225,10 +182,10 @@ mod tests {
     #[test]
     fn rejects_invalid_json_types_identifiers_and_untrusted_output() {
         for output in [
-            b"73616C745F73616761746563\t2\t\t\n".as_slice(),
+            b"64656D6F5F73616761746563\textra\n".as_slice(),
             b"2E2E2F\t0\t\t\n".as_slice(),
             b"not-hex\t0\t\t\n".as_slice(),
-            b"73616C745F73616761746563\t0\t\t00\n".as_slice(),
+            b"00\n".as_slice(),
         ] {
             assert_eq!(
                 parse_catalog(output, 100).unwrap_err(),

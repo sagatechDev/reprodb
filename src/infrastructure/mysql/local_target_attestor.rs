@@ -60,7 +60,6 @@ where
                 username: request.configured.username.clone(),
                 password: request.password.clone(),
                 central_database: request.configured.central_database.clone(),
-                tenant_database_prefix: request.configured.tenant_database_prefix.clone(),
                 managed_by_reprodb: matches!(
                     request.configured.trust,
                     LocalTargetTrust::ReprodbManaged

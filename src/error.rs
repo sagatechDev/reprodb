@@ -190,8 +190,7 @@ impl AppError {
             Self::Cache(error) => cache_error_category(error),
             Self::TenantCatalog(error) => match error {
                 TenantCatalogServiceError::Config(_)
-                | TenantCatalogServiceError::NoActiveProfile
-                | TenantCatalogServiceError::UnsupportedResolver => ErrorCategory::Configuration,
+                | TenantCatalogServiceError::NoActiveProfile => ErrorCategory::Configuration,
                 TenantCatalogServiceError::InvalidLimit => ErrorCategory::Usage,
                 TenantCatalogServiceError::Credential(_)
                 | TenantCatalogServiceError::Read(TenantCatalogReadError::AuthenticationFailed) => {
@@ -292,8 +291,7 @@ const fn local_target_error_category(error: &LocalTargetGateError) -> ErrorCateg
         LocalTargetGateError::Config(_)
         | LocalTargetGateError::NotConfigured
         | LocalTargetGateError::UnknownTarget
-        | LocalTargetGateError::RuntimeContextMissing
-        | LocalTargetGateError::DatabaseOutsideAllowlist => ErrorCategory::Configuration,
+        | LocalTargetGateError::RuntimeContextMissing => ErrorCategory::Configuration,
         LocalTargetGateError::Credential(_) => ErrorCategory::Credential,
         LocalTargetGateError::Attestation(LocalTargetAttestationError::ClientUnavailable)
         | LocalTargetGateError::UnsupportedVendor

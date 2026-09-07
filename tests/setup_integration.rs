@@ -43,7 +43,6 @@ async fn configures_the_real_local_mysql_target() {
         username: "root".to_owned(),
         password,
         central_database: DatabaseName::try_from("salt_central").unwrap(),
-        tenant_database_prefix: "salt_".to_owned(),
         managed_by_reprodb: candidate.managed_by_reprodb,
     };
 

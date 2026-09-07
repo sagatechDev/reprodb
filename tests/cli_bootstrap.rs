@@ -214,7 +214,7 @@ fn profile_add_preview_shows_the_planned_questions() {
         .stdout(
             predicate::str::contains("Add source profile (preview)")
                 .and(predicate::str::contains("MySQL host"))
-                .and(predicate::str::contains("Salt Central"))
+                .and(predicate::str::contains("Exact source database name"))
                 .and(predicate::str::contains("nothing was saved")),
         );
 }
@@ -243,8 +243,7 @@ fn pull_preview_can_show_the_fresh_path() {
         .success()
         .stdout(
             predicate::str::contains("Fresh dump requested")
-                .and(predicate::str::contains("Domain     sagatec"))
-                .and(predicate::str::contains("Source DB  salt_sagatec"))
+                .and(predicate::str::contains("Source DB  sagatec"))
                 .and(predicate::str::contains("were not accessed")),
         );
 }
@@ -264,7 +263,7 @@ fn pull_preview_shows_a_custom_local_database() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("Source DB  salt_sagatec")
+            predicate::str::contains("Source DB  sagatec")
                 .and(predicate::str::contains(
                     "Target DB  mysql-8/salt_sagatec_debug",
                 ))
@@ -289,7 +288,7 @@ fn pull_preview_shows_a_custom_container_and_database() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("Source DB  salt_polymer")
+            predicate::str::contains("Source DB  polymer")
                 .and(predicate::str::contains(
                     "Target DB  mysql-target/salt_polymer_debug",
                 ))

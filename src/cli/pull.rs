@@ -113,11 +113,10 @@ pub fn render_complete(style: &OutputStyle, ready: &PullReady) -> String {
         },
     );
     format!(
-        "\n{} Tenant ready\n\n  Database:   {}\n  Container:  {}\n  Domain:     {}\n  Cache:      {}\n  Timing:     {}\n  Dump ID:    {}\n",
+        "\n{} Database ready\n\n  Database:   {}\n  Container:  {}\n  Cache:      {}\n  Timing:     {}\n  Dump ID:    {}\n",
         style.success("✓"),
         style.value(plan.database.as_str()),
         style.value(plan.container.as_str()),
-        style.value(plan.local_domain.as_str()),
         cache,
         timing,
         style.value(&plan.dump_id.to_string()),
@@ -172,7 +171,7 @@ impl PullProgressObserver for CliPullProgress {
             ),
             PullProgress::CreatingDump => {
                 println!(
-                    "{} Resolving the tenant and exporting the source database...",
+                    "{} Resolving and exporting the source database...",
                     self.style.attention("○")
                 );
                 println!(
@@ -236,13 +235,6 @@ impl RestoreProgressObserver for CliPullProgress {
                 "{} Recreating the database and streaming the validated dump...",
                 self.style.attention("○")
             ),
-            RestoreProgress::RegisteringTenant => {
-                println!("{} Database import completed", self.style.success("✓"));
-                println!(
-                    "{} Updating the local Salt tenant registration...",
-                    self.style.attention("○")
-                );
-            }
         }
         let _ = std::io::stdout().flush();
     }
@@ -330,7 +322,7 @@ mod tests {
         assert!(reused.contains("Timing:     restore 00:03 · total 00:08"));
         assert!(created.contains("Cache:      new dump"));
         assert!(created.contains("Timing:     dump 00:04 · restore 00:03 · total 00:08"));
-        assert!(reused.contains("✓ Tenant ready"));
+        assert!(reused.contains("✓ Database ready"));
         assert!(!reused.to_ascii_lowercase().contains("password"));
     }
 

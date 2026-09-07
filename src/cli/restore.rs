@@ -15,18 +15,15 @@ pub fn render_start(style: &OutputStyle) -> String {
 
 pub fn render_plan(style: &OutputStyle, plan: &RestorePlan) -> String {
     format!(
-        "\n{}\n  Source:     {} / {}\n  Lookup:     {}\n  Tenant ID:  {}\n  Dump ID:    {}\n  MySQL:      {} (client {})\n  Target:     {}/{}\n  Domain:     {}\n\n{} The selected local target database will be replaced.\n",
+        "\n{}\n  Source:     {} / {}\n  Dump ID:    {}\n  MySQL:      {} (client {})\n  Target:     {}/{}\n\n{} The selected local target database will be replaced.\n",
         style.section("Restore plan"),
         style.value(plan.profile.as_str()),
         style.value(plan.source_database.as_str()),
-        style.value(plan.tenant_lookup.as_str()),
-        style.value(plan.tenant_id.as_str()),
         style.value(&plan.dump_id.to_string()),
         plan.source_version,
         plan.client_version,
         style.value(plan.container.as_str()),
         style.value(plan.database.as_str()),
-        style.value(plan.local_domain.as_str()),
         style.attention("!"),
     )
 }
@@ -34,11 +31,10 @@ pub fn render_plan(style: &OutputStyle, plan: &RestorePlan) -> String {
 pub fn render_complete(style: &OutputStyle, restored: &RestoreReady) -> String {
     let plan = &restored.plan;
     format!(
-        "\n{} Restore ready\n\n  Database:   {}\n  Container:  {}\n  Domain:     {}\n  Imported:   {}\n  Dump ID:    {}\n",
+        "\n{} Restore ready\n\n  Database:   {}\n  Container:  {}\n  Imported:   {}\n  Dump ID:    {}\n",
         style.success("✓"),
         style.value(plan.database.as_str()),
         style.value(plan.container.as_str()),
-        style.value(plan.local_domain.as_str()),
         format_bytes(restored.imported_bytes),
         style.value(&plan.dump_id.to_string()),
     )
@@ -62,13 +58,6 @@ impl RestoreProgressObserver for CliRestoreProgress {
                 "{} Recreating the database and streaming the validated dump...",
                 self.style.attention("○")
             ),
-            RestoreProgress::RegisteringTenant => {
-                println!("{} Database import completed", self.style.success("✓"));
-                println!(
-                    "{} Updating the local Salt tenant registration...",
-                    self.style.attention("○")
-                );
-            }
         }
         let _ = std::io::stdout().flush();
     }
@@ -109,7 +98,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_reports_the_local_domain_without_inventing_an_http_address() {
+    fn completion_reports_only_the_restored_database_identity() {
         let restored = RestoreReady {
             plan: plan(),
             imported_bytes: 5 * 1024 * 1024,
@@ -118,8 +107,7 @@ mod tests {
         let output = render_complete(&OutputStyle::plain(), &restored);
 
         assert!(output.contains("✓ Restore ready"));
-        assert!(output.contains("Domain:     sagatec"));
-        assert!(!output.contains(".localhost"));
+        assert!(!output.contains("Domain:"));
         assert!(output.contains("Imported:   5.0 MiB"));
     }
 }

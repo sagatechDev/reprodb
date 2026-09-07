@@ -3,9 +3,9 @@ use secrecy::SecretString;
 use thiserror::Error;
 
 use crate::{
-    domain::{DatabaseName, MysqlTlsMaterialPaths, MysqlTlsMode, TenantId},
+    domain::{DatabaseName, MysqlTlsMaterialPaths, MysqlTlsMode},
     infrastructure::{
-        config::{ConfigError, ConfigRepository, TenantResolverConfig},
+        config::{ConfigError, ConfigRepository},
         credentials::{CredentialError, CredentialStore},
         mysql::{ApprovedMysqlClient, ClientCatalog, ClientCatalogError},
     },
@@ -23,21 +23,17 @@ pub struct TenantCatalogSource {
     pub password: SecretString,
     pub tls_mode: MysqlTlsMode,
     pub tls_material: MysqlTlsMaterialPaths,
-    pub central_database: DatabaseName,
     pub client: ApprovedMysqlClient,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TenantCatalogEntry {
-    pub tenant_id: TenantId,
     pub database: DatabaseName,
-    pub primary_domain: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TenantCatalogPage {
     pub profile_name: String,
-    pub central_database: DatabaseName,
     pub entries: Vec<TenantCatalogEntry>,
     pub truncated: bool,
 }
@@ -50,9 +46,9 @@ pub enum TenantCatalogReadError {
     SourceUnavailable,
     #[error("the tenant catalog source rejected the configured credential")]
     AuthenticationFailed,
-    #[error("the configured central database does not contain the expected tenant catalog")]
+    #[error("the source database catalog is unavailable")]
     SchemaUnavailable,
-    #[error("the tenant catalog returned invalid metadata")]
+    #[error("the source returned an invalid database name")]
     InvalidMetadata,
 }
 
@@ -71,9 +67,7 @@ pub enum TenantCatalogServiceError {
     Config(#[from] ConfigError),
     #[error("no active source profile; run `reprodb profile use NAME`")]
     NoActiveProfile,
-    #[error("the active profile does not use the Salt Central tenant resolver")]
-    UnsupportedResolver,
-    #[error("tenant list limit must be between 1 and {MAX_TENANT_LIST_LIMIT}")]
+    #[error("database list limit must be between 1 and {MAX_TENANT_LIST_LIMIT}")]
     InvalidLimit,
     #[error(transparent)]
     Credential(#[from] CredentialError),
@@ -115,12 +109,6 @@ impl TenantCatalogService {
             .docker_context
             .clone()
             .ok_or(TenantCatalogServiceError::NoActiveProfile)?;
-        let TenantResolverConfig::SaltCentral {
-            central_database, ..
-        } = &profile.tenant_resolver
-        else {
-            return Err(TenantCatalogServiceError::UnsupportedResolver);
-        };
         let password = credentials.get(&profile.credential_key).await?;
         let client = ClientCatalog::validate(&profile.mysql_series, &profile.client.image)?;
 
@@ -135,7 +123,6 @@ impl TenantCatalogService {
                     password,
                     tls_mode: profile.tls_mode,
                     tls_material: profile.tls_material.clone(),
-                    central_database: central_database.clone(),
                     client,
                 },
                 limit,
@@ -161,7 +148,7 @@ mod tests {
         infrastructure::{
             config::{
                 AppConfig, AppPaths, ClientRuntimeConfig, MysqlClientConfig, MysqlFamily,
-                SourceProfileConfig,
+                SourceProfileConfig, TenantResolverConfig,
             },
             credentials::MemoryCredentialStore,
         },
@@ -182,12 +169,10 @@ mod tests {
         ) -> Result<TenantCatalogPage, TenantCatalogReadError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             assert_eq!(source.profile_name, "sandbox");
-            assert_eq!(source.central_database.as_str(), "sandbox_central");
             assert_eq!(source.docker_context, "desktop-linux");
             assert_eq!(limit, 25);
             Ok(TenantCatalogPage {
                 profile_name: source.profile_name.clone(),
-                central_database: source.central_database.clone(),
                 entries: Vec::new(),
                 truncated: false,
             })
@@ -234,7 +219,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn passes_the_configured_central_database_to_the_read_only_reader() {
+    async fn passes_the_active_source_to_the_read_only_database_reader() {
         let temp = TempDir::new().unwrap();
         let (repository, credential_key) = repository(&temp);
         let credentials = MemoryCredentialStore::default();
@@ -251,7 +236,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(page.central_database.as_str(), "sandbox_central");
+        assert!(page.entries.is_empty());
         assert_eq!(reader.calls.load(Ordering::SeqCst), 1);
     }
 

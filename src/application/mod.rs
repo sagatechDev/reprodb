@@ -34,9 +34,8 @@ pub use local_tenant_registration_service::{
     LocalTenantWriteError, LocalTenantWriter,
 };
 pub use profile_service::{
-    NewProfileInput, ProfileCentralDatabaseUpdated, ProfileCreated, ProfileRemoval, ProfileService,
-    ProfileServiceError, ProfileSummary, SourceProfileVerifier, SourceVerificationError,
-    VerifiedSource,
+    NewProfileInput, ProfileCreated, ProfileRemoval, ProfileService, ProfileServiceError,
+    ProfileSummary, SourceProfileVerifier, SourceVerificationError, VerifiedSource,
 };
 pub use pull_service::{
     NoPullProgress, PullCacheUse, PullDatabaseSelectionError, PullDatabaseSelector,

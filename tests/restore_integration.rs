@@ -17,8 +17,8 @@ use reprodb::{
         artifact_store::LocalArtifactStore,
         compression::{NoCompressionProgress, ZstdCompressor},
         config::{
-            AppConfig, AppPaths, ClientRuntimeConfig, ConfigRepository,
-            DEFAULT_TENANT_DATABASE_PREFIX, LocalTargetConfig, LocalTargetTrust,
+            AppConfig, AppPaths, ClientRuntimeConfig, ConfigRepository, LocalTargetConfig,
+            LocalTargetTrust,
         },
         credentials::{
             CredentialStore, MYSQL_OPTION_FILE_CONTAINER_PATH, MemoryCredentialStore,
@@ -81,7 +81,7 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
                 } else {
                     LocalTargetTrust::UserConfirmed
                 },
-                tenant_database_prefix: DEFAULT_TENANT_DATABASE_PREFIX.to_owned(),
+                legacy_tenant_database_prefix: None,
             }),
             ..AppConfig::default()
         })

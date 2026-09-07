@@ -23,7 +23,6 @@ pub struct NewLocalTargetInput {
     pub username: String,
     pub password: SecretString,
     pub central_database: DatabaseName,
-    pub tenant_database_prefix: String,
     pub managed_by_reprodb: bool,
 }
 
@@ -42,7 +41,6 @@ pub struct LocalTargetConfigured {
     pub server_version: MysqlVersion,
     pub vendor: String,
     pub docker_context: String,
-    pub tenant_database_prefix: String,
     pub managed_by_reprodb: bool,
     pub replaced_existing: bool,
     pub previous_credential_was_missing: bool,
@@ -184,7 +182,7 @@ impl SetupService {
             } else {
                 LocalTargetTrust::UserConfirmed
             },
-            tenant_database_prefix: input.tenant_database_prefix.clone(),
+            legacy_tenant_database_prefix: None,
         });
 
         persist_config_with_credential(
@@ -215,7 +213,6 @@ impl SetupService {
             server_version: verified.server_version,
             vendor: verified.vendor,
             docker_context: input.docker_context,
-            tenant_database_prefix: input.tenant_database_prefix,
             managed_by_reprodb: input.managed_by_reprodb,
             replaced_existing: previous_credential.is_some(),
             previous_credential_was_missing,
@@ -238,18 +235,6 @@ fn validate_input(input: &NewLocalTargetInput) -> Result<(), SetupServiceError> 
         return Err(SetupServiceError::InvalidField {
             field: "password",
             reason: "cannot be empty or contain NUL",
-        });
-    }
-    if input.tenant_database_prefix.is_empty()
-        || input.tenant_database_prefix.len() > 32
-        || !input
-            .tenant_database_prefix
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-    {
-        return Err(SetupServiceError::InvalidField {
-            field: "tenant_database_prefix",
-            reason: "must contain 1-32 ASCII letters, digits or `_`",
         });
     }
     Ok(())
@@ -293,8 +278,6 @@ mod tests {
             username: "root".to_owned(),
             password: SecretString::from("password-that-must-not-leak"),
             central_database: DatabaseName::try_from("salt_central").unwrap(),
-            tenant_database_prefix: crate::infrastructure::config::DEFAULT_TENANT_DATABASE_PREFIX
-                .to_owned(),
             managed_by_reprodb: false,
         }
     }
@@ -349,7 +332,7 @@ mod tests {
         let target = config.local_target.unwrap();
         assert_eq!(target.container_id.as_str(), "a".repeat(64));
         assert_eq!(target.trust, LocalTargetTrust::UserConfirmed);
-        assert_eq!(target.tenant_database_prefix, "salt_");
+        assert!(target.legacy_tenant_database_prefix.is_none());
         assert_eq!(
             config.client_runtime.docker_context.as_deref(),
             Some("desktop-linux")
@@ -362,31 +345,6 @@ mod tests {
                 .expose_secret(),
             "password-that-must-not-leak"
         );
-    }
-
-    #[tokio::test]
-    async fn invalid_database_prefix_is_rejected_before_connection_or_credentials() {
-        let temp = TempDir::new().unwrap();
-        let repository = repository(&temp);
-        let store = MemoryCredentialStore::default();
-        let verifier = FakeVerifier::successful();
-        let mut input = input();
-        input.tenant_database_prefix = "salt_; DROP".to_owned();
-
-        let error = SetupService::new(repository.clone())
-            .configure(&store, &verifier, input)
-            .await
-            .unwrap_err();
-
-        assert!(matches!(
-            error,
-            SetupServiceError::InvalidField {
-                field: "tenant_database_prefix",
-                ..
-            }
-        ));
-        assert_eq!(verifier.calls.load(Ordering::SeqCst), 0);
-        assert!(repository.load().unwrap().local_target.is_none());
     }
 
     #[tokio::test]

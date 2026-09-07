@@ -43,6 +43,59 @@ where
             allow_domain_lookup,
         }
     }
+
+    pub async fn resolve_existing_database(
+        &self,
+        lookup: &TenantLookup,
+    ) -> Result<Option<ResolvedTenant>, TenantResolutionError> {
+        let database = DatabaseName::try_from(lookup.as_str())
+            .map_err(TenantResolutionError::InvalidDatabase)?;
+        let prepared = self
+            .runtime
+            .prepare_existing(
+                &self.source.docker_context,
+                self.source.client.series(),
+                self.source.client.image(),
+            )
+            .await
+            .map_err(map_client_error)?;
+        let option_file = self
+            .runtime
+            .create_option_file_with_tls_material(
+                &self.source.host,
+                self.source.port,
+                &self.source.username,
+                &self.source.password,
+                self.source.tls_mode,
+                &self.source.tls_material,
+            )
+            .map_err(map_client_error)?;
+        let query = database_exists_query(&database);
+        let output = self
+            .runtime
+            .query_server(&prepared, &option_file, &query)
+            .await
+            .map_err(map_client_error)?;
+        match output.as_slice() {
+            b"0\n" | b"0\r\n" => Ok(None),
+            b"1\n" | b"1\r\n" => Ok(Some(ResolvedTenant {
+                tenant_id: TenantId::try_from(database.as_str())
+                    .map_err(TenantResolutionError::InvalidTenantId)?,
+                database,
+                matched_by: TenantMatch::Database,
+                features: LocalTenantFeatures::default(),
+            })),
+            _ => Err(TenantResolutionError::InvalidMetadata),
+        }
+    }
+}
+
+fn database_exists_query(database: &DatabaseName) -> String {
+    let encoded = encode_hex(database.as_str().as_bytes());
+    format!(
+        "SELECT COUNT(*) FROM information_schema.SCHEMATA \
+         WHERE BINARY SCHEMA_NAME = BINARY CONVERT(0x{encoded} USING utf8mb4)"
+    )
 }
 
 #[async_trait]
@@ -429,6 +482,32 @@ mod tests {
             !arguments
                 .iter()
                 .any(|argument| argument.to_string_lossy().contains("password-marker"))
+        );
+    }
+
+    #[tokio::test]
+    async fn resolves_an_existing_database_directly_without_reading_the_tenant_catalog() {
+        let (resolver, commands) = resolver("1\n", true);
+        let lookup = TenantLookup::try_from("demo_sagatec").unwrap();
+
+        let resolved = resolver
+            .resolve_existing_database(&lookup)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(resolved.tenant_id.as_str(), "demo_sagatec");
+        assert_eq!(resolved.database.as_str(), "demo_sagatec");
+        assert_eq!(resolved.matched_by, TenantMatch::Database);
+        let commands = commands.lock().unwrap();
+        let arguments = commands.last().unwrap().arguments();
+        let query = arguments.last().unwrap().to_string_lossy();
+        assert!(query.starts_with("SELECT COUNT(*) FROM information_schema.SCHEMATA"));
+        assert!(query.contains("0x64656D6F5F73616761746563"));
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.to_string_lossy().starts_with("--database="))
         );
     }
 

@@ -39,20 +39,21 @@ pub enum Commands {
     /// Validate configuration and local dependencies.
     Doctor(PreviewArgs),
 
-    /// Create a managed cached dump without restoring it.
+    /// Create a managed cached database dump without restoring it.
     Dump(TenantArgs),
 
     /// Restore a managed dump into the configured local target.
     Restore(RestoreArgs),
 
-    /// Dump and restore a tenant into the configured local target.
+    /// Dump and restore a source database into the configured local target.
     Pull(PullArgs),
 
     /// Inspect and clean the local dump cache.
     Cache(CacheArgs),
 
-    /// Inspect tenants available in the active source profile.
-    Tenant(TenantCommandArgs),
+    /// Inspect databases available in the active source profile.
+    #[command(visible_alias = "tenant")]
+    Database(TenantCommandArgs),
 }
 
 impl Commands {
@@ -65,7 +66,7 @@ impl Commands {
             Self::Restore(_) => "restore",
             Self::Pull(_) => "pull",
             Self::Cache(_) => "cache",
-            Self::Tenant(_) => "tenant",
+            Self::Database(_) => "database",
         }
     }
 }
@@ -86,9 +87,6 @@ pub enum ProfileCommands {
 
     /// Select the active source profile.
     Use(ProfileNameArgs),
-
-    /// Edit safe source profile settings without replacing its credential.
-    Edit(ProfileEditArgs),
 
     /// Remove a source profile and its credential.
     Remove(ProfileRemoveArgs),
@@ -118,14 +116,6 @@ pub struct SetupArgs {
     /// Local MySQL username.
     #[arg(long, default_value = "root", requires = "non_interactive")]
     pub username: String,
-
-    /// Database containing the local tenants registry.
-    #[arg(long, default_value = "salt_central", requires = "non_interactive")]
-    pub central_database: String,
-
-    /// Allowed prefix for restored tenant databases.
-    #[arg(long, default_value = "salt_", requires = "non_interactive")]
-    pub tenant_database_prefix: String,
 
     /// Read exactly one password line from stdin.
     #[arg(long, requires = "non_interactive")]
@@ -161,10 +151,6 @@ pub struct ProfileAddArgs {
     /// MySQL source username.
     #[arg(long, requires = "non_interactive")]
     pub username: Option<String>,
-
-    /// Database containing the source tenant registry.
-    #[arg(long, default_value = "salt_central", requires = "non_interactive")]
-    pub central_database: String,
 
     /// Required source transport policy.
     #[arg(
@@ -226,17 +212,6 @@ pub struct ProfileNameArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct ProfileEditArgs {
-    /// Profile name.
-    #[arg(value_name = "NAME")]
-    pub name: String,
-
-    /// Database containing the source tenant registry.
-    #[arg(long, value_name = "DATABASE")]
-    pub central_database: String,
-}
-
-#[derive(Debug, Args)]
 pub struct ProfileRemoveArgs {
     /// Profile name.
     #[arg(value_name = "NAME")]
@@ -249,14 +224,14 @@ pub struct ProfileRemoveArgs {
 
 #[derive(Debug, Args)]
 pub struct TenantArgs {
-    /// Tenant ID or local domain alias.
+    /// Source database name, tenant ID or domain alias.
     #[arg(value_name = "TENANT")]
     pub tenant: String,
 }
 
 #[derive(Debug, Args)]
 pub struct RestoreArgs {
-    /// Tenant ID or local domain alias.
+    /// Database identity stored in the managed dump.
     #[arg(value_name = "TENANT")]
     pub tenant: String,
 
@@ -275,7 +250,7 @@ pub struct RestoreArgs {
 
 #[derive(Debug, Args)]
 pub struct PullArgs {
-    /// Tenant ID or local domain alias.
+    /// Source database name, tenant ID or domain alias.
     #[arg(value_name = "TENANT")]
     pub tenant: String,
 
@@ -310,13 +285,13 @@ pub struct TenantCommandArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum TenantCommands {
-    /// List tenants from the configured central database without changing the source.
+    /// List non-administrative databases without changing the source.
     List(TenantListArgs),
 }
 
 #[derive(Debug, Args)]
 pub struct TenantListArgs {
-    /// Maximum number of tenants to return.
+    /// Maximum number of databases to return.
     #[arg(long, default_value_t = crate::application::DEFAULT_TENANT_LIST_LIMIT)]
     pub limit: u16,
 }
@@ -441,32 +416,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_a_central_database_profile_edit() {
-        let cli = Cli::try_parse_from([
-            "reprodb",
-            "profile",
-            "edit",
-            "sandbox",
-            "--central-database",
-            "demo_central",
-        ])
-        .unwrap();
-
-        let Commands::Profile(arguments) = cli.command else {
-            panic!("expected profile command");
-        };
-        let ProfileCommands::Edit(arguments) = arguments.command else {
-            panic!("expected profile edit command");
-        };
-        assert_eq!(arguments.name, "sandbox");
-        assert_eq!(arguments.central_database, "demo_central");
-    }
-
-    #[test]
-    fn parses_tenant_list_with_a_bounded_limit() {
+    fn parses_database_list_and_its_tenant_alias_with_a_bounded_limit() {
+        let canonical =
+            Cli::try_parse_from(["reprodb", "database", "list", "--limit", "25"]).unwrap();
+        assert!(matches!(canonical.command, Commands::Database(_)));
         let cli = Cli::try_parse_from(["reprodb", "tenant", "list", "--limit", "25"]).unwrap();
-        let Commands::Tenant(arguments) = cli.command else {
-            panic!("expected tenant command");
+        let Commands::Database(arguments) = cli.command else {
+            panic!("expected database command");
         };
         let TenantCommands::List(arguments) = arguments.command;
         assert_eq!(arguments.limit, 25);

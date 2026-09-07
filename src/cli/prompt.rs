@@ -26,9 +26,6 @@ pub enum PromptError {
         source: io::Error,
     },
 
-    #[error("the local central database name is invalid")]
-    InvalidCentralDatabase,
-
     #[error("the local restore database name is invalid")]
     InvalidRestoreDatabase,
 
@@ -93,16 +90,6 @@ pub fn collect_new_profile(name: ProfileName) -> Result<NewProfileInput, PromptE
         .interact_text()
         .map_err(unavailable)?;
     let password = collect_password("MySQL password: ")?;
-    let central_database = Input::<String>::with_theme(&theme)
-        .with_prompt("Central database")
-        .default("salt_central".to_owned())
-        .validate_with(|value: &String| -> Result<(), &str> {
-            DatabaseName::try_from(value.as_str())
-                .map(|_| ())
-                .map_err(|_| "enter a valid non-administrative database name")
-        })
-        .interact_text()
-        .map_err(unavailable)?;
     let production = Confirm::with_theme(&theme)
         .with_prompt("Is this a production source?")
         .default(false)
@@ -140,8 +127,6 @@ pub fn collect_new_profile(name: ProfileName) -> Result<NewProfileInput, PromptE
         port,
         username,
         password,
-        central_database: DatabaseName::try_from(central_database)
-            .map_err(|_| PromptError::InvalidCentralDatabase)?,
         tls_mode,
         tls_material: collect_tls_material(tls_mode)?,
         production,
@@ -234,8 +219,6 @@ pub fn collect_new_profile_non_interactive(
         port: arguments.port,
         username,
         password: read_password_from_stdin()?,
-        central_database: DatabaseName::try_from(arguments.central_database.as_str())
-            .map_err(|_| PromptError::InvalidCentralDatabase)?,
         tls_mode: arguments.tls.into(),
         tls_material: MysqlTlsMaterialPaths {
             ca: arguments.tls_ca.clone(),
@@ -298,33 +281,6 @@ pub fn collect_local_target(
         .interact_text()
         .map_err(unavailable)?;
     let password = collect_password("Local MySQL password: ")?;
-    let central_database = Input::<String>::with_theme(&theme)
-        .with_prompt("Local central database")
-        .default("salt_central".to_owned())
-        .validate_with(|value: &String| -> Result<(), &str> {
-            DatabaseName::try_from(value.as_str())
-                .map(|_| ())
-                .map_err(|_| "enter a safe non-administrative database name")
-        })
-        .interact_text()
-        .map_err(unavailable)?;
-    let tenant_database_prefix = Input::<String>::with_theme(&theme)
-        .with_prompt("Tenant database prefix")
-        .default("salt_".to_owned())
-        .validate_with(|value: &String| -> Result<(), &str> {
-            if value.is_empty()
-                || value.len() > 32
-                || !value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-            {
-                Err("enter 1-32 ASCII letters, digits or `_`")
-            } else {
-                Ok(())
-            }
-        })
-        .interact_text()
-        .map_err(unavailable)?;
 
     Ok(NewLocalTargetInput {
         docker_context,
@@ -332,9 +288,8 @@ pub fn collect_local_target(
         container_id: candidate.id.clone(),
         username,
         password,
-        central_database: DatabaseName::try_from(central_database)
-            .map_err(|_| PromptError::InvalidCentralDatabase)?,
-        tenant_database_prefix,
+        central_database: DatabaseName::try_from("salt_central")
+            .expect("legacy target metadata remains valid"),
         managed_by_reprodb: candidate.managed_by_reprodb,
     })
 }
@@ -355,9 +310,8 @@ pub fn collect_local_target_non_interactive(
         container_id: candidate.id.clone(),
         username: arguments.username.clone(),
         password: read_password_from_stdin()?,
-        central_database: DatabaseName::try_from(arguments.central_database.as_str())
-            .map_err(|_| PromptError::InvalidCentralDatabase)?,
-        tenant_database_prefix: arguments.tenant_database_prefix.clone(),
+        central_database: DatabaseName::try_from("salt_central")
+            .expect("legacy target metadata remains valid"),
         managed_by_reprodb: candidate.managed_by_reprodb,
     })
 }
