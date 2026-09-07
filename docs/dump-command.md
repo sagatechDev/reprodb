@@ -61,9 +61,14 @@ Para MySQL 8, o plano atual inclui as opções conservadoras definidas pela dump
 --no-tablespaces
 --hex-blob
 --set-gtid-purged=OFF
+--triggers
+--skip-routines
+--skip-events
 ```
 
-O preflight valida versão/vendor, charset/collation, engines e objetos relevantes, além de coletar a estimativa lógica usada no ETA, antes de criar o staging. Uma policy incompatível encerra o comando antes do dump.
+O preflight valida versão/vendor, charset/collation, engines e objetos relevantes, além de coletar a estimativa lógica usada no ETA, antes de criar o staging. A policy v2 aceita somente tabelas InnoDB e bloqueia views, triggers, routines, events e qualquer `DEFINER` visível. Uma policy incompatível encerra o comando antes do dump.
+
+Essa restrição corresponde ao inventário atual dos schemas Salt locais. Suportar um desses objetos futuramente exige fixtures de dump/restore, uma decisão explícita sobre `DEFINER` e nova versão da policy; consulte a [matriz de schemas, objetos e grants](research/salt-schema-object-matrix-2026-09-07.md).
 
 Não há uma implementação alternativa para produção. A classificação ativa políticas adicionais, enquanto resolução, preflight, argumentos estruturados, streaming e publicação permanecem o mesmo pipeline exercitado localmente.
 

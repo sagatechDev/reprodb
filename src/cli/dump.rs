@@ -75,9 +75,6 @@ pub fn render_complete(style: &OutputStyle, dump: &DumpCreated) -> String {
             DumpPolicyNotice::ConcurrentDdlMustBePrevented => {
                 "Avoid schema changes on the source while this dump is running.".to_owned()
             }
-            DumpPolicyNotice::DefinerObjectsPresent { count } => format!(
-                "{count} view/trigger object(s) contain DEFINER metadata; restore will validate compatibility."
-            ),
         };
         output.push_str(&format!("  {} {detail}\n", style.attention("!")));
     }

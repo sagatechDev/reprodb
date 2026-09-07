@@ -315,8 +315,8 @@ mod tests {
         "DATABASE\t757466386D6234\t757466386D62345F303930305F61695F6369\n\
          SIZE\t8388608\n\
          ENGINE\t496E6E6F4442\t42\n\
-         OBJECTS\t2\t1\t0\t0\n\
-         DEFINERS\t2\t1\t0\t0\n\
+         OBJECTS\t0\t0\t0\t0\n\
+         DEFINERS\t0\t0\t0\t0\n\
          GTID\tOFF\n"
     }
 
@@ -336,8 +336,8 @@ mod tests {
             approved.preflight.encoding.collation(),
             "utf8mb4_0900_ai_ci"
         );
-        assert_eq!(approved.preflight.objects.views, 2);
-        assert_eq!(approved.preflight.definers.triggers, 1);
+        assert_eq!(approved.preflight.objects.views, 0);
+        assert_eq!(approved.preflight.definers.triggers, 0);
         assert_eq!(approved.preflight.gtid_mode, GtidMode::Off);
         assert_eq!(approved.plan.arguments().last().unwrap(), "salt_sagatec");
 

@@ -643,7 +643,7 @@ Critério da milestone: `reprodb dump TENANT` gera um artefato `.sql.zst` atômi
 
 **Labels:** `priority:p0`, `type:feature`, `area:mysql`, `area:security`
 
-**Status:** implementada — preflight somente leitura retorna apenas agregados, valida charset/collation/GTID e inventaria engines/objetos/definers. A policy v1 exige MySQL 8.4 com client da mesma série, aceita somente InnoDB, bloqueia routines/events e produz argumentos ordenados sem shell. Views/triggers com definer e risco de DDL concorrente viram avisos estruturados. A visibilidade integral de metadata pela credencial continua como gate explícito para produção.
+**Status:** implementada — preflight somente leitura retorna apenas agregados, valida charset/collation/GTID e inventaria engines/objetos/definers. A policy v2 exige MySQL 8.4 com client da mesma série, aceita somente tabelas InnoDB, bloqueia qualquer view, trigger, routine, event ou `DEFINER`, explicita `--skip-routines/--skip-events` e produz argumentos ordenados sem shell. O risco de DDL concorrente permanece como aviso estruturado. A visibilidade integral de metadata pela credencial continua como gate explícito para produção.
 
 **Flags iniciais:**
 
@@ -654,6 +654,8 @@ Critério da milestone: `reprodb dump TENANT` gera um artefato `.sql.zst` atômi
 --hex-blob
 --set-gtid-purged=OFF
 --triggers
+--skip-routines
+--skip-events
 --skip-lock-tables
 ```
 
@@ -897,9 +899,13 @@ Critério da milestone: source de produção é habilitado somente após compati
 
 **Labels:** `priority:p0`, `type:hardening`, `area:mysql`
 
+**Status:** implementada para o Salt local, com gate explícito para repetir a auditoria no piloto — 5.350 tabelas em 12 schemas `salt_*` são InnoDB; não foram observadas views, triggers, routines ou events no MySQL 8.4.4 nem criações desses objetos nas cinco cópias locais do código. A dump policy v2 bloqueia qualquer stored object/`DEFINER`, mantém GTID purged desligado e explicita `--skip-routines/--skip-events`, invalidando caches v1. O E2E agora executa resolver, preflight e dump com `SELECT`, `SHOW VIEW` e `TRIGGER`, restaura duas tabelas relacionadas e compara FK, decimal, datetime, BLOB, NULL e UTF-8. Produção ainda exige que um DBA confirme visibilidade completa antes da RDB-073.
+
 **Escopo:** grants mínimos, InnoDB, views, triggers, routines, events, definers, GTID e testes de restore desses objetos.
 
 **Aceite:** matriz documentada e restore funcional dos objetos realmente usados pelo Salt.
+
+Matriz e grants: [`research/salt-schema-object-matrix-2026-09-07.md`](research/salt-schema-object-matrix-2026-09-07.md).
 
 #### RDB-073 — Executar piloto controlado
 

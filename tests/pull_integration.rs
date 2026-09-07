@@ -71,6 +71,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
     let source_name = format!("reprodb-source-{}", &suffix[..12]);
     let target_name = format!("reprodb-target-{}", &suffix[..12]);
     let source_password = SecretString::from("reprodb-integration-source-only");
+    let dump_password = SecretString::from("reprodb-integration-readonly-only");
     let target_password = SecretString::from("reprodb-integration-target-only");
     let image = ClientCatalog::resolve("8.4").unwrap().image();
     let _source_guard =
@@ -135,7 +136,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
                 SourceProfileConfig {
                     host: "127.0.0.1".to_owned(),
                     port: source_port,
-                    username: "root".to_owned(),
+                    username: "reprodb_reader".to_owned(),
                     credential_key: source_key,
                     mysql_family: MysqlFamily::Mysql,
                     mysql_series: "8.4".to_owned(),
@@ -156,7 +157,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
         .unwrap();
     let credentials = MemoryCredentialStore::default();
     credentials
-        .set(&source_key, source_password.clone())
+        .set(&source_key, dump_password.clone())
         .await
         .unwrap();
     credentials
@@ -218,7 +219,9 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
         &format!(
             "CREATE DATABASE `{database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; \
              CREATE TABLE `{database}`.`reprodb_pull_items` (`id` BIGINT NOT NULL PRIMARY KEY, `label` VARCHAR(255) NOT NULL, `payload` MEDIUMTEXT NOT NULL) ENGINE=InnoDB; \
+             CREATE TABLE `{database}`.`reprodb_pull_details` (`item_id` BIGINT NOT NULL PRIMARY KEY, `amount` DECIMAL(12,2) NOT NULL, `occurred_at` DATETIME NOT NULL, `binary_payload` BLOB NOT NULL, `nullable_note` VARCHAR(255) NULL, CONSTRAINT `reprodb_pull_details_item_fk` FOREIGN KEY (`item_id`) REFERENCES `reprodb_pull_items` (`id`)) ENGINE=InnoDB; \
              INSERT INTO `{database}`.`reprodb_pull_items` VALUES (1, CONVERT(0x5361676174656320F09FA782 USING utf8mb4), 'small-fixture-one'), (2, 'Polymer', 'small-fixture-two'); \
+             INSERT INTO `{database}`.`reprodb_pull_details` VALUES (1, 1234567890.12, '2026-09-07 12:34:56', 0x0001FEFF, NULL); \
              INSERT INTO `salt_central`.`tenants` (`id`, `created_at`, `updated_at`, `data`) VALUES (CONVERT(0x{tenant} USING utf8mb4), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, JSON_OBJECT('tenancy_db_name', CONVERT(0x{database_hex} USING utf8mb4), 'tenancy_app_color', 'green')); \
              INSERT INTO `salt_central`.`domains` (`domain`, `tenant_id`, `created_at`, `updated_at`) VALUES (CONVERT(0x{domain} USING utf8mb4), CONVERT(0x{tenant} USING utf8mb4), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             tenant = hex_utf8(database.as_str()),
@@ -255,6 +258,24 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .and_then(|value| value.trim().parse::<u64>().ok())
     });
+    let least_privilege_user = if generated_fixture.is_ok() {
+        run_mysql_query(
+            &context,
+            source_candidate.id.as_str(),
+            client.image(),
+            &source_password,
+            MysqlTlsMode::Required,
+            None,
+            &format!(
+                "CREATE USER 'reprodb_reader'@'%' IDENTIFIED BY '{}'; \
+                 GRANT SELECT, SHOW VIEW, TRIGGER ON `salt_central`.* TO 'reprodb_reader'@'%'; \
+                 GRANT SELECT, SHOW VIEW, TRIGGER ON `{database}`.* TO 'reprodb_reader'@'%'",
+                dump_password.expose_secret()
+            ),
+        )
+    } else {
+        Err("source fixture failed before least-privilege user creation".to_owned())
+    };
 
     let workflow = DockerDumpWorkflow::new(TokioProcessRunner);
     let attestor = DockerLocalTargetAttestor::new(TokioProcessRunner);
@@ -262,8 +283,8 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
     let dump_executor =
         DockerMysqlDumpExecutor::default().with_compression_level(compression_level);
     let service = PullService::new(repository);
-    let first = match generated_fixture {
-        Ok(_) => service
+    let first = match (generated_fixture, least_privilege_user) {
+        (Ok(_), Ok(_)) => service
             .pull(
                 &credentials,
                 PullDumpDependencies {
@@ -283,7 +304,8 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
             )
             .await
             .map_err(|error| error.to_string()),
-        Err(error) => Err(error),
+        (Err(error), _) => Err(error),
+        (_, Err(error)) => Err(error),
     };
     let source_credential_removed = credentials.delete(&source_key).await;
     let second = if first.is_ok() && source_credential_removed.is_ok() {
@@ -352,6 +374,20 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
     } else {
         None
     };
+    let type_and_fk_verification = if second.is_ok() {
+        Some(run_mysql_query(
+            &context,
+            target_candidate.id.as_str(),
+            client.image(),
+            &target_password,
+            MysqlTlsMode::Required,
+            Some(&database),
+            "SELECT amount, DATE_FORMAT(occurred_at, '%Y-%m-%d %H:%i:%s'), HEX(binary_payload), IF(nullable_note IS NULL, 'NULL', nullable_note) FROM reprodb_pull_details WHERE item_id = 1; \
+             SELECT COUNT(*) FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE BINARY CONSTRAINT_SCHEMA = BINARY DATABASE() AND CONSTRAINT_NAME = 'reprodb_pull_details_item_fk'",
+        ))
+    } else {
+        None
+    };
 
     source_credential_removed.expect("the source credential must be removable before cache hit");
     let first = first.expect("the cache miss must create and restore a real dump");
@@ -387,6 +423,10 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
     assert_eq!(
         String::from_utf8(row_count_verification.unwrap().unwrap()).unwrap(),
         format!("{benchmark_rows}\n")
+    );
+    assert_eq!(
+        String::from_utf8(type_and_fk_verification.unwrap().unwrap()).unwrap(),
+        "1234567890.12\t2026-09-07 12:34:56\t0001FEFF\tNULL\n1\n"
     );
 }
 

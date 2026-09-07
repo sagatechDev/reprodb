@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use crate::domain::{DatabaseName, MysqlVersion};
 
-pub const MYSQL_8_DUMP_POLICY_VERSION: u32 = 1;
+pub const MYSQL_8_DUMP_POLICY_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DatabaseEncoding {
@@ -130,7 +130,6 @@ impl ApprovedDumpPlan {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DumpPolicyNotice {
     ConcurrentDdlMustBePrevented,
-    DefinerObjectsPresent { count: u64 },
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -167,28 +166,46 @@ impl Mysql8DumpPolicy {
                 count: non_innodb_tables,
             });
         }
-        if preflight.objects.routines > 0 {
-            return Err(DumpPolicyError::StoredRoutinesUnsupported {
-                count: preflight.objects.routines,
-            });
-        }
-        if preflight.objects.events > 0 {
-            return Err(DumpPolicyError::EventsUnsupported {
-                count: preflight.objects.events,
-            });
-        }
-
         let definer_count = preflight
             .definers
             .views
             .saturating_add(preflight.definers.triggers)
             .saturating_add(preflight.definers.routines)
             .saturating_add(preflight.definers.events);
-        let mut notices = vec![DumpPolicyNotice::ConcurrentDdlMustBePrevented];
         if definer_count > 0 {
-            notices.push(DumpPolicyNotice::DefinerObjectsPresent {
+            return Err(DumpPolicyError::DefinerObjectsUnsupported {
                 count: definer_count,
             });
+        }
+        for (count, error) in [
+            (
+                preflight.objects.views,
+                DumpPolicyError::ViewsUnsupported {
+                    count: preflight.objects.views,
+                },
+            ),
+            (
+                preflight.objects.triggers,
+                DumpPolicyError::TriggersUnsupported {
+                    count: preflight.objects.triggers,
+                },
+            ),
+            (
+                preflight.objects.routines,
+                DumpPolicyError::StoredRoutinesUnsupported {
+                    count: preflight.objects.routines,
+                },
+            ),
+            (
+                preflight.objects.events,
+                DumpPolicyError::EventsUnsupported {
+                    count: preflight.objects.events,
+                },
+            ),
+        ] {
+            if count > 0 {
+                return Err(error);
+            }
         }
 
         Ok(ApprovedDumpPlan {
@@ -200,11 +217,13 @@ impl Mysql8DumpPolicy {
                 "--hex-blob".to_owned(),
                 "--set-gtid-purged=OFF".to_owned(),
                 "--triggers".to_owned(),
+                "--skip-routines".to_owned(),
+                "--skip-events".to_owned(),
                 "--skip-lock-tables".to_owned(),
                 format!("--default-character-set={}", preflight.encoding.charset()),
                 database.as_str().to_owned(),
             ],
-            notices,
+            notices: vec![DumpPolicyNotice::ConcurrentDdlMustBePrevented],
         })
     }
 }
@@ -244,6 +263,21 @@ pub enum DumpPolicyError {
     StoredRoutinesUnsupported { count: u64 },
 
     #[error(
+        "the database has {count} view(s); views are blocked until their restore semantics are approved"
+    )]
+    ViewsUnsupported { count: u64 },
+
+    #[error(
+        "the database has {count} trigger(s); triggers are blocked until their restore semantics are approved"
+    )]
+    TriggersUnsupported { count: u64 },
+
+    #[error(
+        "the database has {count} object(s) with DEFINER metadata; restoring source authorization identities is not allowed"
+    )]
+    DefinerObjectsUnsupported { count: u64 },
+
+    #[error(
         "the database has {count} event(s); events are blocked until their restore policy is implemented"
     )]
     EventsUnsupported { count: u64 },
@@ -274,18 +308,8 @@ mod tests {
             .unwrap(),
             estimated_data_bytes: 8 * 1024 * 1024,
             engines: vec![StorageEngineUsage::try_new("InnoDB".to_owned(), 42).unwrap()],
-            objects: DatabaseObjectCounts {
-                views: 2,
-                triggers: 1,
-                routines: 0,
-                events: 0,
-            },
-            definers: DefinerObjectCounts {
-                views: 2,
-                triggers: 1,
-                routines: 0,
-                events: 0,
-            },
+            objects: DatabaseObjectCounts::default(),
+            definers: DefinerObjectCounts::default(),
             gtid_mode: GtidMode::On,
         }
     }
@@ -313,6 +337,8 @@ mod tests {
                 "--hex-blob",
                 "--set-gtid-purged=OFF",
                 "--triggers",
+                "--skip-routines",
+                "--skip-events",
                 "--skip-lock-tables",
                 "--default-character-set=utf8mb4",
                 "salt_sagatec",
@@ -325,10 +351,7 @@ mod tests {
         );
         assert_eq!(
             plan.notices(),
-            [
-                DumpPolicyNotice::ConcurrentDdlMustBePrevented,
-                DumpPolicyNotice::DefinerObjectsPresent { count: 3 },
-            ]
+            [DumpPolicyNotice::ConcurrentDdlMustBePrevented]
         );
     }
 
@@ -379,6 +402,54 @@ mod tests {
             ),
             Err(DumpPolicyError::EventsUnsupported { count: 2 })
         ));
+    }
+
+    #[test]
+    fn blocks_views_triggers_and_definers_until_restore_semantics_are_defined() {
+        let database = DatabaseName::try_from("salt_polymer").unwrap();
+
+        let mut definer = safe_preflight();
+        definer.objects.views = 1;
+        definer.definers.views = 1;
+        assert_eq!(
+            Mysql8DumpPolicy::evaluate(
+                version("8.4.4"),
+                "MySQL Community Server - GPL",
+                version("8.4.4"),
+                &database,
+                &definer,
+            )
+            .unwrap_err(),
+            DumpPolicyError::DefinerObjectsUnsupported { count: 1 }
+        );
+
+        let mut view = safe_preflight();
+        view.objects.views = 1;
+        assert_eq!(
+            Mysql8DumpPolicy::evaluate(
+                version("8.4.4"),
+                "MySQL Community Server - GPL",
+                version("8.4.4"),
+                &database,
+                &view,
+            )
+            .unwrap_err(),
+            DumpPolicyError::ViewsUnsupported { count: 1 }
+        );
+
+        let mut trigger = safe_preflight();
+        trigger.objects.triggers = 1;
+        assert_eq!(
+            Mysql8DumpPolicy::evaluate(
+                version("8.4.4"),
+                "MySQL Community Server - GPL",
+                version("8.4.4"),
+                &database,
+                &trigger,
+            )
+            .unwrap_err(),
+            DumpPolicyError::TriggersUnsupported { count: 1 }
+        );
     }
 
     #[test]
