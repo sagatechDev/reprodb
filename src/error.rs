@@ -325,7 +325,6 @@ const fn dump_error_category(error: &DumpServiceError) -> ErrorCategory {
         DumpServiceError::Config(_)
         | DumpServiceError::NoActiveProfile
         | DumpServiceError::DockerContextMissing => ErrorCategory::Configuration,
-        DumpServiceError::ProductionNotEnabled => ErrorCategory::Dump,
         DumpServiceError::ClientCatalog(_) => ErrorCategory::Dependency,
         DumpServiceError::Credential(_) => ErrorCategory::Credential,
         DumpServiceError::Tenant(error) => match error {

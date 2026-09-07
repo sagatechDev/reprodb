@@ -20,8 +20,16 @@ pub fn render_verifying(style: &OutputStyle, tls_mode: crate::domain::MysqlTlsMo
 }
 
 pub fn render_created(style: &OutputStyle, created: &ProfileCreated) -> String {
+    let classification = if created.production {
+        format!(
+            "{} PRODUCTION SOURCE — conservative policies and verified TLS are mandatory\n",
+            style.danger("!")
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "{ok} Source connection verified: {vendor} {server}\n\
+        "{classification}{ok} Source connection verified: {vendor} {server}\n\
          {ok} Approved MySQL client ready: {client}\n\
          {ok} Docker context: {context}\n\
          {ok} TLS mode: {tls}\n\
@@ -58,7 +66,7 @@ pub fn render_list(style: &OutputStyle, profiles: &[ProfileSummary]) -> String {
             String::new()
         };
         let policy = if profile.production {
-            style.attention("production")
+            style.danger("production")
         } else {
             style.muted("development")
         };
@@ -147,6 +155,7 @@ mod tests {
                 vendor: "MySQL Community Server".to_owned(),
                 client_version: client.version(),
                 tls_mode: crate::domain::MysqlTlsMode::Required,
+                production: false,
             },
         );
 
@@ -155,6 +164,27 @@ mod tests {
         assert!(output.contains("Docker context: desktop-linux"));
         assert!(output.contains("saved and activated"));
         assert!(!output.to_ascii_lowercase().contains("password-that"));
+    }
+
+    #[test]
+    fn created_production_profile_has_a_non_color_dependent_warning() {
+        let client = crate::infrastructure::mysql::ClientCatalog::resolve("8.4").unwrap();
+        let output = render_created(
+            &OutputStyle::colored(),
+            &ProfileCreated {
+                name: ProfileName::try_from("salt-production").unwrap(),
+                docker_context: "desktop-linux".to_owned(),
+                server_version: "8.4.4".parse().unwrap(),
+                vendor: "MySQL Community Server".to_owned(),
+                client_version: client.version(),
+                tls_mode: crate::domain::MysqlTlsMode::VerifyIdentity,
+                production: true,
+            },
+        );
+
+        assert!(output.contains("PRODUCTION SOURCE"));
+        assert!(output.contains("conservative policies"));
+        assert!(output.contains("\u{1b}[1;31m"));
     }
 
     #[test]
@@ -171,6 +201,12 @@ mod tests {
         assert!(output.contains("active"));
         assert!(output.contains("production"));
         assert!(output.contains("development"));
+
+        let colored = render_list(
+            &OutputStyle::colored(),
+            &[summary("production", true, true)],
+        );
+        assert!(colored.contains("\u{1b}[1;31mproduction\u{1b}[0m"));
     }
 
     #[test]

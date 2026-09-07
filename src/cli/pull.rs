@@ -145,6 +145,9 @@ impl CliPullProgress {
 impl PullProgressObserver for CliPullProgress {
     fn update(&self, progress: PullProgress) {
         match progress {
+            selected @ PullProgress::SourceSelected { .. } => {
+                print!("{}", render_source_selected(&self.style, &selected));
+            }
             PullProgress::CheckingCache => {
                 println!("{} Checking the local cache...", self.style.attention("○"));
             }
@@ -187,6 +190,29 @@ impl PullProgressObserver for CliPullProgress {
             }
         }
         let _ = std::io::stdout().flush();
+    }
+}
+
+pub fn render_source_selected(style: &OutputStyle, progress: &PullProgress) -> String {
+    match progress {
+        PullProgress::SourceSelected {
+            profile,
+            production: true,
+        } => format!(
+            "{} PRODUCTION SOURCE · {}\n{} Cache is mandatory; restore remains restricted to the attested local target.\n",
+            style.danger("!"),
+            style.danger(profile.as_str()),
+            style.attention("!"),
+        ),
+        PullProgress::SourceSelected {
+            profile,
+            production: false,
+        } => format!(
+            "{} Source profile: {} · development\n",
+            style.selected("›"),
+            style.value(profile.as_str())
+        ),
+        _ => String::new(),
     }
 }
 
@@ -321,6 +347,19 @@ mod tests {
         assert_eq!(format_age(34), "34s");
         assert_eq!(format_age(2_100), "35m");
         assert_eq!(format_age(7_500), "2h 5m");
+    }
+
+    #[test]
+    fn production_source_warning_states_cache_and_local_restore_guards() {
+        let progress = PullProgress::SourceSelected {
+            profile: ProfileName::try_from("salt-production").unwrap(),
+            production: true,
+        };
+        let output = render_source_selected(&OutputStyle::plain(), &progress);
+
+        assert!(output.contains("PRODUCTION SOURCE · salt-production"));
+        assert!(output.contains("Cache is mandatory"));
+        assert!(output.contains("attested local target"));
     }
 
     #[test]

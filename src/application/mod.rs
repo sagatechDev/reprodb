@@ -22,7 +22,7 @@ pub use doctor_service::{
 };
 pub use dump_service::{
     Clock, ClockError, DumpCreated, DumpPreflightGateway, DumpService, DumpServiceError,
-    DumpSource, DumpTenantResolver, SystemClock,
+    DumpSource, DumpStatus, DumpStatusObserver, DumpTenantResolver, NoDumpStatus, SystemClock,
 };
 pub use local_target_gate::{
     AuthorizedLocalTarget, GuardedLocalTarget, LocalTargetAttestation, LocalTargetAttestationError,

@@ -47,6 +47,7 @@ pub struct ProfileCreated {
     pub vendor: String,
     pub client_version: MysqlVersion,
     pub tls_mode: MysqlTlsMode,
+    pub production: bool,
 }
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
@@ -239,6 +240,7 @@ impl ProfileService {
             vendor: verified.vendor,
             client_version: verified.client.version(),
             tls_mode: input.tls_mode,
+            production: input.production,
         })
     }
 

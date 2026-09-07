@@ -715,7 +715,7 @@ Contrato e limites: [`docs/cache-locks-cleanup.md`](cache-locks-cleanup.md).
 
 **Labels:** `priority:p0`, `type:feature`, `area:cli`, `area:mysql`, `area:cache`
 
-**Status:** implementada — o comando resolve o tenant, adquire o lock do source, executa o preflight, transmite `mysqldump` para Zstandard e publica metadata/checksums atomicamente. A UX informa progresso por bytes, throughput e tempo, além do ID/caminho final. Secrets não entram no argv ou nos diagnósticos e profiles de produção permanecem bloqueados até a RDB-071.
+**Status:** implementada — o comando resolve o tenant, adquire o lock do source, executa o preflight, transmite `mysqldump` para Zstandard e publica metadata/checksums atomicamente. A UX informa progresso por bytes, throughput e tempo, além do ID/caminho final. Secrets não entram no argv ou nos diagnósticos; as políticas adicionais de produção estão na RDB-071.
 
 **Aceite:** resolve tenant, faz preflight, gera cache e apresenta caminho/ID/metadata sem executar restore.
 
@@ -886,6 +886,8 @@ Critério da milestone: source de produção é habilitado somente após compati
 #### RDB-071 — Implementar políticas para source classificado como produção
 
 **Labels:** `priority:p0`, `type:hardening`, `area:security`
+
+**Status:** implementada e pronta para os testes controlados das próximas issues — `dump` e `pull` mostram `PRODUCTION SOURCE` em vermelho antes do acesso, produção exige TLS verificado e usa a mesma dump policy conservadora. Todo dump precisa virar artefato atômico no cache; não existe stream direto, e somente `--fresh` ignora um hit válido. Cache hit não carrega a credencial source. Restore continua aceitando apenas `AuthorizedLocalTarget`, cuja identidade Docker e UUID MySQL são atestados contra a origem do dump; nenhum `SourceProfile` participa da API destrutiva.
 
 **Escopo:** destaque visual, cache obrigatório, `--fresh` explícito, dump policy conservadora e proibição arquitetural de restore no source.
 

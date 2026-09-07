@@ -36,9 +36,9 @@ O decoder Zstd síncrono roda numa tarefa bloqueante e entrega no máximo dois b
 docker --context <local> run --rm -i
   --pull=never
   --network=container:<ID completo>
-  --mount type=bind,src=<option-file>,dst=/run/secrets/reprodb.cnf,readonly
+  --mount type=bind,src=<private-temp-dir>,dst=/run/secrets/reprodb,readonly
   <imagem MySQL aprovada por digest>
-  mysql --defaults-file=/run/secrets/reprodb.cnf --no-login-paths ...
+  mysql --defaults-file=/run/secrets/reprodb/client.cnf --no-login-paths ...
 ```
 
 Não há shell, `docker cp`, TTY ou SQL cru intermediário. `-i` é obrigatório para manter o stdin do client container aberto; `-t` é proibido porque um pseudo-terminal pode alterar o stream.

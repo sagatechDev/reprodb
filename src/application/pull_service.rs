@@ -22,10 +22,17 @@ use crate::{
     },
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PullProgress {
+    SourceSelected {
+        profile: crate::domain::ProfileName,
+        production: bool,
+    },
     CheckingCache,
-    CacheHit { dump_id: DumpId, age_seconds: u64 },
+    CacheHit {
+        dump_id: DumpId,
+        age_seconds: u64,
+    },
     CacheMiss(CacheMissReason),
     CreatingDump,
     DumpReady(DumpId),
@@ -159,6 +166,10 @@ where
             .profiles
             .get(profile_name)
             .ok_or(PullServiceError::NoActiveProfile)?;
+        self.progress.update(PullProgress::SourceSelected {
+            profile: profile_name.clone(),
+            production: profile.production,
+        });
         let target_choices = config
             .configured_local_targets()
             .map(|(target, is_default)| PullTargetChoice {
@@ -583,7 +594,10 @@ mod tests {
         }
     }
 
-    async fn cached_fixture(root: &Path) -> (ConfigRepository, MemoryCredentialStore, DumpId) {
+    async fn cached_fixture(
+        root: &Path,
+        production: bool,
+    ) -> (ConfigRepository, MemoryCredentialStore, DumpId) {
         let paths = AppPaths::new(root.join("config"), root.join("cache"), root.join("data"));
         let repository = ConfigRepository::new(paths.clone());
         let profile_name = ProfileName::try_from("salt-local").unwrap();
@@ -597,9 +611,20 @@ mod tests {
             credential_key: source_key,
             mysql_family: MysqlFamily::Mysql,
             mysql_series: "8.4".to_owned(),
-            production: false,
-            tls_mode: MysqlTlsMode::Disabled,
-            tls_material: Default::default(),
+            production,
+            tls_mode: if production {
+                MysqlTlsMode::VerifyIdentity
+            } else {
+                MysqlTlsMode::Disabled
+            },
+            tls_material: if production {
+                crate::domain::MysqlTlsMaterialPaths {
+                    ca: Some(std::path::PathBuf::from("/tmp/reprodb-test-ca.pem")),
+                    ..Default::default()
+                }
+            } else {
+                Default::default()
+            },
             client: MysqlClientConfig {
                 image: client.image().to_owned(),
             },
@@ -683,9 +708,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn valid_cache_hit_restores_without_source_credential_or_source_calls() {
+    async fn production_cache_hit_restores_without_source_credential_or_source_calls() {
         let directory = tempdir().unwrap();
-        let (repository, credentials, dump_id) = cached_fixture(directory.path()).await;
+        let (repository, credentials, dump_id) = cached_fixture(directory.path(), true).await;
         let source_calls = Arc::new(AtomicUsize::new(0));
         let source = UnusedDump {
             calls: Arc::clone(&source_calls),
@@ -724,19 +749,24 @@ mod tests {
         assert!(matches!(
             progress.lock().unwrap().as_slice(),
             [
+                PullProgress::SourceSelected {
+                    profile,
+                    production: true
+                },
                 PullProgress::CheckingCache,
                 PullProgress::CacheHit {
                     dump_id: cached,
                     age_seconds: 99
                 }
-            ] if *cached == dump_id
+            ] if profile.as_str() == "salt-local" && *cached == dump_id
         ));
     }
 
     #[tokio::test]
     async fn fresh_always_creates_and_restores_a_new_managed_dump() {
         let directory = tempdir().unwrap();
-        let (repository, credentials, cached_dump_id) = cached_fixture(directory.path()).await;
+        let (repository, credentials, cached_dump_id) =
+            cached_fixture(directory.path(), false).await;
         let source_key = repository
             .load()
             .unwrap()

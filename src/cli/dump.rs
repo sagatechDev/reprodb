@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    application::DumpCreated,
+    application::{DumpCreated, DumpStatus, DumpStatusObserver},
     cli::output::OutputStyle,
     domain::DumpPolicyNotice,
     infrastructure::compression::{CompressionProgress, CompressionProgressObserver},
@@ -24,6 +24,35 @@ pub fn render_start(style: &OutputStyle) -> String {
         style.attention("○"),
         style.attention("!"),
     )
+}
+
+impl DumpStatusObserver for CliDumpProgress {
+    fn update(&self, status: &DumpStatus) {
+        print!("{}", render_source_selected(&self.style, status));
+        let _ = std::io::stdout().flush();
+    }
+}
+
+pub fn render_source_selected(style: &OutputStyle, status: &DumpStatus) -> String {
+    match status {
+        DumpStatus::SourceSelected {
+            profile,
+            production: true,
+        } => format!(
+            "{} PRODUCTION SOURCE · {}\n{} Read-only conservative dump policy; the result must be published in the local cache.\n",
+            style.danger("!"),
+            style.danger(profile.as_str()),
+            style.attention("!"),
+        ),
+        DumpStatus::SourceSelected {
+            profile,
+            production: false,
+        } => format!(
+            "{} Source profile: {} · development\n",
+            style.selected("›"),
+            style.value(profile.as_str())
+        ),
+    }
 }
 
 pub fn render_complete(style: &OutputStyle, dump: &DumpCreated) -> String {
@@ -189,6 +218,20 @@ mod tests {
         assert!(output.contains("Data:      1.5 MiB → 512.0 KiB"));
         assert!(output.contains("Duration:  00:44"));
         assert!(!output.to_ascii_lowercase().contains("password"));
+    }
+
+    #[test]
+    fn production_source_warning_is_explicit_and_red_when_colors_are_enabled() {
+        let status = DumpStatus::SourceSelected {
+            profile: ProfileName::try_from("salt-production").unwrap(),
+            production: true,
+        };
+        let plain = render_source_selected(&OutputStyle::plain(), &status);
+        let colored = render_source_selected(&OutputStyle::colored(), &status);
+
+        assert!(plain.contains("! PRODUCTION SOURCE · salt-production"));
+        assert!(plain.contains("published in the local cache"));
+        assert!(colored.contains("\u{1b}[1;31m"));
     }
 
     #[test]

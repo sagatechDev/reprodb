@@ -174,7 +174,7 @@ $REPRODB dump sagatec
 echo $?
 ```
 
-Esse comando é uma operação real: ele consulta o source, resolve `sagatec` pelo `salt_central`, lê `salt_sagatec` com `mysqldump` e grava um `.sql.zst` no cache da aplicação. Use somente um profile local nesta fase; profiles marcados como produção são bloqueados.
+Esse comando é uma operação real: ele consulta o source, resolve `sagatec` pelo `salt_central`, lê `salt_sagatec` com `mysqldump` e grava um `.sql.zst` no cache da aplicação. Para avaliar a UX sem acessar produção, use um profile local. Um profile classificado como produção deve exibir `PRODUCTION SOURCE` em vermelho antes de qualquer acesso e só deve ser usado durante o piloto autorizado descrito na RDB-073.
 
 Uma execução bem-sucedida deve terminar aproximadamente assim:
 

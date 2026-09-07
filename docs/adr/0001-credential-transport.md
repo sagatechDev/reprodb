@@ -95,8 +95,8 @@ Regras obrigatórias:
 4. escrever valores entre aspas e escapar backspace, tab, newline, carriage return, backslash e aspas duplas;
 5. rejeitar NUL com erro que nomeia apenas o campo;
 6. executar `flush` e `sync_all` antes do mount;
-7. montar em `/run/secrets/reprodb.cnf` com `readonly`;
-8. passar `--defaults-file=/run/secrets/reprodb.cnf` antes das demais opções;
+7. montar o diretório temporário em `/run/secrets/reprodb` com `readonly`;
+8. passar `--defaults-file=/run/secrets/reprodb/client.cnf` antes das demais opções;
 9. adicionar `--no-login-paths` quando suportado pela série aprovada, evitando estado implícito do client;
 10. manter o guard vivo até `kill`/`wait` do processo filho;
 11. remover o arquivo em sucesso, erro, cancelamento e unwind.

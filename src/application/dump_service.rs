@@ -32,6 +32,25 @@ pub struct DumpSource<'a> {
     pub client: ApprovedMysqlClient,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DumpStatus {
+    SourceSelected {
+        profile: ProfileName,
+        production: bool,
+    },
+}
+
+pub trait DumpStatusObserver: Send + Sync {
+    fn update(&self, status: &DumpStatus);
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoDumpStatus;
+
+impl DumpStatusObserver for NoDumpStatus {
+    fn update(&self, _status: &DumpStatus) {}
+}
+
 #[async_trait]
 pub trait DumpTenantResolver: Send + Sync {
     async fn resolve(
@@ -74,6 +93,7 @@ pub struct DumpService<C = SystemClock> {
     repository: ConfigRepository,
     clock: C,
     progress: Arc<dyn CompressionProgressObserver>,
+    status: Arc<dyn DumpStatusObserver>,
 }
 
 impl DumpService<SystemClock> {
@@ -82,6 +102,7 @@ impl DumpService<SystemClock> {
             repository,
             clock: SystemClock,
             progress: Arc::new(NoCompressionProgress),
+            status: Arc::new(NoDumpStatus),
         }
     }
 }
@@ -95,11 +116,17 @@ where
             repository,
             clock,
             progress: Arc::new(NoCompressionProgress),
+            status: Arc::new(NoDumpStatus),
         }
     }
 
     pub fn with_progress(mut self, progress: Arc<dyn CompressionProgressObserver>) -> Self {
         self.progress = progress;
+        self
+    }
+
+    pub fn with_status(mut self, status: Arc<dyn DumpStatusObserver>) -> Self {
+        self.status = status;
         self
     }
 
@@ -124,9 +151,10 @@ where
             .profiles
             .get(profile_name)
             .ok_or(DumpServiceError::NoActiveProfile)?;
-        if profile.production {
-            return Err(DumpServiceError::ProductionNotEnabled);
-        }
+        self.status.update(&DumpStatus::SourceSelected {
+            profile: profile_name.clone(),
+            production: profile.production,
+        });
         let docker_context = config
             .client_runtime
             .docker_context
@@ -146,6 +174,9 @@ where
         let _lock =
             lock_manager.try_acquire(OperationLockKey::source(profile_name, &resolved.database))?;
         let approved = preflight.assess(&source, &resolved.database).await?;
+        if profile.tls_mode.requires_encrypted_transport() && approved.server.tls_cipher.is_none() {
+            return Err(DumpPreflightError::TlsRequiredButNotNegotiated.into());
+        }
         self.progress
             .set_estimated_input_bytes(approved.preflight.estimated_data_bytes);
 
@@ -240,9 +271,6 @@ pub enum DumpServiceError {
 
     #[error("the MySQL client Docker context is missing; run `reprodb doctor`")]
     DockerContextMissing,
-
-    #[error("production profiles are not enabled until production hardening is complete")]
-    ProductionNotEnabled,
 
     #[error(transparent)]
     ClientCatalog(#[from] ClientCatalogError),
@@ -370,7 +398,7 @@ mod tests {
                     version,
                     vendor: "MySQL Community Server - GPL".to_owned(),
                     server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
-                    tls_cipher: None,
+                    tls_cipher: Some("TLS_AES_256_GCM_SHA384".to_owned()),
                 },
                 preflight,
                 plan,
@@ -392,6 +420,15 @@ mod tests {
         }
 
         fn update(&self, _progress: crate::infrastructure::compression::CompressionProgress) {}
+    }
+
+    #[derive(Default)]
+    struct RecordingStatus(Mutex<Vec<DumpStatus>>);
+
+    impl DumpStatusObserver for RecordingStatus {
+        fn update(&self, status: &DumpStatus) {
+            self.0.lock().unwrap().push(status.clone());
+        }
     }
 
     #[async_trait]
@@ -615,22 +652,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn production_profile_is_blocked_before_credential_access() {
+    async fn production_profile_uses_the_same_managed_conservative_dump_pipeline() {
         let directory = tempdir().unwrap();
-        let (repository, _) = repository(directory.path(), true);
-        let service = DumpService::with_clock(repository, TestClock::new([900]));
+        let (repository, credential_key) = repository(directory.path(), true);
+        let credentials = MemoryCredentialStore::default();
+        credentials
+            .set(&credential_key, SecretString::from("production-password"))
+            .await
+            .unwrap();
+        let status = Arc::new(RecordingStatus::default());
+        let service = DumpService::with_clock(repository, TestClock::new([900, 1_000, 1_001]))
+            .with_status(status.clone());
 
-        let error = service
+        let created = service
             .create(
-                &MemoryCredentialStore::default(),
+                &credentials,
                 &FakeResolver,
                 &FakePreflight,
                 &FakeExecutor { fail: false },
                 TenantLookup::try_from("sagatec").unwrap(),
             )
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert!(matches!(error, DumpServiceError::ProductionNotEnabled));
+        assert!(created.artifact_path.is_dir());
+        assert!(
+            created
+                .notices
+                .contains(&DumpPolicyNotice::ConcurrentDdlMustBePrevented)
+        );
+        assert!(matches!(
+            status.0.lock().unwrap().as_slice(),
+            [DumpStatus::SourceSelected {
+                profile,
+                production: true
+            }] if profile.as_str() == "local-source"
+        ));
     }
 }

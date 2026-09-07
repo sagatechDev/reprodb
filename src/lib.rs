@@ -237,7 +237,9 @@ pub async fn execute_with_cancellation(
                 infrastructure::process::TokioProcessRunner,
             );
             let progress = std::sync::Arc::new(cli::dump::CliDumpProgress::new(style));
-            let service = application::DumpService::new(repository).with_progress(progress.clone());
+            let service = application::DumpService::new(repository)
+                .with_progress(progress.clone())
+                .with_status(progress.clone());
             let executor =
                 infrastructure::mysql::DockerMysqlDumpExecutor::new(cancellation.clone());
             let result = service

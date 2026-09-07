@@ -23,6 +23,8 @@ No hit:
 - `mysqldump` não é executado;
 - o artefato ainda passa pela validação completa de Zstd e checksum SQL antes do `DROP` local.
 
+Essas garantias também valem para produção. A CLI mostra `PRODUCTION SOURCE` em vermelho antes da consulta ao cache. Um hit pode concluir sem carregar a credencial de produção; um miss acessa o source e ainda precisa publicar um dump gerenciado antes de iniciar o restore.
+
 No miss, o fluxo usa o mesmo [`DumpService`](dump-command.md) do comando `dump`, publica um novo artefato gerenciado e passa seu UUID ao mesmo [`RestoreService`](restore-command.md) do comando `restore`.
 
 `--fresh` produz um miss deliberado antes de ler os arquivos de cache. Ele não apaga dumps anteriores, mas sempre acessa o source e cria um UUID novo se o dump for bem-sucedido.
@@ -73,7 +75,9 @@ A CLI mostra o domain conhecido, mas não inventa URL ou porta HTTP do Salt.
 - se o dump falhar, nenhum restore é iniciado;
 - se o restore falhar, o artefato completo continua disponível para retry;
 - falha no registro central informa que o database foi importado, sem apagar o resultado;
-- profiles de produção continuam bloqueados para novos dumps até o hardening correspondente;
+- profiles de produção exigem TLS verificado, cache gerenciado e a dump policy conservadora;
+- `--fresh` é a única forma de ignorar deliberadamente um hit válido; não existe modo implícito ou configuração persistente que force dumps frescos;
+- o restore recebe somente um `AuthorizedLocalTarget` atestado; nunca recebe host, porta, credencial ou profile do source;
 - `Ctrl+C` cancela dump ou restore, aguarda os processos, limpa o estado parcial e retorna 130.
 
 O TTL inicial continua fixado em duas horas. Os comandos de inspeção/limpeza estão disponíveis em [`cache-commands.md`](cache-commands.md); tornar o TTL configurável permanece uma evolução separada.

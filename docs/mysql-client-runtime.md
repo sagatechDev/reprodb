@@ -37,12 +37,14 @@ Hosts DNS ou IP externos permanecem inalterados. Essa regra mantém no profile o
 O option file é montado como:
 
 ```text
-type=bind,src=<arquivo-temporário>,dst=/run/secrets/reprodb.cnf,readonly
+type=bind,src=<diretório-temporário>,dst=/run/secrets/reprodb,readonly
 ```
 
 `--defaults-file` é o primeiro argumento do client. A senha não aparece no argv, em variáveis de ambiente do container ou nos erros devolvidos pelo runtime.
 
-O mesmo option file recebe explicitamente `ssl-mode=REQUIRED`, `PREFERRED` ou `DISABLED`. `profile add` usa `REQUIRED` por padrão e não permite uma política mais fraca em profiles de produção. `REQUIRED` garante criptografia, mas ainda não valida CA e hostname; `VERIFY_CA`/`VERIFY_IDENTITY` exigirão uma etapa própria para distribuir e montar certificados com segurança.
+O runtime monta o diretório temporário privado em `/run/secrets/reprodb` e usa `/run/secrets/reprodb/client.cnf`. O option file recebe explicitamente um dos cinco modos TLS. CA/cert/key são copiados para nomes internos fixos no mesmo mount read-only, sem colocar o path original no option file ou no argv.
+
+`profile add` usa `REQUIRED` por padrão local. Produção exige `VERIFY_IDENTITY`, CA e confirmação de um cipher negociado; o preflight repete essa confirmação imediatamente antes do dump.
 
 ## Diagnóstico
 

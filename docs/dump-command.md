@@ -45,7 +45,8 @@ Ao concluir, a saída informa o profile, tenant, database, versões do source e 
 - O artefato nasce em um diretório UUID com sufixo `.part` e só fica visível depois de checksums, metadata, `fsync` e rename atômico.
 - Falha normal remove o staging. Dumps completos anteriores são preservados.
 - Um lock advisory impede dois dumps do mesmo `profile + database` nesta máquina.
-- Profiles marcados como produção estão temporariamente bloqueados. Eles só serão liberados pela etapa de hardening RDB-071.
+- Um profile de produção exige `VERIFY_IDENTITY`, mostra um aviso vermelho antes de acessar a credencial e passa pelo mesmo preflight conservador.
+- Não existe saída direta para arquivo arbitrário ou stdout: inclusive em produção, o sucesso exige publicação atômica no cache gerenciado.
 
 O processo usa uma transação consistente para InnoDB, mas ainda gera leitura, I/O e tráfego de rede. Migrações ou outras alterações de schema devem ser evitadas durante a execução.
 
@@ -63,6 +64,8 @@ Para MySQL 8, o plano atual inclui as opções conservadoras definidas pela dump
 ```
 
 O preflight valida versão/vendor, charset/collation, engines e objetos relevantes, além de coletar a estimativa lógica usada no ETA, antes de criar o staging. Uma policy incompatível encerra o comando antes do dump.
+
+Não há uma implementação alternativa para produção. A classificação ativa políticas adicionais, enquanto resolução, preflight, argumentos estruturados, streaming e publicação permanecem o mesmo pipeline exercitado localmente.
 
 ## Falhas e limitações desta etapa
 
