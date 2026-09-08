@@ -67,7 +67,11 @@ pub async fn execute_with_cancellation(
 ) -> Result<(), AppError> {
     tracing::debug!(command = cli.command.name(), "command received");
     let style = OutputStyle::stdout(cli.color);
-    let credential_store = infrastructure::credentials::RuntimeCredentialStore::discover();
+    let credential_root = infrastructure::config::AppPaths::discover()?
+        .config_dir()
+        .join("credentials");
+    let credential_store =
+        infrastructure::credentials::RuntimeCredentialStore::discover(credential_root);
 
     match cli.command {
         Commands::Setup(arguments) if arguments.preview => {

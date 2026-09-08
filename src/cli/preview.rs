@@ -89,9 +89,9 @@ pub fn profile_add(style: &OutputStyle, profile: &ProfileName) -> String {
   Server      MySQL 8.4.4
   Client      approved Docker image, pinned by digest
   Selection   Direct database
-  Password    OS credential store
+  Password    private local credential store
 
-{pending} Save password in Keychain / Secret Service
+{pending} Save password under .reprodb with private permissions
 {pending} Save profile and make it active
 
 {footer}
@@ -130,7 +130,7 @@ pub fn doctor(style: &OutputStyle) -> String {
   {ok} active profile
       salt-source · mysql.salt.internal:3306 · MySQL 8.4 · TLS REQUIRED
   {ok} source credential
-      credential is available in the OS store
+      credential is available in the local store
   {ok} source connection
       server MySQL Community Server 8.4.4 · client 8.4.4 · TLS encrypted (TLS_AES_256_GCM_SHA384)
 
@@ -138,7 +138,7 @@ pub fn doctor(style: &OutputStyle) -> String {
   {ok} local target configuration
       mysql-8 · context desktop-linux
   {ok} target credential
-      credential is available in the OS store
+      credential is available in the local store
   {ok} target container identity
       configured name and full container ID match a running container
   {ok} target connection

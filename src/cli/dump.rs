@@ -131,7 +131,7 @@ impl CompressionProgressObserver for CliDumpProgress {
             .map(|duration| format!(" | ETA ~{}", format_duration(duration)))
             .unwrap_or_default();
         eprint!(
-            "\r{} Exporting: {} | {}/s | {}{}",
+            "\r\x1b[2K{} Exporting: {} | avg {}/s | {}{}",
             self.style.attention("◌"),
             format_bytes(progress.input_bytes),
             format_bytes(progress.input_bytes_per_second() as u64),
@@ -176,7 +176,16 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
 
 pub(crate) fn format_duration(duration: Duration) -> String {
     let seconds = duration.as_secs();
-    format!("{:02}:{:02}", seconds / 60, seconds % 60)
+    if seconds >= 3600 {
+        format!(
+            "{:02}:{:02}:{:02}",
+            seconds / 3600,
+            (seconds % 3600) / 60,
+            seconds % 60
+        )
+    } else {
+        format!("{:02}:{:02}", seconds / 60, seconds % 60)
+    }
 }
 
 #[cfg(test)]

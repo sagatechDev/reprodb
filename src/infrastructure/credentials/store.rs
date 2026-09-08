@@ -1,10 +1,9 @@
-use std::{collections::HashMap, sync::RwLock};
-
-#[cfg(feature = "test-file-credential-store")]
 use std::{
+    collections::HashMap,
     fs::{self, File},
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
+    sync::RwLock,
 };
 
 use async_trait::async_trait;
@@ -13,7 +12,6 @@ use thiserror::Error;
 
 use crate::domain::CredentialKey;
 
-#[cfg(feature = "test-file-credential-store")]
 use sha2::{Digest as _, Sha256};
 
 const DEFAULT_SERVICE: &str = "com.sagatech.reprodb";
@@ -37,15 +35,13 @@ impl std::fmt::Display for CredentialOperation {
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum CredentialError {
-    #[error("credential was not found in the operating system credential store")]
+    #[error("credential was not found in the local credential store")]
     NotFound,
 
-    #[error(
-        "the operating system credential store is unavailable while trying to {operation} a credential"
-    )]
+    #[error("the local credential store is unavailable while trying to {operation} a credential")]
     StoreUnavailable { operation: CredentialOperation },
 
-    #[error("the operating system credential store failed to {operation} a credential")]
+    #[error("the local credential store failed to {operation} a credential")]
     OperationFailed { operation: CredentialOperation },
 
     #[error("the background credential task failed while trying to {operation} a credential")]
@@ -105,66 +101,54 @@ impl CredentialStore for OsCredentialStore {
     }
 }
 
-/// Credential backend selected by the CLI composition root.
-///
-/// Release builds always use the native OS store. A build explicitly compiled
-/// with `test-file-credential-store` may opt into the isolated file backend by
-/// setting `REPRODB_TEST_CREDENTIAL_DIR` to an absolute directory. This hook is
-/// intentionally absent from normal binaries.
 #[derive(Debug)]
-pub enum RuntimeCredentialStore {
-    Os(OsCredentialStore),
-
-    #[cfg(feature = "test-file-credential-store")]
-    TestFile(TestFileCredentialStore),
+pub struct RuntimeCredentialStore {
+    local: FileCredentialStore,
+    legacy_os: OsCredentialStore,
 }
 
 impl RuntimeCredentialStore {
-    pub fn discover() -> Self {
-        #[cfg(feature = "test-file-credential-store")]
-        if let Some(root) = std::env::var_os("REPRODB_TEST_CREDENTIAL_DIR") {
-            return Self::TestFile(TestFileCredentialStore::new(PathBuf::from(root)));
+    pub fn discover(root: PathBuf) -> Self {
+        Self {
+            local: FileCredentialStore::new(root),
+            legacy_os: OsCredentialStore,
         }
-
-        Self::Os(OsCredentialStore)
     }
 }
 
 #[async_trait]
 impl CredentialStore for RuntimeCredentialStore {
     async fn get(&self, key: &CredentialKey) -> Result<SecretString, CredentialError> {
-        match self {
-            Self::Os(store) => store.get(key).await,
-            #[cfg(feature = "test-file-credential-store")]
-            Self::TestFile(store) => store.get(key).await,
+        match self.local.get(key).await {
+            Ok(value) => Ok(value),
+            Err(CredentialError::NotFound) => {
+                let value = self.legacy_os.get(key).await?;
+                self.local.set(key, value.clone()).await?;
+                Ok(value)
+            }
+            Err(error) => Err(error),
         }
     }
 
     async fn set(&self, key: &CredentialKey, value: SecretString) -> Result<(), CredentialError> {
-        match self {
-            Self::Os(store) => store.set(key, value).await,
-            #[cfg(feature = "test-file-credential-store")]
-            Self::TestFile(store) => store.set(key, value).await,
-        }
+        self.local.set(key, value).await
     }
 
     async fn delete(&self, key: &CredentialKey) -> Result<(), CredentialError> {
-        match self {
-            Self::Os(store) => store.delete(key).await,
-            #[cfg(feature = "test-file-credential-store")]
-            Self::TestFile(store) => store.delete(key).await,
+        match self.local.delete(key).await {
+            Ok(()) => Ok(()),
+            Err(CredentialError::NotFound) => self.legacy_os.delete(key).await,
+            Err(error) => Err(error),
         }
     }
 }
 
-#[cfg(feature = "test-file-credential-store")]
 #[derive(Debug)]
-pub struct TestFileCredentialStore {
+pub struct FileCredentialStore {
     root: PathBuf,
 }
 
-#[cfg(feature = "test-file-credential-store")]
-impl TestFileCredentialStore {
+impl FileCredentialStore {
     pub fn new(root: PathBuf) -> Self {
         Self { root }
     }
@@ -184,9 +168,8 @@ impl TestFileCredentialStore {
     }
 }
 
-#[cfg(feature = "test-file-credential-store")]
 #[async_trait]
-impl CredentialStore for TestFileCredentialStore {
+impl CredentialStore for FileCredentialStore {
     async fn get(&self, key: &CredentialKey) -> Result<SecretString, CredentialError> {
         let root = self.root.clone();
         let key = *key;
@@ -276,24 +259,24 @@ impl CredentialStore for TestFileCredentialStore {
     }
 }
 
-#[cfg(all(feature = "test-file-credential-store", unix))]
+#[cfg(unix)]
 fn set_private_directory_permissions(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
 
-#[cfg(all(feature = "test-file-credential-store", not(unix)))]
+#[cfg(not(unix))]
 fn set_private_directory_permissions(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-#[cfg(all(feature = "test-file-credential-store", unix))]
+#[cfg(unix)]
 fn set_private_file_permissions(file: &File) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     file.set_permissions(fs::Permissions::from_mode(0o600))
 }
 
-#[cfg(all(feature = "test-file-credential-store", not(unix)))]
+#[cfg(not(unix))]
 fn set_private_file_permissions(_file: &File) -> std::io::Result<()> {
     Ok(())
 }
@@ -395,11 +378,10 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "test-file-credential-store")]
     #[tokio::test]
-    async fn test_file_store_persists_without_using_a_credential_name_as_a_path() {
+    async fn file_store_persists_with_private_permissions_and_hashed_names() {
         let temporary = tempfile::TempDir::new().unwrap();
-        let store = TestFileCredentialStore::new(temporary.path().join("credentials"));
+        let store = FileCredentialStore::new(temporary.path().join("credentials"));
         let key = CredentialKey::new(CredentialScope::Source);
 
         store

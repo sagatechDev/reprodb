@@ -253,7 +253,7 @@ impl DoctorService {
                     report.checks.push(passed(
                         DoctorSection::Source,
                         "source credential",
-                        "credential is available in the OS store",
+                        "credential is available in the local store",
                     ));
                     Some(password)
                 }
@@ -282,7 +282,7 @@ impl DoctorService {
                     report.checks.push(passed(
                         DoctorSection::Target,
                         "target credential",
-                        "credential is available in the OS store",
+                        "credential is available in the local store",
                     ));
                     Some(password)
                 }
@@ -657,11 +657,11 @@ fn credential_failure(
     action: &'static str,
 ) -> DoctorCheck {
     let detail = match error {
-        CredentialError::NotFound => "credential is missing from the OS store",
+        CredentialError::NotFound => "credential is missing from the local store",
         CredentialError::StoreUnavailable { .. }
         | CredentialError::OperationFailed { .. }
         | CredentialError::BackgroundTaskFailed { .. } => {
-            "the OS credential store could not be accessed"
+            "the local credential store could not be accessed"
         }
     };
     failed(

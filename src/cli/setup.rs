@@ -99,7 +99,7 @@ pub fn render_configured(style: &OutputStyle, configured: &LocalTargetConfigured
          {ok} Docker context: {context}\n\
          {ok} Restore policy: any valid non-administrative database name\n\
          {ok} Target trust: {trust}\n\
-         {ok} Password saved in the OS credential store\n\
+         {ok} Password saved in the private local credential store\n\
          {ok} Local target {container} saved\n",
         ok = style.success("✓"),
         vendor = configured.vendor,

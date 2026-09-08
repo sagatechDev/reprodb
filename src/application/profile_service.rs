@@ -123,7 +123,7 @@ pub enum ProfileServiceError {
     Provision(#[from] CredentialProvisionError),
 
     #[error(
-        "profile was removed, but credential `{orphaned_key}` could not be deleted; retry cleanup from the OS credential store"
+        "profile was removed, but credential `{orphaned_key}` could not be deleted; retry cleanup from the local credential store"
     )]
     CredentialCleanup {
         orphaned_key: CredentialKey,

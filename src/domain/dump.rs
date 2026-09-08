@@ -216,6 +216,8 @@ impl Mysql8DumpPolicy {
             arguments: vec![
                 "--single-transaction".to_owned(),
                 "--quick".to_owned(),
+                "--compression-algorithms=zstd,uncompressed".to_owned(),
+                "--zstd-compression-level=1".to_owned(),
                 "--no-tablespaces".to_owned(),
                 "--hex-blob".to_owned(),
                 "--set-gtid-purged=OFF".to_owned(),
@@ -336,6 +338,8 @@ mod tests {
             [
                 "--single-transaction",
                 "--quick",
+                "--compression-algorithms=zstd,uncompressed",
+                "--zstd-compression-level=1",
                 "--no-tablespaces",
                 "--hex-blob",
                 "--set-gtid-purged=OFF",

@@ -33,7 +33,7 @@ pub fn render_created(style: &OutputStyle, created: &ProfileCreated) -> String {
          {ok} Approved MySQL client ready: {client}\n\
          {ok} Docker context: {context}\n\
          {ok} TLS mode: {tls}\n\
-         {ok} Password saved in the OS credential store\n\
+         {ok} Password saved in the private local credential store\n\
          {ok} Source profile {name} saved and activated\n",
         ok = style.success("✓"),
         vendor = created.vendor,
@@ -98,7 +98,7 @@ pub fn render_removed(style: &OutputStyle, name: &ProfileName, removal: ProfileR
     );
     if removal.credential_was_missing {
         output.push_str(&format!(
-            "{} Its credential was already absent from the OS credential store.\n",
+            "{} Its credential was already absent from the local credential store.\n",
             style.attention("!")
         ));
     }

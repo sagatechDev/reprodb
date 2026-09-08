@@ -7,9 +7,9 @@ pub use option_file::{
     OptionFileError,
 };
 pub use store::{
-    CredentialError, CredentialOperation, CredentialStore, MemoryCredentialStore,
-    OsCredentialStore, RuntimeCredentialStore,
+    CredentialError, CredentialOperation, CredentialStore, FileCredentialStore,
+    MemoryCredentialStore, OsCredentialStore, RuntimeCredentialStore,
 };
 
 #[cfg(feature = "test-file-credential-store")]
-pub use store::TestFileCredentialStore;
+pub use store::FileCredentialStore as TestFileCredentialStore;
