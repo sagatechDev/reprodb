@@ -40,9 +40,12 @@ where
         if target.server_uuid() == &metadata.source_server_uuid {
             return Err(RestoreEngineError::SourceTargetCollision);
         }
-        if mysql_series(target.server_version()) != mysql_series(metadata.source_version)
-            || mysql_series(target.client().version()) != mysql_series(metadata.client_version)
-        {
+        if !versions_are_restore_compatible(
+            metadata.source_version,
+            metadata.client_version,
+            target.server_version(),
+            target.client().version(),
+        ) {
             return Err(RestoreEngineError::VersionMismatch);
         }
 
@@ -75,6 +78,20 @@ where
 
 fn mysql_series(version: crate::domain::MysqlVersion) -> (u16, u16) {
     (version.major, version.minor)
+}
+
+fn versions_are_restore_compatible(
+    source_server: crate::domain::MysqlVersion,
+    source_client: crate::domain::MysqlVersion,
+    target_server: crate::domain::MysqlVersion,
+    target_client: crate::domain::MysqlVersion,
+) -> bool {
+    let source = mysql_series(source_server);
+    let target = mysql_series(target_server);
+    source == mysql_series(source_client)
+        && target == mysql_series(target_client)
+        && source_server.major == target_server.major
+        && target >= source
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -155,6 +172,30 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn permits_same_series_and_mysql_8_0_to_8_4_but_rejects_downgrades() {
+        let version = |value: &str| value.parse::<MysqlVersion>().unwrap();
+
+        assert!(versions_are_restore_compatible(
+            version("8.0.45"),
+            version("8.0.46"),
+            version("8.4.4"),
+            version("8.4.4"),
+        ));
+        assert!(versions_are_restore_compatible(
+            version("8.4.4"),
+            version("8.4.4"),
+            version("8.4.5"),
+            version("8.4.5"),
+        ));
+        assert!(!versions_are_restore_compatible(
+            version("8.4.4"),
+            version("8.4.4"),
+            version("8.0.45"),
+            version("8.0.46"),
+        ));
+    }
 
     struct FakeExecutor {
         calls: Arc<Mutex<Vec<&'static str>>>,
