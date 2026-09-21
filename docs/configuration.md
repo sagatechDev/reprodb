@@ -15,10 +15,22 @@ Isso vale para macOS e Linux. Testes, CI ou instalações que precisem de isolam
 
 A primeira leitura sem arquivo retorna uma configuração vazia na versão atual sem criar nada no disco. A primeira alteração cria o diretório e persiste o documento.
 
+## Versão do schema e migração
+
+`schema_version` descreve o formato do arquivo, e todo campo adicionado, renomeado ou removido exige bumpar `CURRENT_SCHEMA_VERSION` junto com um passo em `migrate_to_current_schema`. Sem isso, um arquivo antigo se declara atual, passa na checagem de versão e só então é recusado pela desserialização estrita — sem caminho de volta, já que todo comando de recuperação também precisa carregar a config.
+
+Ao ler uma versão anterior, o reprodb migra o documento em memória e reescreve o arquivo. A reescrita é conveniência, não pré-requisito: um diretório somente leitura não impede o comando de funcionar. Cada passo é idempotente, então um arquivo migrado pela metade continua recuperável.
+
+Versão 2 removeu o modelo de tenant: os blocos `[profiles.*.tenant_resolver]` e a chave `central_database` do target local. Profiles, credenciais e o target sobrevivem intactos.
+
+Uma versão **maior** que a suportada é recusada de imediato, em vez de virar uma enxurrada de campos desconhecidos.
+
+Quando o arquivo não é recuperável, `reprodb setup --reset-config` começa do zero preservando o original como `reprodb.toml.bak-<timestamp>`. A recusa nomeia o campo e a linha, mas nunca reproduz o conteúdo do arquivo: renderizar o erro do parser colocaria uma senha mal-posicionada dentro da mensagem e dos logs.
+
 ## Formato inicial
 
 ```toml
-schema_version = 1
+schema_version = 2
 active_profile = "local-source"
 
 [client_runtime]

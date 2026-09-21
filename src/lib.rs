@@ -80,6 +80,11 @@ pub async fn execute_with_cancellation(
         }
         Commands::Setup(arguments) => {
             let repository = ConfigRepository::discover()?;
+            if arguments.reset_config {
+                let backup = repository.reset()?;
+                print!("{}", cli::setup::render_config_reset(&style, &backup));
+                std::io::stdout().flush().map_err(AppError::Output)?;
+            }
             let service = application::SetupService::new(repository);
             let discovery = infrastructure::docker::DockerTargetDiscovery::new(
                 infrastructure::process::TokioProcessRunner,

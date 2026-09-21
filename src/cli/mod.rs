@@ -105,6 +105,11 @@ pub struct SetupArgs {
     #[arg(long, conflicts_with = "non_interactive")]
     pub preview: bool,
 
+    /// Start from an empty configuration, keeping the current file as a backup.
+    /// Use when the stored configuration can no longer be read.
+    #[arg(long, conflicts_with = "preview")]
+    pub reset_config: bool,
+
     /// Configure using flags and a password read from stdin.
     #[arg(long)]
     pub non_interactive: bool,

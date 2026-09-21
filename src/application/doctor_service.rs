@@ -153,12 +153,14 @@ impl DoctorService {
                 });
                 Some(config)
             }
-            Err(_) => {
+            Err(error) => {
+                // The message already names the field and its line without
+                // quoting the file, and doctor is where a developer looks first.
                 report.checks.push(failed(
                     DoctorSection::Configuration,
                     "configuration",
-                    "configuration could not be loaded or validated",
-                    "Review the TOML or recreate it with `reprodb setup`.",
+                    error.to_string(),
+                    "Fix the field above, or start over with `reprodb setup --reset-config`, which keeps a backup.",
                     DoctorFailureKind::Configuration,
                 ));
                 None
@@ -1015,6 +1017,42 @@ mod tests {
         assert!(report.checks.iter().any(|check| {
             check.label == "source connection" && check.status == DoctorStatus::Skipped
         }));
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_configuration_names_the_field_without_quoting_the_file() {
+        let temp = TempDir::new().unwrap();
+        let repository = repository(&temp);
+        std::fs::create_dir_all(repository.paths().config_dir()).unwrap();
+        let marker = "a-password-that-must-not-leak";
+        std::fs::write(
+            repository.paths().config_file(),
+            format!(
+                "schema_version = 2\n\n[local_target]\nbogus_field = 1\npassword = \"{marker}\"\n"
+            ),
+        )
+        .unwrap();
+
+        let report = DoctorService::new(repository)
+            .run(
+                &MemoryCredentialStore::default(),
+                &docker_inventory(ContainerId::try_from("a".repeat(64)).unwrap()),
+                &sufficient_storage(),
+                &successful_source(),
+                &successful_target(),
+            )
+            .await;
+
+        let check = report
+            .checks
+            .iter()
+            .find(|check| check.label == "configuration")
+            .unwrap();
+        assert_eq!(check.status, DoctorStatus::Failed);
+        assert!(check.detail.contains("bogus_field"), "{}", check.detail);
+        assert!(check.detail.contains("line 4"), "{}", check.detail);
+        // Rendering the parser's own Display would put the password here.
+        assert!(!format!("{check:?}").contains(marker));
     }
 
     #[tokio::test]

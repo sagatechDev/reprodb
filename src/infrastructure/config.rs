@@ -18,7 +18,11 @@ use crate::domain::{
 };
 use crate::infrastructure::mysql::{ClientCatalog, ClientCatalogError};
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+/// Bump this whenever a stored field is added, renamed or removed, and teach
+/// [`migrate_to_current_schema`] how to get there from the previous version.
+/// Leaving it behind makes an outdated file claim to be current, which strict
+/// deserialization then rejects with no way to recover.
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 const CONFIG_FILE_NAME: &str = "reprodb.toml";
 const LOCK_FILE_NAME: &str = "reprodb.lock";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -397,6 +401,75 @@ impl MysqlClientConfig {
     }
 }
 
+/// Rewrites a stored document in place until it matches the current schema.
+///
+/// Returns whether anything changed, so the caller can persist the upgrade.
+/// Each step is idempotent: running it on an already-current document is a
+/// no-op, which keeps a partially migrated file recoverable.
+fn migrate_to_current_schema(document: &mut toml::Table, stored_version: u32) -> bool {
+    let mut migrated = false;
+    if stored_version < 2 {
+        migrated |= migrate_v1_to_v2(document);
+    }
+    if migrated || stored_version < CURRENT_SCHEMA_VERSION {
+        document.insert(
+            "schema_version".to_owned(),
+            toml::Value::Integer(i64::from(CURRENT_SCHEMA_VERSION)),
+        );
+        migrated = true;
+    }
+    migrated
+}
+
+/// Drops the tenant model that schema 2 removed.
+///
+/// Both shapes are dead weight rather than data worth keeping: the resolver
+/// described how to map a tenant onto a database, and `central_database` named
+/// the catalog it was resolved against. Profiles, credentials and the local
+/// target survive untouched.
+fn migrate_v1_to_v2(document: &mut toml::Table) -> bool {
+    let mut migrated = false;
+    if let Some(toml::Value::Table(target)) = document.get_mut("local_target") {
+        migrated |= target.remove("central_database").is_some();
+    }
+    if let Some(toml::Value::Table(targets)) = document.get_mut("local_targets") {
+        for (_, target) in targets.iter_mut() {
+            if let toml::Value::Table(target) = target {
+                migrated |= target.remove("central_database").is_some();
+            }
+        }
+    }
+    if let Some(toml::Value::Table(profiles)) = document.get_mut("profiles") {
+        for (_, profile) in profiles.iter_mut() {
+            if let toml::Value::Table(profile) = profile {
+                migrated |= profile.remove("tenant_resolver").is_some();
+            }
+        }
+    }
+    migrated
+}
+
+/// Describes a rejected configuration without quoting the file.
+///
+/// `toml`'s `Display` renders the offending source line, which would put a
+/// stray `password = "..."` straight into an error message and the logs. Only
+/// the parser's own message and a line number are safe to surface.
+fn invalid_toml(contents: &str, error: &toml::de::Error) -> ConfigError {
+    let line = error.span().map_or(1, |span| {
+        contents
+            .get(..span.start)
+            .unwrap_or_default()
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count()
+            + 1
+    });
+    ConfigError::InvalidToml {
+        location: format!("the reprodb configuration at line {line}"),
+        detail: error.message().to_owned(),
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("could not determine the user home directory for reprodb")]
@@ -413,8 +486,8 @@ pub enum ConfigError {
         source: io::Error,
     },
 
-    #[error("the reprodb configuration is not valid TOML or contains unsupported fields")]
-    InvalidToml,
+    #[error("{location} is not usable: {detail}")]
+    InvalidToml { location: String, detail: String },
 
     #[error("the reprodb configuration is larger than the 1 MiB safety limit")]
     ConfigTooLarge,
@@ -497,9 +570,76 @@ impl ConfigRepository {
             return Err(ConfigError::ConfigTooLarge);
         }
 
-        let config: AppConfig = toml::from_str(&contents).map_err(|_| ConfigError::InvalidToml)?;
+        let mut document = toml::from_str::<toml::Table>(&contents)
+            .map_err(|error| invalid_toml(&contents, &error))?;
+
+        // A file from the future cannot be understood by guessing; say so before
+        // strict deserialization buries it under unknown-field noise.
+        let stored_version = document
+            .get("schema_version")
+            .and_then(toml::Value::as_integer)
+            .and_then(|version| u32::try_from(version).ok())
+            .unwrap_or(CURRENT_SCHEMA_VERSION);
+        if stored_version > CURRENT_SCHEMA_VERSION {
+            return Err(ConfigError::UnsupportedSchemaVersion {
+                found: stored_version,
+                supported: CURRENT_SCHEMA_VERSION,
+            });
+        }
+
+        let migrated = migrate_to_current_schema(&mut document, stored_version);
+        // Deserializing the original text keeps the parser's source spans, so a
+        // rejection can name the offending line. A migrated document has been
+        // rewritten in memory and no longer maps onto the file, so pointing at a
+        // line there would be a guess.
+        let config: AppConfig = if migrated {
+            document
+                .try_into()
+                .map_err(|error: toml::de::Error| ConfigError::InvalidToml {
+                    location: "the reprodb configuration".to_owned(),
+                    detail: error.message().to_owned(),
+                })?
+        } else {
+            toml::from_str(&contents).map_err(|error| invalid_toml(&contents, &error))?
+        };
         config.validate()?;
+
+        // Persisting is a convenience, not a precondition: a read-only config
+        // directory must not break a command that only needed to read.
+        if migrated {
+            let _ = self.save(&config);
+        }
         Ok(config)
+    }
+
+    /// Replaces an unreadable configuration with a fresh one, keeping the
+    /// original as a timestamped backup.
+    ///
+    /// Recovery from a file we cannot parse necessarily discards what it held,
+    /// so the caller must have asked for this explicitly and the old bytes are
+    /// always preserved next to the new file.
+    pub fn reset(&self) -> Result<PathBuf, ConfigError> {
+        self.prepare_config_directory()?;
+        let path = self.paths.config_file();
+        let backup = path.with_extension(format!(
+            "toml.bak-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_secs())
+        ));
+        match fs::rename(&path, &backup) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(ConfigError::Io {
+                    operation: "back up",
+                    path,
+                    source,
+                });
+            }
+        }
+        self.save(&AppConfig::default())?;
+        Ok(backup)
     }
 
     pub fn save(&self, config: &AppConfig) -> Result<(), ConfigError> {
@@ -811,7 +951,7 @@ mod tests {
 
         assert_eq!(repository.load().unwrap(), expected);
         let contents = fs::read_to_string(repository.paths().config_file()).unwrap();
-        assert!(contents.contains("schema_version = 1"));
+        assert!(contents.contains("schema_version = 2"));
         assert!(!contents.contains("password"));
     }
 
@@ -872,6 +1012,147 @@ mod tests {
         assert!(repository.save(&misnamed).is_err());
     }
 
+    /// The exact shape written by builds before the tenant model was dropped.
+    const SCHEMA_V1_WITH_TENANT_MODEL: &str = r#"schema_version = 1
+active_profile = "production"
+
+[client_runtime]
+type = "docker"
+docker_context = "desktop-linux"
+
+[local_target]
+docker_context = "desktop-linux"
+container_name = "mysql-8"
+container_id = "62a9bfe47f1c1124d518f17eddf5c32b4ebfb4c8aa8f3af78bd61d554d3b599f"
+username = "root"
+credential_key = "target:74e31bf9-2604-41b1-95ff-534514f24eab"
+central_database = "salt_central"
+trust = "user-confirmed"
+
+[profiles.production]
+host = "db.example.com"
+port = 3306
+username = "admin"
+credential_key = "source:869b6b57-1b09-42d1-8731-ccd773912404"
+mysql_family = "mysql"
+mysql_series = "8.4"
+production = false
+tls_mode = "preferred"
+
+[profiles.production.client]
+image = "mysql:8.4.4@sha256:1d967fb75a64dc3c2894c69285becfc2304ae0c3c4f4c715c297f3c12d60b01c"
+
+[profiles.production.tenant_resolver]
+type = "pattern"
+pattern = "{tenant}"
+"#;
+
+    #[test]
+    fn a_schema_1_config_is_migrated_instead_of_rejected() {
+        let temp = TempDir::new().unwrap();
+        let repository = test_repository(&temp);
+        fs::create_dir_all(repository.paths().config_dir()).unwrap();
+        fs::write(
+            repository.paths().config_file(),
+            SCHEMA_V1_WITH_TENANT_MODEL,
+        )
+        .unwrap();
+
+        let config = repository.load().unwrap();
+
+        // What the tenant model described is gone; everything a developer
+        // configured survives.
+        assert_eq!(config.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            config.active_profile,
+            Some(ProfileName::try_from("production").unwrap())
+        );
+        assert_eq!(config.profiles.len(), 1);
+        assert_eq!(
+            config
+                .local_target
+                .as_ref()
+                .unwrap()
+                .container_name
+                .as_str(),
+            "mysql-8"
+        );
+        assert_eq!(
+            config.profiles[&ProfileName::try_from("production").unwrap()].host,
+            "db.example.com".to_owned()
+        );
+    }
+
+    #[test]
+    fn a_migrated_config_is_written_back_and_loads_again_unchanged() {
+        let temp = TempDir::new().unwrap();
+        let repository = test_repository(&temp);
+        fs::create_dir_all(repository.paths().config_dir()).unwrap();
+        fs::write(
+            repository.paths().config_file(),
+            SCHEMA_V1_WITH_TENANT_MODEL,
+        )
+        .unwrap();
+
+        let first = repository.load().unwrap();
+        let contents = fs::read_to_string(repository.paths().config_file()).unwrap();
+
+        assert!(contents.contains("schema_version = 2"));
+        assert!(!contents.contains("tenant_resolver"));
+        assert!(!contents.contains("central_database"));
+        assert_eq!(repository.load().unwrap(), first);
+    }
+
+    #[test]
+    fn migrating_an_already_current_document_changes_nothing() {
+        let mut document = toml::from_str::<toml::Table>(
+            "schema_version = 2\n\n[profiles.local]\nhost = \"127.0.0.1\"\n",
+        )
+        .unwrap();
+        let before = document.clone();
+
+        assert!(!migrate_to_current_schema(
+            &mut document,
+            CURRENT_SCHEMA_VERSION
+        ));
+        assert_eq!(document, before);
+    }
+
+    #[test]
+    fn the_rejection_names_the_field_and_its_line() {
+        let temp = TempDir::new().unwrap();
+        let repository = test_repository(&temp);
+        fs::create_dir_all(repository.paths().config_dir()).unwrap();
+        fs::write(
+            repository.paths().config_file(),
+            "schema_version = 2\n\n[local_target]\nnot_a_field = 1\n",
+        )
+        .unwrap();
+
+        let error = repository.load().unwrap_err();
+
+        let rendered = error.to_string();
+        assert!(rendered.contains("not_a_field"), "{rendered}");
+        assert!(rendered.contains("line 4"), "{rendered}");
+    }
+
+    #[test]
+    fn resetting_keeps_the_unreadable_file_as_a_backup() {
+        let temp = TempDir::new().unwrap();
+        let repository = test_repository(&temp);
+        fs::create_dir_all(repository.paths().config_dir()).unwrap();
+        fs::write(repository.paths().config_file(), "this is not ( toml").unwrap();
+        assert!(repository.load().is_err());
+
+        let backup = repository.reset().unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&backup).unwrap(),
+            "this is not ( toml".to_owned()
+        );
+        assert_eq!(repository.load().unwrap(), AppConfig::default());
+    }
+
     #[test]
     fn rejects_invalid_toml_without_echoing_its_contents() {
         let temp = TempDir::new().unwrap();
@@ -885,7 +1166,7 @@ mod tests {
         .unwrap();
 
         let error = repository.load().unwrap_err();
-        assert!(matches!(error, ConfigError::InvalidToml));
+        assert!(matches!(error, ConfigError::InvalidToml { .. }));
         assert!(!error.to_string().contains(marker));
         assert!(!format!("{error:?}").contains(marker));
     }
@@ -903,7 +1184,7 @@ mod tests {
         .unwrap();
 
         let error = repository.load().unwrap_err();
-        assert!(matches!(error, ConfigError::InvalidToml));
+        assert!(matches!(error, ConfigError::InvalidToml { .. }));
         assert!(!error.to_string().contains(marker));
         assert!(!format!("{error:?}").contains(marker));
     }
@@ -913,10 +1194,10 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let repository = test_repository(&temp);
         fs::create_dir_all(repository.paths().config_dir()).unwrap();
-        fs::write(repository.paths().config_file(), "schema_version = 2\n").unwrap();
+        fs::write(repository.paths().config_file(), "schema_version = 3\n").unwrap();
         assert!(matches!(
             repository.load(),
-            Err(ConfigError::UnsupportedSchemaVersion { found: 2, .. })
+            Err(ConfigError::UnsupportedSchemaVersion { found: 3, .. })
         ));
 
         fs::write(

@@ -6,6 +6,14 @@ use crate::{
     },
 };
 
+pub fn render_config_reset(style: &OutputStyle, backup: &std::path::Path) -> String {
+    format!(
+        "{} Previous configuration kept at {}\n",
+        style.attention("!"),
+        style.value(&backup.display().to_string()),
+    )
+}
+
 pub fn render_discovered(
     style: &OutputStyle,
     context: &str,
