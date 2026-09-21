@@ -192,11 +192,19 @@ cargo test
 ./scripts/preview-cli.sh   # percorre a UX sem tocar em Docker/MySQL/Keychain
 ```
 
-Testes que precisam de Docker real são `#[ignore]`:
+Testes que precisam de Docker real são `#[ignore]`. Eles usam seu MySQL local, então o ambiente é escolhido por variáveis:
 
 ```bash
-cargo test --test pull_integration -- --ignored --nocapture
+# container e context (defaults: mysql-8 / desktop-linux)
+export REPRODB_TEST_MYSQL_CONTAINER=mysql-8
+export REPRODB_TEST_DOCKER_CONTEXT=desktop-linux
+# um database que já exista nesse container
+export REPRODB_TEST_DATABASE=meu_banco
+
+cargo test -- --ignored --test-threads=1
 ```
+
+`--test-threads=1` importa: os dois testes de `pull` sobem containers próprios e disputam recursos do Docker se rodarem em paralelo.
 
 **Release**: suba a versão no `Cargo.toml`, crie a tag (`git tag v0.2.0 && git push --tags`) e o workflow [`release.yml`](.github/workflows/release.yml) compila os três alvos, gera `SHA256SUMS` e publica o release.
 

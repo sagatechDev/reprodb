@@ -151,7 +151,7 @@ impl FromStr for Sha256Digest {
             return Err(invalid());
         }
         let mut bytes = [0_u8; 32];
-        for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             bytes[index] = (lowercase_hex_digit(pair[0]).ok_or_else(invalid)? << 4)
                 | lowercase_hex_digit(pair[1]).ok_or_else(invalid)?;
         }

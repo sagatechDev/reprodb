@@ -22,10 +22,12 @@ use secrecy::{SecretString, zeroize::Zeroize};
 use tempfile::TempDir;
 
 #[tokio::test]
-#[ignore = "requires the local mysql-8 container with acme_production and the approved client image"]
+#[ignore = "requires a local MySQL container, REPRODB_TEST_DATABASE and the approved client image"]
 async fn dumps_a_real_local_database_into_a_managed_zstd_artifact() {
     let container =
         std::env::var("REPRODB_TEST_MYSQL_CONTAINER").unwrap_or_else(|_| "mysql-8".to_owned());
+    let database = std::env::var("REPRODB_TEST_DATABASE")
+        .expect("set REPRODB_TEST_DATABASE to an existing database on the local MySQL fixture");
     let docker_context = current_docker_context();
     let password = local_container_root_password(&container);
     let temp = TempDir::new().unwrap();
@@ -75,12 +77,12 @@ async fn dumps_a_real_local_database_into_a_managed_zstd_artifact() {
             &credentials,
             &workflow,
             &DockerMysqlDumpExecutor::default(),
-            DatabaseName::try_from("acme_production").unwrap(),
+            DatabaseName::try_from(database.as_str()).unwrap(),
         )
         .await
         .unwrap();
 
-    assert_eq!(created.database.as_str(), "acme_production");
+    assert_eq!(created.database.as_str(), database.as_str());
     assert!(created.uncompressed_bytes > created.compressed_bytes);
     let sql = zstd::stream::decode_all(
         std::fs::File::open(created.artifact_path.join("dump.sql.zst")).unwrap(),

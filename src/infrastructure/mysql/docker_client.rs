@@ -1087,8 +1087,8 @@ mod tests {
         use crate::infrastructure::process::TokioProcessRunner;
 
         let client = ClientCatalog::resolve("8.4").unwrap();
-        let context =
-            std::env::var("REPRODB_TEST_DOCKER_CONTEXT").unwrap_or_else(|_| "default".to_owned());
+        let context = std::env::var("REPRODB_TEST_DOCKER_CONTEXT")
+            .unwrap_or_else(|_| "desktop-linux".to_owned());
         let runtime = DockerMysqlClientRuntime::new(TokioProcessRunner);
 
         let prepared = runtime

@@ -213,7 +213,7 @@ fn decode_hex(value: &str, max_decoded_bytes: usize) -> Result<String, DumpPrefl
         return Err(DumpPreflightError::InvalidMetadata);
     }
     let mut decoded = Vec::with_capacity(value.len() / 2);
-    for pair in value.as_bytes().chunks_exact(2) {
+    for pair in value.as_bytes().as_chunks::<2>().0 {
         let high = hex_digit(pair[0]).ok_or(DumpPreflightError::InvalidMetadata)?;
         let low = hex_digit(pair[1]).ok_or(DumpPreflightError::InvalidMetadata)?;
         decoded.push((high << 4) | low);
@@ -417,15 +417,22 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires the local mysql-8 Docker fixture on port 3306"]
-    async fn preflights_the_local_acme_production_database_read_only() {
-        let docker_context = "desktop-linux";
+    #[ignore = "requires a local MySQL Docker fixture on port 3306"]
+    async fn preflights_a_local_database_read_only() {
+        // The developer machine decides which container, context and database
+        // this runs against; nothing here may assume a specific deployment.
+        let docker_context = std::env::var("REPRODB_TEST_DOCKER_CONTEXT")
+            .unwrap_or_else(|_| "desktop-linux".to_owned());
+        let container =
+            std::env::var("REPRODB_TEST_MYSQL_CONTAINER").unwrap_or_else(|_| "mysql-8".to_owned());
+        let database = std::env::var("REPRODB_TEST_DATABASE")
+            .expect("set REPRODB_TEST_DATABASE to an existing database on the local MySQL fixture");
         let client = ClientCatalog::resolve("8.4").unwrap();
-        let password = local_container_root_password(docker_context, "mysql-8");
+        let password = local_container_root_password(&docker_context, &container);
         let assessor = DockerMysqlDumpPreflight::new(
             crate::infrastructure::process::TokioProcessRunner,
             DumpPreflightSource {
-                docker_context: docker_context.to_owned(),
+                docker_context: docker_context.clone(),
                 host: "127.0.0.1".to_owned(),
                 port: 3306,
                 username: "root".to_owned(),
@@ -437,7 +444,7 @@ mod tests {
         );
 
         let approved = assessor
-            .assess(&DatabaseName::try_from("acme_production").unwrap())
+            .assess(&DatabaseName::try_from(database.as_str()).unwrap())
             .await
             .unwrap();
 
@@ -452,7 +459,7 @@ mod tests {
         );
         assert_eq!(
             approved.plan.arguments().last().map(String::as_str),
-            Some("acme_production")
+            Some(database.as_str())
         );
     }
 
