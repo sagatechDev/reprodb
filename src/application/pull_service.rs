@@ -13,7 +13,7 @@ use crate::{
         artifact_store::LocalArtifactStore,
         cache::{
             CacheDatabaseLookup, CacheError, CacheLookupResult, CacheMissReason,
-            DEFAULT_CACHE_TTL_SECONDS, LocalCacheValidator,
+            LocalCacheValidator, PULL_FRESHNESS_TTL_SECONDS,
         },
         compression::{CompressionProgressObserver, NoCompressionProgress},
         config::{ConfigError, ConfigRepository, source_profile_fingerprint},
@@ -186,7 +186,7 @@ where
                     source_fingerprint: source_profile_fingerprint(profile_name, profile),
                     policy_version: MYSQL_8_DUMP_POLICY_VERSION,
                     now_unix_seconds: now,
-                    ttl_seconds: DEFAULT_CACHE_TTL_SECONDS,
+                    ttl_seconds: PULL_FRESHNESS_TTL_SECONDS,
                     fresh,
                 })?;
 
@@ -238,9 +238,10 @@ where
                 credentials,
                 restore.target_attestor,
                 restore.executor,
+                &crate::application::NoRestoreDumpSelector,
                 RestoreRequest {
                     database,
-                    dump_id,
+                    dump_id: Some(dump_id),
                     target_container: Some(target_container),
                     target_database: Some(target_database),
                 },

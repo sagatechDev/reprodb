@@ -48,7 +48,7 @@ pub enum Commands {
     /// Dump and restore a source database into the configured local target.
     Pull(PullArgs),
 
-    /// Inspect and clean the local dump cache.
+    /// Inspect and prune the local dump cache.
     Cache(CacheArgs),
 
     /// Inspect databases available in the active source profile.
@@ -235,9 +235,9 @@ pub struct RestoreArgs {
     #[arg(value_name = "DATABASE")]
     pub database: String,
 
-    /// ID of a dump managed by reprodb.
+    /// ID of a dump managed by reprodb. Omit to choose from the stored dumps.
     #[arg(long, value_name = "ID")]
-    pub dump_id: String,
+    pub dump_id: Option<String>,
 
     /// Restore into this configured local MySQL container.
     #[arg(long, value_name = "CONTAINER")]
@@ -301,12 +301,58 @@ pub enum CacheCommands {
     /// List complete dump artifacts.
     List,
 
-    /// Remove expired and abandoned artifacts.
-    Clean,
-
-    /// Remove cached dumps for one tenant.
-    Purge(DatabaseArgs),
+    /// Permanently remove managed dumps.
+    Prune(PruneArgs),
 }
+
+#[derive(Debug, Args)]
+pub struct PruneArgs {
+    /// Limit the removal to one database, across every profile.
+    #[arg(value_name = "DATABASE")]
+    pub database: Option<String>,
+
+    /// Remove dumps at least this old, for example `24h`, `3d` or `90m`.
+    #[arg(long, value_name = "DURATION", conflicts_with_all = ["keep_last", "all"])]
+    pub older_than: Option<String>,
+
+    /// Keep the newest N dumps of every profile and database pair.
+    #[arg(long, value_name = "N", conflicts_with_all = ["older_than", "all"])]
+    pub keep_last: Option<usize>,
+
+    /// Remove every dump in scope.
+    #[arg(long, conflicts_with_all = ["older_than", "keep_last"])]
+    pub all: bool,
+
+    /// Skip the confirmation prompt.
+    #[arg(long)]
+    pub yes: bool,
+}
+
+/// Parses `90m`, `24h`, `3d` or a bare number of seconds.
+pub fn parse_duration_seconds(input: &str) -> Result<u64, DurationParseError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(DurationParseError(input.to_owned()));
+    }
+    let (digits, multiplier) = match trimmed.as_bytes()[trimmed.len() - 1] {
+        b's' => (&trimmed[..trimmed.len() - 1], 1),
+        b'm' => (&trimmed[..trimmed.len() - 1], 60),
+        b'h' => (&trimmed[..trimmed.len() - 1], 60 * 60),
+        b'd' => (&trimmed[..trimmed.len() - 1], 24 * 60 * 60),
+        _ => (trimmed, 1),
+    };
+    digits
+        .parse::<u64>()
+        .ok()
+        .and_then(|value| value.checked_mul(multiplier))
+        .ok_or_else(|| DurationParseError(input.to_owned()))
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "invalid duration `{0}`; use a number optionally suffixed with s, m, h or d, for example `24h`"
+)]
+pub struct DurationParseError(String);
 
 #[cfg(test)]
 mod tests {
@@ -502,7 +548,7 @@ mod tests {
             panic!("expected restore command");
         };
         assert_eq!(arguments.database, "acme");
-        assert_eq!(arguments.dump_id, "dump-123");
+        assert_eq!(arguments.dump_id.as_deref(), Some("dump-123"));
         assert!(arguments.target.is_none());
         assert!(arguments.target_database.is_none());
     }

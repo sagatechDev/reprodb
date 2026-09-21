@@ -11,8 +11,7 @@ mod restore_service;
 mod setup_service;
 
 pub use cache_service::{
-    CacheListEntry, CacheListReport, CacheListStatus, CachePurgeReady, CacheService,
-    CacheServiceError,
+    CacheListEntry, CacheListReport, CacheListStatus, CacheService, CacheServiceError,
 };
 pub use credential_transaction::{CredentialProvisionError, persist_config_with_credential};
 pub use database_catalog_service::{
@@ -45,8 +44,9 @@ pub use pull_service::{
 };
 pub use restore_engine::{RestoreCompleted, RestoreEngine, RestoreEngineError};
 pub use restore_service::{
-    NoRestoreProgress, RestorePlan, RestoreProgress, RestoreProgressObserver, RestoreReady,
-    RestoreRequest, RestoreService, RestoreServiceError,
+    NoRestoreDumpSelector, NoRestoreProgress, RestoreDumpChoice, RestoreDumpSelector, RestorePlan,
+    RestoreProgress, RestoreProgressObserver, RestoreReady, RestoreRequest, RestoreSelectionError,
+    RestoreService, RestoreServiceError,
 };
 pub use setup_service::{
     LocalTargetConfigured, LocalTargetVerifier, NewLocalTargetInput, SetupService,

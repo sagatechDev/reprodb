@@ -1,5 +1,6 @@
 mod artifact;
 mod dump;
+mod prune;
 mod value_objects;
 
 pub use dump::{
@@ -12,6 +13,7 @@ pub use artifact::{
     DumpArtifactCompletion, DumpArtifactContext, DumpArtifactFormat, DumpArtifactMetadata, DumpId,
     DumpMetadataError,
 };
+pub use prune::{DEFAULT_RETENTION_SECONDS, PruneCandidate, PruneSelection, select_for_prune};
 pub use value_objects::{
     ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseName, MysqlServerUuid,
     MysqlTlsMaterialPaths, MysqlTlsMode, MysqlVersion, ProfileName, Sha256Digest, ValueKind,

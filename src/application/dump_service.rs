@@ -127,9 +127,11 @@ where
         executor: &dyn DumpExecutor,
         database: DatabaseName,
     ) -> Result<DumpCreated, DumpServiceError> {
+        // Sweeps abandoned stagings and interrupted deletions only. Complete
+        // dumps, expired or not, survive until `cache prune` removes them.
         let cleanup_now = self.clock.now_unix_seconds()?;
         LocalCacheCleaner::new(self.repository.paths().cache_dir())
-            .clean(CacheCleanupPolicy::defaults_at(cleanup_now))?;
+            .sweep(CacheCleanupPolicy::defaults_at(cleanup_now))?;
 
         let config = self.repository.load()?;
         let profile_name = config

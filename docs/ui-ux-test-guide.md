@@ -238,8 +238,8 @@ Inspecione então a pasta local e compare os UUIDs, idades e estados de integrid
 
 ```bash
 $REPRODB cache list
-$REPRODB cache clean
-$REPRODB cache purge acme
+$REPRODB cache prune
+$REPRODB cache prune acme --all --yes
 ```
 
 `cache list` lê os dumps completos para validar SHA-256 e pode demorar em caches grandes. `clean` remove somente itens vencidos/abandonados; `purge` remove os dumps do database somente no profile ativo e não altera o database já restaurado no `mysql-8`.

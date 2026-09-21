@@ -20,7 +20,7 @@ use reprodb::{
 };
 
 #[tokio::test]
-async fn cli_lists_and_purges_a_managed_dump_without_accessing_docker_or_credentials() {
+async fn cli_lists_and_prunes_a_managed_dump_without_accessing_docker_or_credentials() {
     let home = tempfile::tempdir().unwrap();
     let paths = AppPaths::from_root(home.path());
     let repository = ConfigRepository::new(paths.clone());
@@ -102,7 +102,7 @@ async fn cli_lists_and_purges_a_managed_dump_without_accessing_docker_or_credent
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("✓ ready  acme_production")
+            predicate::str::contains("✓ fresh  acme_production")
                 .and(predicate::str::contains("Profile: local-source"))
                 .and(predicate::str::contains(dump_id.to_string())),
         );
@@ -110,13 +110,21 @@ async fn cli_lists_and_purges_a_managed_dump_without_accessing_docker_or_credent
     Command::cargo_bin("reprodb")
         .unwrap()
         .env("REPRODB_HOME", home.path())
-        .args(["cache", "purge", "acme_production", "--color", "never"])
+        .args([
+            "cache",
+            "prune",
+            "acme_production",
+            "--all",
+            "--yes",
+            "--color",
+            "never",
+        ])
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("Database: acme_production")
-                .and(predicate::str::contains("Profile:  local-source"))
-                .and(predicate::str::contains("1 managed dump was removed")),
+            predicate::str::contains("Scope:     acme_production")
+                .and(predicate::str::contains("Criterion: every dump"))
+                .and(predicate::str::contains("1 managed dump removed")),
         );
     assert!(!artifact.path().exists());
 

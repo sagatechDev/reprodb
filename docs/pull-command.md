@@ -75,7 +75,7 @@ Um miss mostra que o source será exportado e acompanha bytes, taxa, duração e
 - o restore recebe somente um `AuthorizedLocalTarget` atestado; nunca recebe host, porta, credencial ou profile do source;
 - `Ctrl+C` cancela dump ou restore, aguarda os processos, limpa o estado parcial e retorna 130.
 
-O TTL inicial continua fixado em duas horas. Os comandos de inspeção/limpeza estão disponíveis em [`cache-commands.md`](cache-commands.md); tornar o TTL configurável permanece uma evolução separada.
+O TTL de frescor é de uma hora e continua fixo em código. Ele decide apenas se o `pull` reutiliza o dump: passado esse prazo, o `pull` exporta de novo e o dump anterior permanece no disco, restaurável por `restore`. Os comandos de inspeção e remoção estão em [`cache-commands.md`](cache-commands.md); tornar os prazos configuráveis permanece uma evolução separada.
 
 ## Evidência real
 

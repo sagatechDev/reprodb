@@ -1,9 +1,93 @@
 use std::io::Write as _;
 
 use crate::{
-    application::{RestorePlan, RestoreProgress, RestoreProgressObserver, RestoreReady},
-    cli::{dump::format_bytes, output::OutputStyle},
+    application::{
+        RestoreDumpChoice, RestoreDumpSelector, RestorePlan, RestoreProgress,
+        RestoreProgressObserver, RestoreReady, RestoreSelectionError,
+    },
+    cli::{cache::format_duration, dump::format_bytes, output::OutputStyle, prompt},
+    domain::{DatabaseName, DumpId},
 };
+
+/// Asks the user which stored dump to restore.
+///
+/// Always asks, even when a single dump exists: restore drops and recreates the
+/// local database, so the choice stays explicit on every run.
+pub struct CliRestoreDumpSelector {
+    now_unix_seconds: u64,
+}
+
+impl CliRestoreDumpSelector {
+    pub const fn at(now_unix_seconds: u64) -> Self {
+        Self { now_unix_seconds }
+    }
+
+    /// Ages are cosmetic here, so a clock that cannot be read falls back to the
+    /// epoch and simply renders every dump as "from the future".
+    pub fn new() -> Self {
+        Self::at(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_secs()),
+        )
+    }
+}
+
+impl Default for CliRestoreDumpSelector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RestoreDumpSelector for CliRestoreDumpSelector {
+    fn select(
+        &self,
+        database: &DatabaseName,
+        choices: &[RestoreDumpChoice],
+    ) -> Result<DumpId, RestoreSelectionError> {
+        if choices.is_empty() {
+            return Err(RestoreSelectionError::NoCandidates {
+                database: database.clone(),
+            });
+        }
+        if !prompt::is_interactive() {
+            return Err(RestoreSelectionError::Unavailable(format!(
+                "no terminal to select a dump on; rerun with one of: {}",
+                choices
+                    .iter()
+                    .map(|choice| choice.dump_id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        let labels = choices
+            .iter()
+            .map(|choice| render_choice(self.now_unix_seconds, choice))
+            .collect::<Vec<_>>();
+        let index = prompt::select_restore_dump(&labels)
+            .map_err(|error| RestoreSelectionError::Unavailable(error.to_string()))?;
+        Ok(choices[index].dump_id)
+    }
+}
+
+fn render_choice(now_unix_seconds: u64, choice: &RestoreDumpChoice) -> String {
+    let age = if choice.completed_at_unix_seconds > now_unix_seconds {
+        "from the future".to_owned()
+    } else {
+        format!(
+            "{} ago",
+            format_duration(now_unix_seconds - choice.completed_at_unix_seconds)
+        )
+    };
+    format!(
+        "{}  {:>14}  {:>10}  {}  MySQL {}",
+        choice.dump_id,
+        age,
+        format_bytes(choice.compressed_bytes),
+        choice.profile,
+        choice.source_version,
+    )
+}
 
 pub fn render_start(style: &OutputStyle) -> String {
     format!(

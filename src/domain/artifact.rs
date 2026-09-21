@@ -8,7 +8,7 @@ use crate::domain::{
     DatabaseEncoding, DatabaseName, MysqlServerUuid, MysqlVersion, ProfileName, Sha256Digest,
 };
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DumpId(Uuid);
 
 impl DumpId {

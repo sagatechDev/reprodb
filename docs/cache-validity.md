@@ -16,7 +16,9 @@ O fingerprint SHA-256 usa campos canônicos e separados por tamanho: nome do pro
 
 ## Tempo
 
-O TTL começa em `completed_at`, não no início da exportação. O default é duas horas e o limite é exclusivo: ao atingir exatamente `completed_at + TTL`, o artefato está expirado.
+O TTL de frescor começa em `completed_at`, não no início da exportação. O default é uma hora e o limite é exclusivo: ao atingir exatamente `completed_at + TTL`, o artefato deixa de ser candidato para o `pull`.
+
+Esse TTL responde apenas "o dado está recente?". Ele nunca autoriza remover o artefato: um dump fora do prazo de frescor continua restaurável por `restore` e só é destruído por `cache prune`, que usa a retenção de sete dias descrita em [`cache-commands.md`](cache-commands.md).
 
 Metadata concluída no futuro em relação ao relógio local é rejeitada. Uma soma que ultrapasse o limite de `u64` satura sem transformar um artefato válido em expirado.
 

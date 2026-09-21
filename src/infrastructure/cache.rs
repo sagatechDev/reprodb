@@ -15,7 +15,12 @@ use crate::{
     },
 };
 
-pub const DEFAULT_CACHE_TTL_SECONDS: u64 = 2 * 60 * 60;
+/// How long a dump stays fresh enough for `pull` to reuse it.
+///
+/// This answers "is the data recent?" only. It never authorizes deleting an
+/// artifact: a dump past this TTL is still restorable by `restore` and is
+/// destroyed only by `cache prune`. See [`crate::domain::DEFAULT_RETENTION_SECONDS`].
+pub const PULL_FRESHNESS_TTL_SECONDS: u64 = 60 * 60;
 const MAX_METADATA_BYTES: u64 = 64 * 1024;
 const CHECKSUM_BUFFER_BYTES: usize = 64 * 1024;
 
@@ -86,13 +91,20 @@ pub struct CacheInventoryRequest<'a> {
     pub source_fingerprints: &'a BTreeMap<ProfileName, Sha256Digest>,
     pub policy_version: u32,
     pub now_unix_seconds: u64,
+    /// Freshness TTL: below it `pull` reuses the artifact.
     pub ttl_seconds: u64,
+    /// Retention: at or above it `cache prune` destroys the artifact by default.
+    pub retention_seconds: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CacheEntryStatus {
+    /// Fresh enough for `pull` to reuse.
     Ready,
-    Expired,
+    /// Too old for `pull`, still restorable by `restore`.
+    Stale,
+    /// Past the default retention: `cache prune` removes it.
+    Prunable,
     ProfileMissing,
     SourceChanged,
     PolicyChanged,
@@ -334,8 +346,14 @@ impl LocalCacheValidator {
                     CacheEntryStatus::SourceChanged
                 } else if metadata.completed_at_unix_seconds > request.now_unix_seconds {
                     CacheEntryStatus::ClockInFuture
+                } else if request.now_unix_seconds
+                    >= metadata
+                        .completed_at_unix_seconds
+                        .saturating_add(request.retention_seconds)
+                {
+                    CacheEntryStatus::Prunable
                 } else if request.now_unix_seconds >= expires_at {
-                    CacheEntryStatus::Expired
+                    CacheEntryStatus::Stale
                 } else {
                     CacheEntryStatus::Ready
                 }
@@ -554,7 +572,7 @@ mod tests {
             source_fingerprint: fingerprint(1),
             policy_version: 1,
             now_unix_seconds: 10_000,
-            ttl_seconds: DEFAULT_CACHE_TTL_SECONDS,
+            ttl_seconds: PULL_FRESHNESS_TTL_SECONDS,
             fresh: false,
         }
     }
@@ -596,7 +614,7 @@ mod tests {
                 source_fingerprint: fingerprint(1),
                 policy_version: 1,
                 now_unix_seconds: 10_000,
-                ttl_seconds: DEFAULT_CACHE_TTL_SECONDS,
+                ttl_seconds: PULL_FRESHNESS_TTL_SECONDS,
                 fresh: false,
             })
             .unwrap();
@@ -614,7 +632,7 @@ mod tests {
                     source_fingerprint: fingerprint(1),
                     policy_version: 1,
                     now_unix_seconds: 10_000,
-                    ttl_seconds: DEFAULT_CACHE_TTL_SECONDS,
+                    ttl_seconds: PULL_FRESHNESS_TTL_SECONDS,
                     fresh: false,
                 })
                 .unwrap(),
@@ -644,6 +662,7 @@ mod tests {
                 policy_version: 1,
                 now_unix_seconds: 10_000,
                 ttl_seconds: 200,
+                retention_seconds: 5_000,
             })
             .unwrap();
         assert_eq!(ready.len(), 2);
@@ -655,15 +674,29 @@ mod tests {
             entry.dump_id == incomplete_id && entry.status == CacheEntryStatus::MissingFile
         }));
 
-        let expired = validator
+        // Past the freshness TTL the dump stops being a pull candidate, but it
+        // stays restorable until retention makes it prunable.
+        let stale = validator
             .inspect_all(&CacheInventoryRequest {
                 source_fingerprints: &fingerprints,
                 policy_version: 1,
                 now_unix_seconds: 10_100,
                 ttl_seconds: 200,
+                retention_seconds: 5_000,
             })
             .unwrap();
-        assert_eq!(expired[0].status, CacheEntryStatus::Expired);
+        assert_eq!(stale[0].status, CacheEntryStatus::Stale);
+
+        let prunable = validator
+            .inspect_all(&CacheInventoryRequest {
+                source_fingerprints: &fingerprints,
+                policy_version: 1,
+                now_unix_seconds: 14_900,
+                ttl_seconds: 200,
+                retention_seconds: 5_000,
+            })
+            .unwrap();
+        assert_eq!(prunable[0].status, CacheEntryStatus::Prunable);
 
         let dump_path = directory
             .path()
@@ -679,6 +712,7 @@ mod tests {
                 policy_version: 1,
                 now_unix_seconds: 10_000,
                 ttl_seconds: 200,
+                retention_seconds: 5_000,
             })
             .unwrap();
         assert_eq!(corrupt[0].status, CacheEntryStatus::ChecksumMismatch);

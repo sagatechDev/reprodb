@@ -36,15 +36,17 @@ O cleanup precisa adquirir o mesmo lock em modo exclusivo. Assim ele não remove
 
 ## Cleanup
 
-Defaults:
+A varredura automática, executada no início de todo `dump`, remove somente lixo:
 
-- artefato completo: TTL de duas horas, contado desde `completed_at`;
-- diretório `.part`: uma hora desde a última alteração do diretório.
+- diretório `.part`: uma hora desde a última alteração do diretório;
+- diretório `.deleting-<uuid>` de uma deleção interrompida.
+
+Artefatos completos nunca são removidos por ela, independente da idade. Quem destrói dump completo é `cache prune`, sempre a pedido do usuário.
 
 A remoção nunca começa diretamente com `remove_dir_all`. Sob lock exclusivo, o diretório recebe primeiro um nome único `.deleting-<uuid>` por rename atômico. A partir daí novos readers não conseguem adquiri-lo pelo caminho antigo. O lock é liberado e somente o diretório isolado é removido.
 
 Se o processo cair depois do rename, a próxima limpeza reconhece o nome `.deleting-<uuid>`, readquire o lock exclusivo e conclui a remoção. Symlinks e diretórios fora dos formatos gerenciados não são seguidos.
 
-Entradas com relógio futuro ou metadata inválida são preservadas e contabilizadas no relatório, pois apagá-las oportunisticamente esconderia um problema que aparece em `cache list`/`cache clean`. Os comandos usam o mesmo protocolo de lease desta infraestrutura.
+Entradas com relógio futuro ou metadata inválida são preservadas e contabilizadas no relatório, pois apagá-las oportunisticamente esconderia um problema que aparece em `cache list`/`cache prune`. Os comandos usam o mesmo protocolo de lease desta infraestrutura.
 
-O relatório diferencia artefatos expirados, partials órfãos, deleções interrompidas, locks ativos, relógio futuro e entradas inválidas. `cache purge DATABASE` limita a remoção ao profile ativo e também mantém qualquer artefato com lease ativa.
+O relatório da varredura diferencia partials órfãos, deleções interrompidas, locks ativos, relógio futuro e entradas inválidas. `cache prune [DATABASE]` mantém igualmente qualquer artefato com lease ativa e calcula o que será removido antes de remover, para que o usuário possa recusar.

@@ -8,22 +8,25 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    domain::{DatabaseName, DumpArtifactMetadata, DumpId, ProfileName},
+    domain::{
+        DatabaseName, DumpArtifactMetadata, DumpId, ProfileName, PruneCandidate, PruneSelection,
+        select_for_prune,
+    },
     infrastructure::artifact_store::{
         ArtifactStoreError, METADATA_FILE_NAME, PART_SUFFIX, PROFILES_DIRECTORY,
         try_acquire_exclusive_artifact_lock,
     },
-    infrastructure::cache::DEFAULT_CACHE_TTL_SECONDS,
 };
 
 pub const DEFAULT_PARTIAL_TTL_SECONDS: u64 = 60 * 60;
 const MAX_METADATA_BYTES: u64 = 64 * 1024;
 const DELETING_MARKER: &str = ".deleting-";
 
+/// Policy for the garbage sweep. It deliberately carries no artifact TTL:
+/// a complete dump is never destroyed implicitly, only by `cache prune`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CacheCleanupPolicy {
     pub now_unix_seconds: u64,
-    pub artifact_ttl_seconds: u64,
     pub partial_ttl_seconds: u64,
 }
 
@@ -31,15 +34,13 @@ impl CacheCleanupPolicy {
     pub const fn defaults_at(now_unix_seconds: u64) -> Self {
         Self {
             now_unix_seconds,
-            artifact_ttl_seconds: DEFAULT_CACHE_TTL_SECONDS,
             partial_ttl_seconds: DEFAULT_PARTIAL_TTL_SECONDS,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct CacheCleanupReport {
-    pub expired_artifacts_removed: u64,
+pub struct CacheSweepReport {
     pub orphan_partials_removed: u64,
     pub interrupted_deletions_removed: u64,
     pub locked_entries_skipped: u64,
@@ -47,9 +48,31 @@ pub struct CacheCleanupReport {
     pub invalid_entries_skipped: u64,
 }
 
+/// What a prune run would destroy, computed before anything is removed so the
+/// user can be shown a count and a size and decline.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PrunePlan {
+    pub selected: Vec<PruneCandidate>,
+    pub invalid_entries_skipped: u64,
+}
+
+impl PrunePlan {
+    pub fn is_empty(&self) -> bool {
+        self.selected.is_empty()
+    }
+
+    pub fn total_compressed_bytes(&self) -> u64 {
+        self.selected
+            .iter()
+            .map(|candidate| candidate.compressed_bytes)
+            .sum()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct CachePurgeReport {
+pub struct PruneReport {
     pub artifacts_removed: u64,
+    pub bytes_removed: u64,
     pub locked_entries_skipped: u64,
     pub invalid_entries_skipped: u64,
 }
@@ -66,52 +89,114 @@ impl LocalCacheCleaner {
         }
     }
 
-    pub fn clean(
-        &self,
-        policy: CacheCleanupPolicy,
-    ) -> Result<CacheCleanupReport, CacheCleanupError> {
-        let mut report = CacheCleanupReport::default();
+    /// Removes only what no one can restore: abandoned `.part` stagings and
+    /// interrupted deletions. Complete artifacts are always left in place.
+    pub fn sweep(&self, policy: CacheCleanupPolicy) -> Result<CacheSweepReport, CacheCleanupError> {
+        let mut report = CacheSweepReport::default();
         let profiles = self.cache_root.join(PROFILES_DIRECTORY);
         for profile in read_directories(&profiles)? {
             if !has_valid_name::<ProfileName>(&profile) {
                 report.invalid_entries_skipped += 1;
                 continue;
             }
-            for tenant in read_directories(&profile)? {
-                if !has_valid_name::<DatabaseName>(&tenant) {
+            for database in read_directories(&profile)? {
+                if !has_valid_name::<DatabaseName>(&database) {
                     report.invalid_entries_skipped += 1;
                     continue;
                 }
-                for entry in read_directories(&tenant)? {
-                    self.clean_entry(&entry, policy, &mut report)?;
+                for entry in read_directories(&database)? {
+                    Self::sweep_entry(&entry, policy, &mut report)?;
                 }
             }
         }
         Ok(report)
     }
 
-    pub fn purge(
+    /// Computes which complete artifacts a prune run would destroy.
+    ///
+    /// `database` filters by database name across every profile, matching how
+    /// `restore` locates a dump: a developer asking to reclaim the disk of
+    /// `acme_production` does not want copies left behind under another profile.
+    pub fn plan_prune(
         &self,
-        profile: &ProfileName,
-        database: &DatabaseName,
-    ) -> Result<CachePurgeReport, CacheCleanupError> {
-        let mut report = CachePurgeReport::default();
-        let database_path = self
-            .cache_root
-            .join(PROFILES_DIRECTORY)
-            .join(profile.as_str())
-            .join(database.as_str());
-        for artifact_path in read_directories(&database_path)? {
-            let Some(artifact_name) = artifact_path.file_name().and_then(|name| name.to_str())
-            else {
-                report.invalid_entries_skipped += 1;
+        selection: PruneSelection,
+        database: Option<&DatabaseName>,
+        now_unix_seconds: u64,
+    ) -> Result<PrunePlan, CacheCleanupError> {
+        let mut candidates = Vec::new();
+        let mut invalid_entries_skipped = 0;
+        let profiles = self.cache_root.join(PROFILES_DIRECTORY);
+        for profile_path in read_directories(&profiles)? {
+            let Some(profile) = valid_name::<ProfileName>(&profile_path) else {
+                invalid_entries_skipped += 1;
                 continue;
             };
-            if artifact_name.parse::<DumpId>().is_err() {
-                continue;
+            for database_path in read_directories(&profile_path)? {
+                let Some(stored_database) = valid_name::<DatabaseName>(&database_path) else {
+                    invalid_entries_skipped += 1;
+                    continue;
+                };
+                if database.is_some_and(|wanted| *wanted != stored_database) {
+                    continue;
+                }
+                for artifact_path in read_directories(&database_path)? {
+                    let Some(name) = artifact_path.file_name().and_then(|name| name.to_str())
+                    else {
+                        invalid_entries_skipped += 1;
+                        continue;
+                    };
+                    // Stagings and interrupted deletions belong to the sweep.
+                    if name.ends_with(PART_SUFFIX) || is_interrupted_deletion(name) {
+                        continue;
+                    }
+                    let Ok(dump_id) = name.parse::<DumpId>() else {
+                        invalid_entries_skipped += 1;
+                        continue;
+                    };
+                    let Some(metadata) = read_metadata(&artifact_path)? else {
+                        invalid_entries_skipped += 1;
+                        continue;
+                    };
+                    candidates.push(PruneCandidate {
+                        profile: profile.clone(),
+                        database: stored_database.clone(),
+                        dump_id,
+                        completed_at_unix_seconds: metadata.completed_at_unix_seconds,
+                        compressed_bytes: metadata.compressed_bytes,
+                    });
+                }
             }
-            match isolate_and_remove(&artifact_path)? {
-                RemovalOutcome::Removed => report.artifacts_removed += 1,
+        }
+
+        Ok(PrunePlan {
+            selected: select_for_prune(selection, &candidates, now_unix_seconds),
+            invalid_entries_skipped,
+        })
+    }
+
+    /// Destroys the artifacts a [`PrunePlan`] selected.
+    ///
+    /// An artifact holding an active lease is never removed; it is reported as
+    /// skipped so a restore in flight cannot lose the dump under it.
+    pub fn execute_prune(&self, plan: &PrunePlan) -> Result<PruneReport, CacheCleanupError> {
+        let mut report = PruneReport {
+            invalid_entries_skipped: plan.invalid_entries_skipped,
+            ..PruneReport::default()
+        };
+        for candidate in &plan.selected {
+            let path = self
+                .cache_root
+                .join(PROFILES_DIRECTORY)
+                .join(candidate.profile.as_str())
+                .join(candidate.database.as_str())
+                .join(candidate.dump_id.to_string());
+            match isolate_and_remove(&path)? {
+                RemovalOutcome::Removed => {
+                    report.artifacts_removed += 1;
+                    report.bytes_removed = report
+                        .bytes_removed
+                        .saturating_add(candidate.compressed_bytes);
+                }
                 RemovalOutcome::Locked => report.locked_entries_skipped += 1,
                 RemovalOutcome::Gone => {}
             }
@@ -119,11 +204,10 @@ impl LocalCacheCleaner {
         Ok(report)
     }
 
-    fn clean_entry(
-        &self,
+    fn sweep_entry(
         path: &Path,
         policy: CacheCleanupPolicy,
-        report: &mut CacheCleanupReport,
+        report: &mut CacheSweepReport,
     ) -> Result<(), CacheCleanupError> {
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             report.invalid_entries_skipped += 1;
@@ -138,19 +222,19 @@ impl LocalCacheCleaner {
                 report.invalid_entries_skipped += 1;
                 return Ok(());
             }
-            return Self::clean_partial(path, policy, report);
+            return Self::sweep_partial(path, policy, report);
         }
         if name.parse::<DumpId>().is_err() {
             report.invalid_entries_skipped += 1;
-            return Ok(());
         }
-        Self::clean_complete(path, policy, report)
+        // A complete artifact survives every sweep; only `cache prune` removes it.
+        Ok(())
     }
 
-    fn clean_partial(
+    fn sweep_partial(
         path: &Path,
         policy: CacheCleanupPolicy,
-        report: &mut CacheCleanupReport,
+        report: &mut CacheSweepReport,
     ) -> Result<(), CacheCleanupError> {
         let directory_metadata = match fs::metadata(path) {
             Ok(metadata) => metadata,
@@ -183,36 +267,10 @@ impl LocalCacheCleaner {
         }
         remove_if_unlocked(path, RemovalKind::Partial, report)
     }
-
-    fn clean_complete(
-        path: &Path,
-        policy: CacheCleanupPolicy,
-        report: &mut CacheCleanupReport,
-    ) -> Result<(), CacheCleanupError> {
-        let metadata = match read_metadata(path)? {
-            Some(metadata) => metadata,
-            None => {
-                report.invalid_entries_skipped += 1;
-                return Ok(());
-            }
-        };
-        if metadata.completed_at_unix_seconds > policy.now_unix_seconds {
-            report.future_entries_skipped += 1;
-            return Ok(());
-        }
-        let expires_at = metadata
-            .completed_at_unix_seconds
-            .saturating_add(policy.artifact_ttl_seconds);
-        if policy.now_unix_seconds < expires_at {
-            return Ok(());
-        }
-        remove_if_unlocked(path, RemovalKind::ExpiredArtifact, report)
-    }
 }
 
 #[derive(Clone, Copy)]
 enum RemovalKind {
-    ExpiredArtifact,
     Partial,
     InterruptedDeletion,
 }
@@ -220,11 +278,10 @@ enum RemovalKind {
 fn remove_if_unlocked(
     path: &Path,
     kind: RemovalKind,
-    report: &mut CacheCleanupReport,
+    report: &mut CacheSweepReport,
 ) -> Result<(), CacheCleanupError> {
     match isolate_and_remove(path)? {
         RemovalOutcome::Removed => match kind {
-            RemovalKind::ExpiredArtifact => report.expired_artifacts_removed += 1,
             RemovalKind::Partial => report.orphan_partials_removed += 1,
             RemovalKind::InterruptedDeletion => report.interrupted_deletions_removed += 1,
         },
@@ -331,6 +388,15 @@ where
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| T::try_from(name).is_ok())
+}
+
+fn valid_name<T>(path: &Path) -> Option<T>
+where
+    for<'a> T: TryFrom<&'a str>,
+{
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| T::try_from(name).ok())
 }
 
 fn is_interrupted_deletion(name: &str) -> bool {
@@ -444,22 +510,22 @@ mod tests {
     fn policy(now: u64) -> CacheCleanupPolicy {
         CacheCleanupPolicy {
             now_unix_seconds: now,
-            artifact_ttl_seconds: 100,
             partial_ttl_seconds: 100,
         }
     }
 
     #[tokio::test]
-    async fn removes_only_expired_complete_artifacts() {
+    async fn a_sweep_never_removes_a_complete_artifact_however_old() {
         let directory = tempdir().unwrap();
-        let expired = publish(directory.path(), 100).await;
+        let ancient = publish(directory.path(), 100).await;
         let current = publish(directory.path(), 950).await;
+
         let report = LocalCacheCleaner::new(directory.path())
-            .clean(policy(1_000))
+            .sweep(policy(1_000_000))
             .unwrap();
 
-        assert_eq!(report.expired_artifacts_removed, 1);
-        assert!(!expired.path.exists());
+        assert_eq!(report.orphan_partials_removed, 0);
+        assert!(ancient.path.exists());
         assert!(current.path.exists());
     }
 
@@ -482,7 +548,7 @@ mod tests {
         let mut cleanup_policy = policy(stale_modified.saturating_add(100));
         cleanup_policy.partial_ttl_seconds = 100;
         let report = LocalCacheCleaner::new(directory.path())
-            .clean(cleanup_policy)
+            .sweep(cleanup_policy)
             .unwrap();
 
         assert!(!stale.exists());
@@ -501,7 +567,7 @@ mod tests {
             .as_secs();
         cleanup_policy.now_unix_seconds = recent_modified.saturating_add(99);
         let report = LocalCacheCleaner::new(directory.path())
-            .clean(cleanup_policy)
+            .sweep(cleanup_policy)
             .unwrap();
         assert!(recent.exists());
         assert_eq!(report.orphan_partials_removed, 0);
@@ -529,23 +595,26 @@ mod tests {
         assert!(matches!(hit, CacheLookupResult::Hit(_)));
 
         let cleaner = LocalCacheCleaner::new(directory.path());
-        let report = cleaner.clean(policy(1_000)).unwrap();
+        let plan = cleaner
+            .plan_prune(PruneSelection::All, None, 1_000)
+            .unwrap();
+        let report = cleaner.execute_prune(&plan).unwrap();
         assert_eq!(report.locked_entries_skipped, 1);
+        assert_eq!(report.artifacts_removed, 0);
         assert!(artifact.path.exists());
 
         drop(hit);
-        let report = cleaner.clean(policy(1_000)).unwrap();
-        assert_eq!(report.expired_artifacts_removed, 1);
+        let report = cleaner.execute_prune(&plan).unwrap();
+        assert_eq!(report.artifacts_removed, 1);
         assert!(!artifact.path.exists());
     }
 
     #[tokio::test]
-    async fn purge_resolves_an_alias_and_preserves_a_leased_artifact() {
+    async fn prune_scoped_to_a_database_preserves_a_leased_artifact() {
         let directory = tempdir().unwrap();
         let artifact = publish(directory.path(), 100).await;
         let profile = profile();
-        let _database = database();
-        let database = DatabaseName::try_from("acme_production").unwrap();
+        let database = database();
         let validator = LocalCacheValidator::new(LocalArtifactStore::new(directory.path()));
         let hit = validator
             .lookup(&CacheLookup {
@@ -559,17 +628,52 @@ mod tests {
             })
             .unwrap();
         let cleaner = LocalCacheCleaner::new(directory.path());
-        let lookup = DatabaseName::try_from("acme_production").unwrap();
+        let plan = cleaner
+            .plan_prune(PruneSelection::All, Some(&database), 1_000)
+            .unwrap();
+        assert_eq!(plan.selected.len(), 1);
 
-        let report = cleaner.purge(&profile, &lookup).unwrap();
+        let report = cleaner.execute_prune(&plan).unwrap();
         assert_eq!(report.artifacts_removed, 0);
         assert_eq!(report.locked_entries_skipped, 1);
         assert!(artifact.path.exists());
 
         drop(hit);
-        let report = cleaner.purge(&profile, &lookup).unwrap();
+        let report = cleaner.execute_prune(&plan).unwrap();
         assert_eq!(report.artifacts_removed, 1);
         assert!(!artifact.path.exists());
+    }
+
+    #[tokio::test]
+    async fn prune_ignores_a_database_outside_its_scope() {
+        let directory = tempdir().unwrap();
+        let artifact = publish(directory.path(), 100).await;
+        let other = DatabaseName::try_from("globex_production").unwrap();
+
+        let cleaner = LocalCacheCleaner::new(directory.path());
+        let plan = cleaner
+            .plan_prune(PruneSelection::All, Some(&other), 1_000)
+            .unwrap();
+
+        assert!(plan.is_empty());
+        assert!(artifact.path.exists());
+    }
+
+    #[tokio::test]
+    async fn the_default_retention_keeps_a_dump_that_pull_already_considers_stale() {
+        let directory = tempdir().unwrap();
+        let artifact = publish(directory.path(), 1_000).await;
+        // Two hours old: past the one hour pull freshness TTL, far inside the
+        // seven day retention.
+        let now = 1_000 + 2 * 60 * 60;
+
+        let cleaner = LocalCacheCleaner::new(directory.path());
+        let plan = cleaner
+            .plan_prune(PruneSelection::default(), None, now)
+            .unwrap();
+
+        assert!(plan.is_empty());
+        assert!(artifact.path.exists());
     }
 
     #[test]
@@ -588,7 +692,7 @@ mod tests {
         fs::write(deleting.join(ARTIFACT_LOCK_FILE_NAME), b"").unwrap();
 
         let report = LocalCacheCleaner::new(directory.path())
-            .clean(policy(1_000))
+            .sweep(policy(1_000))
             .unwrap();
         assert_eq!(report.interrupted_deletions_removed, 1);
         assert!(!deleting.exists());
@@ -597,14 +701,14 @@ mod tests {
         {
             std::os::unix::fs::symlink(directory.path(), parent.join("not-a-directory")).unwrap();
             LocalCacheCleaner::new(directory.path())
-                .clean(policy(1_000))
+                .sweep(policy(1_000))
                 .unwrap();
             assert!(directory.path().exists());
         }
     }
 
     #[tokio::test]
-    async fn future_and_invalid_entries_are_preserved() {
+    async fn prune_preserves_and_reports_future_and_invalid_entries() {
         let directory = tempdir().unwrap();
         let future = publish(directory.path(), 2_000).await;
         let invalid = future
@@ -615,10 +719,15 @@ mod tests {
         fs::create_dir(&invalid).unwrap();
         fs::write(invalid.join(METADATA_FILE_NAME), b"{broken").unwrap();
 
-        let report = LocalCacheCleaner::new(directory.path())
-            .clean(policy(1_000))
+        let cleaner = LocalCacheCleaner::new(directory.path());
+        let plan = cleaner
+            .plan_prune(PruneSelection::OlderThan { seconds: 100 }, None, 1_000)
             .unwrap();
-        assert_eq!(report.future_entries_skipped, 1);
+        let report = cleaner.execute_prune(&plan).unwrap();
+
+        // A dump completed in the future has not aged; deleting it would hide a
+        // broken clock. Unreadable metadata is reported, never destroyed.
+        assert!(plan.is_empty());
         assert_eq!(report.invalid_entries_skipped, 1);
         assert!(future.path.exists());
         assert!(invalid.exists());

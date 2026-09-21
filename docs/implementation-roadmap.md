@@ -300,8 +300,8 @@ reprodb pull TENANT
 reprodb pull TENANT --fresh
 
 reprodb cache list
-reprodb cache clean
-reprodb cache purge TENANT
+reprodb cache prune
+reprodb cache prune DATABASE --all
 ```
 
 ## 6. Labels sugeridas
@@ -703,9 +703,9 @@ Formato e ordem de publicação: [`docs/dump-artifacts.md`](dump-artifacts.md).
 
 **Labels:** `priority:p0`, `type:feature`, `area:cache`
 
-**Status:** implementada — consulta os artefatos completos do mais novo para o mais antigo, aplica TTL de duas horas desde `completed_at`, rejeita relógio futuro, identidade/source/policy alterados e valida tamanho mais SHA-256 antes do hit. `--fresh` desvia antes de qualquer acesso ao filesystem; um artefato novo inválido permite fallback para outro ainda válido.
+**Status:** implementada — consulta os artefatos completos do mais novo para o mais antigo, aplica o TTL de frescor de uma hora desde `completed_at`, rejeita relógio futuro, identidade/source/policy alterados e valida tamanho mais SHA-256 antes do hit. `--fresh` desvia antes de qualquer acesso ao filesystem; um artefato novo inválido permite fallback para outro ainda válido.
 
-**Escopo:** TTL desde `completed_at`, default de duas horas, config fingerprint, checksum, arquivo ausente/corrompido e relógio futuro.
+**Escopo:** TTL desde `completed_at`, default de uma hora, config fingerprint, checksum, arquivo ausente/corrompido e relógio futuro.
 
 **Aceite:** hit, miss, expired, profile alterado, policy alterada e `--fresh` são testados.
 

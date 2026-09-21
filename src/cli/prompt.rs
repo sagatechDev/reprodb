@@ -360,6 +360,35 @@ pub fn confirm_container_start(candidate: &DockerContainerCandidate) -> Result<b
         .map_err(unavailable)
 }
 
+/// Whether an interactive prompt can be shown at all.
+///
+/// Prune and the restore selector refuse to guess when there is no terminal:
+/// both pick something destructive or ambiguous on the user's behalf.
+pub fn is_interactive() -> bool {
+    use std::io::IsTerminal as _;
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+pub fn confirm_prune(dumps: usize, reclaimed: &str) -> Result<bool, PromptError> {
+    Confirm::with_theme(&SimpleTheme)
+        .with_prompt(format!(
+            "Permanently remove {dumps} managed dump{} and reclaim {reclaimed}?",
+            if dumps == 1 { "" } else { "s" }
+        ))
+        .default(false)
+        .interact()
+        .map_err(unavailable)
+}
+
+pub fn select_restore_dump(labels: &[String]) -> Result<usize, PromptError> {
+    Select::with_theme(&SimpleTheme)
+        .with_prompt("Select dump to restore")
+        .items(labels)
+        .default(0)
+        .interact()
+        .map_err(unavailable)
+}
+
 pub fn confirm_profile_removal(name: &ProfileName) -> Result<bool, PromptError> {
     Confirm::with_theme(&SimpleTheme)
         .with_prompt(format!(

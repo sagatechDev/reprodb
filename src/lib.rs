@@ -272,7 +272,10 @@ pub async fn execute_with_cancellation(
         }
         Commands::Restore(arguments) => {
             let database = DatabaseName::try_from(arguments.database)?;
-            let dump_id = arguments.dump_id.parse::<domain::DumpId>()?;
+            let dump_id = arguments
+                .dump_id
+                .map(|raw| raw.parse::<domain::DumpId>())
+                .transpose()?;
             let target_container = arguments
                 .target
                 .map(domain::ContainerName::try_from)
@@ -296,6 +299,7 @@ pub async fn execute_with_cancellation(
                         infrastructure::process::TokioProcessRunner,
                     ),
                     executor,
+                    &cli::restore::CliRestoreDumpSelector::new(),
                     application::RestoreRequest {
                         database,
                         dump_id,
@@ -390,14 +394,57 @@ pub async fn execute_with_cancellation(
                     let report = service.list()?;
                     print!("{}", cli::cache::render_list(&style, &report));
                 }
-                CacheCommands::Clean => {
-                    let report = service.clean()?;
-                    print!("{}", cli::cache::render_clean(&style, report));
-                }
-                CacheCommands::Purge(arguments) => {
-                    let database = DatabaseName::try_from(arguments.database)?;
-                    let ready = service.purge(&database)?;
-                    print!("{}", cli::cache::render_purge(&style, &ready));
+                CacheCommands::Prune(arguments) => {
+                    let database = arguments.database.map(DatabaseName::try_from).transpose()?;
+                    let (selection, criterion) = match (
+                        arguments.all,
+                        arguments.keep_last,
+                        arguments.older_than.as_deref(),
+                    ) {
+                        (true, _, _) => (domain::PruneSelection::All, "every dump".to_owned()),
+                        (_, Some(count), _) => (
+                            domain::PruneSelection::KeepLast { count },
+                            format!("keep the newest {count} per profile and database"),
+                        ),
+                        (_, _, Some(raw)) => {
+                            let seconds = cli::parse_duration_seconds(raw)?;
+                            (
+                                domain::PruneSelection::OlderThan { seconds },
+                                format!("older than {raw}"),
+                            )
+                        }
+                        _ => (
+                            domain::PruneSelection::default(),
+                            format!(
+                                "older than {} (default retention)",
+                                cli::cache::format_duration_compact(
+                                    domain::DEFAULT_RETENTION_SECONDS
+                                )
+                            ),
+                        ),
+                    };
+
+                    let plan = service.plan_prune(selection, database.as_ref())?;
+                    print!(
+                        "{}",
+                        cli::cache::render_prune_plan(&style, &plan, database.as_ref(), &criterion)
+                    );
+                    std::io::stdout().flush().map_err(AppError::Output)?;
+                    if plan.is_empty() {
+                        return Ok(());
+                    }
+                    if !arguments.yes {
+                        if !cli::prompt::is_interactive() {
+                            return Err(AppError::NonInteractivePrune);
+                        }
+                        let reclaimed = cli::cache::format_bytes(plan.total_compressed_bytes());
+                        if !cli::prompt::confirm_prune(plan.selected.len(), &reclaimed)? {
+                            print!("{}", cli::cache::render_prune_cancelled(&style));
+                            return Ok(());
+                        }
+                    }
+                    let report = service.execute_prune(&plan)?;
+                    print!("{}", cli::cache::render_prune_result(&style, report));
                 }
             }
             Ok(())

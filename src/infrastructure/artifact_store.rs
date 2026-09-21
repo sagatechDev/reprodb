@@ -280,6 +280,29 @@ impl LocalArtifactStore {
         Ok(artifacts)
     }
 
+    /// Every complete artifact stored for `database`, across all profiles.
+    ///
+    /// Restore is profile-agnostic, so the selector must be too: a dump taken
+    /// under `staging` stays restorable while `production` is the active profile.
+    pub fn find_complete_by_database(
+        &self,
+        database: &DatabaseName,
+    ) -> Result<Vec<LocatedDumpArtifact>, ArtifactStoreError> {
+        let mut artifacts = Vec::new();
+        for located in self.list_all_candidates()? {
+            if located.database != *database {
+                continue;
+            }
+            if !is_regular_file(&located.artifact.dump_path)?
+                || !is_regular_file(&located.artifact.metadata_path)?
+            {
+                continue;
+            }
+            artifacts.push(located);
+        }
+        Ok(artifacts)
+    }
+
     pub fn list_all_candidates(&self) -> Result<Vec<LocatedDumpArtifact>, ArtifactStoreError> {
         let profiles_path = self.root.join(PROFILES_DIRECTORY);
         let profiles = match fs::read_dir(&profiles_path) {

@@ -4,16 +4,19 @@ use thiserror::Error;
 
 use crate::{
     application::{Clock, ClockError, SystemClock},
-    domain::{DatabaseName, DumpId, MYSQL_8_DUMP_POLICY_VERSION, ProfileName, Sha256Digest},
+    domain::{
+        DEFAULT_RETENTION_SECONDS, DatabaseName, DumpId, MYSQL_8_DUMP_POLICY_VERSION, ProfileName,
+        PruneSelection, Sha256Digest,
+    },
     infrastructure::{
         artifact_store::LocalArtifactStore,
         cache::{
-            CacheEntryStatus, CacheError, CacheInventoryRequest, DEFAULT_CACHE_TTL_SECONDS,
-            LocalCacheValidator,
+            CacheEntryStatus, CacheError, CacheInventoryRequest, LocalCacheValidator,
+            PULL_FRESHNESS_TTL_SECONDS,
         },
         cache_cleanup::{
-            CacheCleanupError, CacheCleanupPolicy, CacheCleanupReport, CachePurgeReport,
-            LocalCacheCleaner,
+            CacheCleanupError, CacheCleanupPolicy, CacheSweepReport, LocalCacheCleaner, PrunePlan,
+            PruneReport,
         },
         config::{ConfigError, ConfigRepository, source_profile_fingerprint},
     },
@@ -56,7 +59,8 @@ where
                     source_fingerprints: &source_fingerprints,
                     policy_version: MYSQL_8_DUMP_POLICY_VERSION,
                     now_unix_seconds,
-                    ttl_seconds: DEFAULT_CACHE_TTL_SECONDS,
+                    ttl_seconds: PULL_FRESHNESS_TTL_SECONDS,
+                    retention_seconds: DEFAULT_RETENTION_SECONDS,
                 })?
                 .into_iter()
                 .map(|entry| CacheListEntry {
@@ -81,31 +85,41 @@ where
         })
     }
 
-    pub fn clean(&self) -> Result<CacheCleanupReport, CacheServiceError> {
+    /// Removes abandoned stagings and interrupted deletions. Never touches a
+    /// complete dump.
+    pub fn sweep(&self) -> Result<CacheSweepReport, CacheServiceError> {
         let now_unix_seconds = self.clock.now_unix_seconds()?;
         Ok(LocalCacheCleaner::new(self.repository.paths().cache_dir())
-            .clean(CacheCleanupPolicy::defaults_at(now_unix_seconds))?)
+            .sweep(CacheCleanupPolicy::defaults_at(now_unix_seconds))?)
     }
 
-    pub fn purge(&self, database: &DatabaseName) -> Result<CachePurgeReady, CacheServiceError> {
-        let config = self.repository.load()?;
-        let profile = config
-            .active_profile
-            .ok_or(CacheServiceError::NoActiveProfile)?;
-        let report = LocalCacheCleaner::new(self.repository.paths().cache_dir())
-            .purge(&profile, database)?;
-        Ok(CachePurgeReady {
-            profile,
-            database: database.clone(),
-            report,
-        })
+    /// Computes what `cache prune` would destroy, without removing anything.
+    pub fn plan_prune(
+        &self,
+        selection: PruneSelection,
+        database: Option<&DatabaseName>,
+    ) -> Result<PrunePlan, CacheServiceError> {
+        let now_unix_seconds = self.clock.now_unix_seconds()?;
+        Ok(
+            LocalCacheCleaner::new(self.repository.paths().cache_dir()).plan_prune(
+                selection,
+                database,
+                now_unix_seconds,
+            )?,
+        )
+    }
+
+    /// Destroys the artifacts a plan selected. Irreversible.
+    pub fn execute_prune(&self, plan: &PrunePlan) -> Result<PruneReport, CacheServiceError> {
+        Ok(LocalCacheCleaner::new(self.repository.paths().cache_dir()).execute_prune(plan)?)
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CacheListStatus {
     Ready,
-    Expired,
+    Stale,
+    Prunable,
     ProfileMissing,
     SourceChanged,
     PolicyChanged,
@@ -122,7 +136,8 @@ impl From<CacheEntryStatus> for CacheListStatus {
     fn from(value: CacheEntryStatus) -> Self {
         match value {
             CacheEntryStatus::Ready => Self::Ready,
-            CacheEntryStatus::Expired => Self::Expired,
+            CacheEntryStatus::Stale => Self::Stale,
+            CacheEntryStatus::Prunable => Self::Prunable,
             CacheEntryStatus::ProfileMissing => Self::ProfileMissing,
             CacheEntryStatus::SourceChanged => Self::SourceChanged,
             CacheEntryStatus::PolicyChanged => Self::PolicyChanged,
@@ -154,13 +169,6 @@ pub struct CacheListReport {
     pub now_unix_seconds: u64,
     pub total_compressed_bytes: u64,
     pub entries: Vec<CacheListEntry>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CachePurgeReady {
-    pub profile: ProfileName,
-    pub database: DatabaseName,
-    pub report: CachePurgeReport,
 }
 
 #[derive(Debug, Error)]
@@ -218,22 +226,41 @@ mod tests {
     }
 
     #[test]
-    fn clean_is_safe_when_the_cache_does_not_exist() {
+    fn a_sweep_is_safe_when_the_cache_does_not_exist() {
         let directory = tempdir().unwrap();
 
         assert_eq!(
-            service(directory.path()).clean().unwrap(),
-            CacheCleanupReport::default()
+            service(directory.path()).sweep().unwrap(),
+            CacheSweepReport::default()
         );
     }
 
     #[test]
-    fn purge_requires_an_active_profile_before_touching_the_cache() {
+    fn planning_a_prune_on_an_empty_cache_selects_nothing() {
         let directory = tempdir().unwrap();
-        let error = service(directory.path())
-            .purge(&DatabaseName::try_from("acme_production").unwrap())
-            .unwrap_err();
 
-        assert!(matches!(error, CacheServiceError::NoActiveProfile));
+        let plan = service(directory.path())
+            .plan_prune(PruneSelection::default(), None)
+            .unwrap();
+
+        assert!(plan.is_empty());
+        assert_eq!(plan.total_compressed_bytes(), 0);
+    }
+
+    #[test]
+    fn pruning_does_not_require_an_active_profile() {
+        let directory = tempdir().unwrap();
+
+        let plan = service(directory.path())
+            .plan_prune(
+                PruneSelection::All,
+                Some(&DatabaseName::try_from("acme_production").unwrap()),
+            )
+            .unwrap();
+
+        assert_eq!(
+            service(directory.path()).execute_prune(&plan).unwrap(),
+            PruneReport::default()
+        );
     }
 }

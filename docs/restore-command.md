@@ -56,7 +56,7 @@ O resultado mostra database, container, bytes importados e dump ID.
 - repetir exatamente o mesmo comando recria o database sem acessar o source;
 - o artefato completo e sua lease são preservados durante a operação.
 
-Um dump escolhido explicitamente por ID não depende do TTL do cache. A limpeza futura continua podendo remover artefatos expirados quando eles não estiverem em uso.
+O restore não depende de nenhum TTL: um dump fora do prazo de frescor do `pull` é restaurado normalmente. Só `cache prune` remove dumps completos, e nunca um que esteja em uso.
 
 ## Evidências
 

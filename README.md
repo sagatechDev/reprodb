@@ -24,7 +24,7 @@ $ reprodb pull acme_production
   Dump ID:    9f1c2b7a-5f0e-4b31-9c2f-7a0d8e1b4c66
 ```
 
-`reprodb` faz o dump de um database remoto, guarda em cache local por 2h e restaura num container MySQL do seu Docker — sem `mysqldump` instalado na máquina, sem senha em texto puro no seu repositório e sem risco de escrever no banco errado.
+`reprodb` faz o dump de um database remoto, guarda em cache local e restaura num container MySQL do seu Docker — sem `mysqldump` instalado na máquina, sem senha em texto puro no seu repositório e sem risco de escrever no banco errado.
 
 ---
 
@@ -102,7 +102,7 @@ reprodb db list
 reprodb pull acme_production
 ```
 
-O `pull` recebe o nome do database na origem e pergunta com que nome ele será criado localmente (Enter mantém o mesmo). Rode de novo dentro de 2h e ele reusa o dump em cache — sem tocar na origem.
+O `pull` recebe o nome do database na origem e pergunta com que nome ele será criado localmente (Enter mantém o mesmo). Rode de novo dentro de 1h e ele reusa o dump em cache — sem tocar na origem. Depois disso o `pull` exporta de novo, mas o dump anterior continua no disco: `reprodb restore acme_production` lista os dumps guardados para você escolher.
 
 ## Comandos
 
@@ -133,7 +133,7 @@ reprodb --help                                        # ajuda completa
 ## Como funciona
 
 ```text
-origem MySQL ──mysqldump──► dump.sql.zst (~/.reprodb/cache, TTL 2h)
+origem MySQL ──mysqldump──► dump.sql.zst (~/.reprodb/cache)
                                   │
                                   ├─ valida tamanho + SHA-256
                                   ├─ atesta identidade do container por ID

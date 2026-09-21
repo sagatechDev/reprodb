@@ -17,7 +17,7 @@ Os códigos abaixo fazem parte da interface da CLI. Novas mensagens podem ser ad
 | 70 | restore | Recriação/importação/validação local falhou |
 | 130 | interrompido | Ctrl+C/SIGINT tratado pela aplicação |
 
-No fluxo de restore, UUID inválido é erro de uso (`2`); artefato ausente, duplicado ou corrompido pertence ao cache (`50`); identidade do target pertence a Docker/configuração (`60`/`10`); e falha depois do início da recriação/importação pertence ao restore (`70`).
+No fluxo de restore, UUID inválido é erro de uso (`2`); artefato ausente, duplicado ou corrompido pertence ao cache (`50`). Sem `--dump-id`, o comando abre o seletor de dumps: database sem nenhum candidato continua sendo cache (`50`), e a ausência de terminal para escolher é erro de uso (`2`), assim como `cache prune` sem terminal e sem `--yes`; identidade do target pertence a Docker/configuração (`60`/`10`); e falha depois do início da recriação/importação pertence ao restore (`70`).
 
 ## Regras de mensagem e logging
 

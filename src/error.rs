@@ -5,8 +5,8 @@ use crate::{
         CacheServiceError, CredentialProvisionError, DatabaseCatalogReadError,
         DatabaseCatalogServiceError, DoctorFailureKind, DumpServiceError,
         LocalTargetAttestationError, LocalTargetGateError, ProfileServiceError, PullServiceError,
-        RestoreEngineError, RestoreServiceError, SetupServiceError, SourceVerificationError,
-        TargetVerificationError,
+        RestoreEngineError, RestoreSelectionError, RestoreServiceError, SetupServiceError,
+        SourceVerificationError, TargetVerificationError,
     },
     cli::prompt::PromptError,
     domain::{DumpMetadataError, ValueObjectError},
@@ -88,6 +88,17 @@ pub enum AppError {
 
     #[error(transparent)]
     DatabaseCatalog(#[from] DatabaseCatalogServiceError),
+
+    #[error(transparent)]
+    InvalidDuration(#[from] crate::cli::DurationParseError),
+
+    #[error(
+        "`cache prune` is destructive and there is no terminal to confirm on; rerun with --yes"
+    )]
+    NonInteractivePrune,
+
+    #[error("no terminal to select a dump on; rerun with --dump-id ID (see `reprodb cache list`)")]
+    NonInteractiveRestoreSelection,
 
     #[error("doctor found required problems; review the failed checks above")]
     DoctorChecksFailed { kind: DoctorFailureKind },
@@ -193,6 +204,9 @@ impl AppError {
                 DoctorFailureKind::Docker => ErrorCategory::Docker,
                 DoctorFailureKind::Filesystem => ErrorCategory::Cache,
             },
+            Self::InvalidDuration(_)
+            | Self::NonInteractivePrune
+            | Self::NonInteractiveRestoreSelection => ErrorCategory::Usage,
             Self::Output(_) => ErrorCategory::General,
             Self::Interrupted => ErrorCategory::Interrupted,
         }
@@ -234,7 +248,13 @@ const fn pull_error_category(error: &PullServiceError) -> ErrorCategory {
 
 const fn restore_error_category(error: &RestoreServiceError) -> ErrorCategory {
     match error {
-        RestoreServiceError::Artifact(_) => ErrorCategory::Cache,
+        RestoreServiceError::Artifact(_) | RestoreServiceError::Store(_) => ErrorCategory::Cache,
+        RestoreServiceError::Selection(RestoreSelectionError::NoCandidates { .. }) => {
+            ErrorCategory::Cache
+        }
+        RestoreServiceError::Selection(RestoreSelectionError::Unavailable(_)) => {
+            ErrorCategory::Usage
+        }
         RestoreServiceError::Target(error) => local_target_error_category(error),
         RestoreServiceError::Engine(RestoreEngineError::VersionMismatch) => {
             ErrorCategory::Dependency

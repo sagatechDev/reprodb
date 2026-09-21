@@ -65,15 +65,19 @@ fn dump_requires_a_database() {
 }
 
 #[test]
-fn restore_requires_a_managed_dump_id() {
+fn restore_without_a_dump_id_and_without_a_terminal_names_the_explicit_flag() {
+    let home = tempfile::tempdir().unwrap();
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
+    // No candidates here, so this exercises the cache category; the selector's
+    // own non-interactive refusal is covered in restore_integration.
     command
+        .env("REPRODB_HOME", home.path())
         .args(["restore", "acme"])
         .assert()
         .failure()
-        .code(2)
-        .stderr(predicate::str::contains("--dump-id <ID>"));
+        .code(50)
+        .stderr(predicate::str::contains("no managed dump found"));
 }
 
 #[test]
@@ -121,33 +125,58 @@ fn cache_list_is_useful_before_the_first_dump() {
 }
 
 #[test]
-fn cache_clean_is_idempotent_for_an_empty_home() {
+fn cache_prune_on_an_empty_home_removes_nothing() {
     let home = tempfile::tempdir().unwrap();
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
         .env("REPRODB_HOME", home.path())
-        .args(["cache", "clean"])
+        .args(["cache", "prune"])
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("Cleanup complete · 0 items removed")
-                .and(predicate::str::contains("Expired dumps:          0")),
+            predicate::str::contains("Criterion: older than 7d (default retention)")
+                .and(predicate::str::contains("Nothing to remove")),
         );
 }
 
 #[test]
-fn cache_purge_requires_an_active_profile() {
+fn cache_prune_does_not_require_an_active_profile() {
     let home = tempfile::tempdir().unwrap();
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
         .env("REPRODB_HOME", home.path())
-        .args(["cache", "purge", "acme"])
+        .args(["cache", "prune", "acme", "--all"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Scope:     acme"));
+}
+
+#[test]
+fn cache_prune_rejects_conflicting_criteria() {
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .args(["cache", "prune", "--all", "--keep-last", "2"])
         .assert()
         .failure()
-        .code(10)
-        .stderr(predicate::str::contains("no active source profile"));
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn cache_prune_rejects_an_unparseable_duration() {
+    let home = tempfile::tempdir().unwrap();
+    let mut command = Command::cargo_bin("reprodb").unwrap();
+
+    command
+        .env("REPRODB_HOME", home.path())
+        .args(["cache", "prune", "--older-than", "soon"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("invalid duration `soon`"));
 }
 
 #[test]
