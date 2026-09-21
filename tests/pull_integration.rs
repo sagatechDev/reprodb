@@ -92,7 +92,6 @@ async fn pulls_a_real_database_then_reuses_cache_without_the_source_credential()
         .into_iter()
         .find(|candidate| candidate.name.as_str() == target_name)
         .expect("the temporary target MySQL container was not discovered");
-    let _database = DatabaseName::try_from(format!("salt_reprodb_pull_{suffix}")).unwrap();
     let database = DatabaseName::try_from(format!("reprodb_pull_{}", &suffix[..16])).unwrap();
     let benchmark_rows = benchmark_row_count();
     let profile_name = ProfileName::try_from("pull-local-source").unwrap();
@@ -677,7 +676,10 @@ fn start_mysql_container(
             "MYSQL_ROOT_PASSWORD",
         ]);
     if publish_source_port {
-        command.args(["--publish", "127.0.0.1::3306"]);
+        // The approved client runs inside its own container and reaches the
+        // host through host-gateway, which is not loopback on a Linux engine.
+        // These fixtures are ephemeral and carry a random password.
+        command.args(["--publish", "3306"]);
     }
     if managed_target {
         command.args(["--label", "com.sagatech.reprodb.target=true"]);

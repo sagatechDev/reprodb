@@ -589,24 +589,22 @@ mod tests {
         let validator = LocalCacheValidator::new(LocalArtifactStore::new(directory.path()));
         let profile = profile();
 
-        for tenant in ["acme_production"] {
-            let result = validator
-                .lookup_by_database(&CacheDatabaseLookup {
-                    profile: &profile,
-                    database: &DatabaseName::try_from(tenant).unwrap(),
-                    source_fingerprint: fingerprint(1),
-                    policy_version: 1,
-                    now_unix_seconds: 10_000,
-                    ttl_seconds: DEFAULT_CACHE_TTL_SECONDS,
-                    fresh: false,
-                })
-                .unwrap();
-            let CacheLookupResult::Hit(hit) = result else {
-                panic!("expected cache hit for {tenant}")
-            };
-            assert_eq!(hit.metadata().dump_id, dump_id);
-            assert_eq!(hit.age_seconds(), 100);
-        }
+        let result = validator
+            .lookup_by_database(&CacheDatabaseLookup {
+                profile: &profile,
+                database: &database(),
+                source_fingerprint: fingerprint(1),
+                policy_version: 1,
+                now_unix_seconds: 10_000,
+                ttl_seconds: DEFAULT_CACHE_TTL_SECONDS,
+                fresh: false,
+            })
+            .unwrap();
+        let CacheLookupResult::Hit(hit) = result else {
+            panic!("expected a cache hit for the stored database")
+        };
+        assert_eq!(hit.metadata().dump_id, dump_id);
+        assert_eq!(hit.age_seconds(), 100);
 
         assert_miss(
             validator

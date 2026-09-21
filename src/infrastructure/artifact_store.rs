@@ -784,10 +784,7 @@ fn sync_directory(_path: &Path) -> Result<(), ArtifactStoreError> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::{Cursor, Write as _},
-        sync::Arc,
-    };
+    use std::{io::Cursor, sync::Arc};
 
     use tempfile::tempdir;
 

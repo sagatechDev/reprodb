@@ -369,16 +369,14 @@ mod tests {
         let (_, database, dump_id, metadata) = artifact(directory.path()).await;
         let validator = LocalRestoreArtifactValidator::new(directory.path());
 
-        for tenant in [database.as_str()] {
-            let validated = validator
-                .validate_by_id(RestoreArtifactLookup {
-                    database: &DatabaseName::try_from(tenant).unwrap(),
-                    dump_id,
-                })
-                .await
-                .unwrap();
-            assert_eq!(validated.metadata(), &metadata);
-        }
+        let validated = validator
+            .validate_by_id(RestoreArtifactLookup {
+                database: &database,
+                dump_id,
+            })
+            .await
+            .unwrap();
+        assert_eq!(validated.metadata(), &metadata);
         assert!(matches!(
             validator
                 .validate_by_id(RestoreArtifactLookup {
