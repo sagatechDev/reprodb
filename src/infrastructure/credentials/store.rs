@@ -14,8 +14,6 @@ use crate::domain::CredentialKey;
 
 use sha2::{Digest as _, Sha256};
 
-const DEFAULT_SERVICE: &str = "com.sagatech.reprodb";
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CredentialOperation {
     Get,
@@ -55,63 +53,15 @@ pub trait CredentialStore: Send + Sync {
     async fn delete(&self, key: &CredentialKey) -> Result<(), CredentialError>;
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct OsCredentialStore;
-
-impl OsCredentialStore {
-    async fn run<T>(
-        operation: CredentialOperation,
-        task: impl FnOnce() -> keyring::Result<T> + Send + 'static,
-    ) -> Result<T, CredentialError>
-    where
-        T: Send + 'static,
-    {
-        tokio::task::spawn_blocking(task)
-            .await
-            .map_err(|_| CredentialError::BackgroundTaskFailed { operation })?
-            .map_err(|error| map_keyring_error(operation, error))
-    }
-}
-
-#[async_trait]
-impl CredentialStore for OsCredentialStore {
-    async fn get(&self, key: &CredentialKey) -> Result<SecretString, CredentialError> {
-        let account = key.to_string();
-        Self::run(CredentialOperation::Get, move || {
-            keyring::Entry::new(DEFAULT_SERVICE, &account)?.get_password()
-        })
-        .await
-        .map(SecretString::from)
-    }
-
-    async fn set(&self, key: &CredentialKey, value: SecretString) -> Result<(), CredentialError> {
-        let account = key.to_string();
-        Self::run(CredentialOperation::Set, move || {
-            keyring::Entry::new(DEFAULT_SERVICE, &account)?.set_password(value.expose_secret())
-        })
-        .await
-    }
-
-    async fn delete(&self, key: &CredentialKey) -> Result<(), CredentialError> {
-        let account = key.to_string();
-        Self::run(CredentialOperation::Delete, move || {
-            keyring::Entry::new(DEFAULT_SERVICE, &account)?.delete_credential()
-        })
-        .await
-    }
-}
-
 #[derive(Debug)]
 pub struct RuntimeCredentialStore {
     local: FileCredentialStore,
-    legacy_os: OsCredentialStore,
 }
 
 impl RuntimeCredentialStore {
     pub fn discover(root: PathBuf) -> Self {
         Self {
             local: FileCredentialStore::new(root),
-            legacy_os: OsCredentialStore,
         }
     }
 }
@@ -119,15 +69,7 @@ impl RuntimeCredentialStore {
 #[async_trait]
 impl CredentialStore for RuntimeCredentialStore {
     async fn get(&self, key: &CredentialKey) -> Result<SecretString, CredentialError> {
-        match self.local.get(key).await {
-            Ok(value) => Ok(value),
-            Err(CredentialError::NotFound) => {
-                let value = self.legacy_os.get(key).await?;
-                self.local.set(key, value.clone()).await?;
-                Ok(value)
-            }
-            Err(error) => Err(error),
-        }
+        self.local.get(key).await
     }
 
     async fn set(&self, key: &CredentialKey, value: SecretString) -> Result<(), CredentialError> {
@@ -135,11 +77,7 @@ impl CredentialStore for RuntimeCredentialStore {
     }
 
     async fn delete(&self, key: &CredentialKey) -> Result<(), CredentialError> {
-        match self.local.delete(key).await {
-            Ok(()) => Ok(()),
-            Err(CredentialError::NotFound) => self.legacy_os.delete(key).await,
-            Err(error) => Err(error),
-        }
+        self.local.delete(key).await
     }
 }
 
@@ -279,16 +217,6 @@ fn set_private_file_permissions(file: &File) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn set_private_file_permissions(_file: &File) -> std::io::Result<()> {
     Ok(())
-}
-
-fn map_keyring_error(operation: CredentialOperation, error: keyring::Error) -> CredentialError {
-    match error {
-        keyring::Error::NoEntry => CredentialError::NotFound,
-        keyring::Error::NoDefaultStore | keyring::Error::NoStorageAccess(_) => {
-            CredentialError::StoreUnavailable { operation }
-        }
-        _ => CredentialError::OperationFailed { operation },
-    }
 }
 
 #[derive(Default)]
@@ -442,21 +370,5 @@ mod tests {
         assert!(!error.to_string().contains(marker));
         assert!(!format!("{error:?}").contains(marker));
         assert!(!format!("{:?}", SecretString::from(marker)).contains(marker));
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    #[tokio::test]
-    #[ignore = "touches the native OS credential store"]
-    async fn native_store_roundtrips_a_temporary_credential() {
-        let store = OsCredentialStore;
-        let key = CredentialKey::new(CredentialScope::Source);
-        let value = SecretString::from("reprodb-native-store-integration-test");
-
-        store.set(&key, value.clone()).await.unwrap();
-        let loaded = store.get(&key).await;
-        let cleanup = store.delete(&key).await;
-
-        assert_eq!(loaded.unwrap().expose_secret(), value.expose_secret());
-        cleanup.unwrap();
     }
 }

@@ -25,27 +25,18 @@ O ID do container prova qual target Docker foi autorizado; o `@@server_uuid` pro
 
 Targets criados futuramente pelo reprodb usarão a label `com.sagatech.reprodb.target=true`; perder essa label invalida um target registrado como gerenciado. Um container existente é registrado como `user-confirmed` somente após a seleção explícita durante o setup.
 
-## Allowlist de databases
+## Databases recusados
 
-O setup salva `tenant_database_prefix = "salt_"` por padrão. A autorização aceita, por exemplo:
-
-```text
-salt_sagatec
-salt_polymer
-```
-
-e recusa:
+A autorização recusa os databases administrativos do MySQL:
 
 ```text
-salt_central
 mysql
 information_schema
-customer_data
+performance_schema
+sys
 ```
 
-Os databases administrativos já são impossíveis de representar como `DatabaseName`. A barreira acrescenta duas condições: o database central configurado nunca é um target de restore de tenant e o nome precisa começar pelo prefixo explicitamente salvo.
-
-O prefixo pode ser configurado no setup para instalações do Salt com outra convenção. Ele aceita somente 1–32 letras ASCII, dígitos ou `_`; não é um fragmento SQL.
+Eles são impossíveis de representar como `DatabaseName`, então a recusa acontece antes de qualquer conexão. Qualquer outro nome válido é aceito como destino: o desenvolvedor escolhe o nome local no `pull` e a CLI mostra o plano antes de recriar o database.
 
 ## Integração com o restore
 

@@ -325,7 +325,7 @@ mod tests {
         let (assessor, commands) = assessor(valid_output());
 
         let approved = assessor
-            .assess(&DatabaseName::try_from("salt_sagatec").unwrap())
+            .assess(&DatabaseName::try_from("acme_production").unwrap())
             .await
             .unwrap();
 
@@ -339,14 +339,14 @@ mod tests {
         assert_eq!(approved.preflight.objects.views, 0);
         assert_eq!(approved.preflight.definers.triggers, 0);
         assert_eq!(approved.preflight.gtid_mode, GtidMode::Off);
-        assert_eq!(approved.plan.arguments().last().unwrap(), "salt_sagatec");
+        assert_eq!(approved.plan.arguments().last().unwrap(), "acme_production");
 
         let commands = commands.lock().unwrap();
         let query_arguments = commands.last().unwrap().arguments();
         assert!(
             query_arguments
                 .iter()
-                .any(|argument| argument == "--database=salt_sagatec")
+                .any(|argument| argument == "--database=acme_production")
         );
         assert_eq!(query_arguments.last().unwrap(), PREFLIGHT_QUERY);
         assert!(
@@ -362,7 +362,7 @@ mod tests {
         let (assessor, commands) = assessor(output);
 
         let error = assessor
-            .assess(&DatabaseName::try_from("salt_polymer").unwrap())
+            .assess(&DatabaseName::try_from("globex_production").unwrap())
             .await
             .unwrap_err();
 
@@ -381,7 +381,7 @@ mod tests {
         );
 
         let error = assessor
-            .assess(&DatabaseName::try_from("salt_polymer").unwrap())
+            .assess(&DatabaseName::try_from("globex_production").unwrap())
             .await
             .unwrap_err();
 
@@ -418,7 +418,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires the local mysql-8 Docker fixture on port 3306"]
-    async fn preflights_the_local_salt_sagatec_database_read_only() {
+    async fn preflights_the_local_acme_production_database_read_only() {
         let docker_context = "desktop-linux";
         let client = ClientCatalog::resolve("8.4").unwrap();
         let password = local_container_root_password(docker_context, "mysql-8");
@@ -437,7 +437,7 @@ mod tests {
         );
 
         let approved = assessor
-            .assess(&DatabaseName::try_from("salt_sagatec").unwrap())
+            .assess(&DatabaseName::try_from("acme_production").unwrap())
             .await
             .unwrap();
 
@@ -452,7 +452,7 @@ mod tests {
         );
         assert_eq!(
             approved.plan.arguments().last().map(String::as_str),
-            Some("salt_sagatec")
+            Some("acme_production")
         );
     }
 

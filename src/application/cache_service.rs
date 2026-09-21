@@ -4,10 +4,7 @@ use thiserror::Error;
 
 use crate::{
     application::{Clock, ClockError, SystemClock},
-    domain::{
-        DatabaseName, DumpId, MYSQL_8_DUMP_POLICY_VERSION, ProfileName, Sha256Digest, TenantId,
-        TenantLookup,
-    },
+    domain::{DatabaseName, DumpId, MYSQL_8_DUMP_POLICY_VERSION, ProfileName, Sha256Digest},
     infrastructure::{
         artifact_store::LocalArtifactStore,
         cache::{
@@ -64,10 +61,8 @@ where
                 .into_iter()
                 .map(|entry| CacheListEntry {
                     profile: entry.profile,
-                    tenant_id: entry.tenant_id,
-                    dump_id: entry.dump_id,
-                    tenant_lookup: entry.tenant_lookup,
                     database: entry.database,
+                    dump_id: entry.dump_id,
                     completed_at_unix_seconds: entry.completed_at_unix_seconds,
                     expires_at_unix_seconds: entry.expires_at_unix_seconds,
                     compressed_bytes: entry.compressed_bytes,
@@ -92,16 +87,16 @@ where
             .clean(CacheCleanupPolicy::defaults_at(now_unix_seconds))?)
     }
 
-    pub fn purge(&self, tenant: &TenantLookup) -> Result<CachePurgeReady, CacheServiceError> {
+    pub fn purge(&self, database: &DatabaseName) -> Result<CachePurgeReady, CacheServiceError> {
         let config = self.repository.load()?;
         let profile = config
             .active_profile
             .ok_or(CacheServiceError::NoActiveProfile)?;
-        let report =
-            LocalCacheCleaner::new(self.repository.paths().cache_dir()).purge(&profile, tenant)?;
+        let report = LocalCacheCleaner::new(self.repository.paths().cache_dir())
+            .purge(&profile, database)?;
         Ok(CachePurgeReady {
             profile,
-            tenant: tenant.clone(),
+            database: database.clone(),
             report,
         })
     }
@@ -145,10 +140,8 @@ impl From<CacheEntryStatus> for CacheListStatus {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CacheListEntry {
     pub profile: ProfileName,
-    pub tenant_id: TenantId,
+    pub database: DatabaseName,
     pub dump_id: DumpId,
-    pub tenant_lookup: Option<TenantLookup>,
-    pub database: Option<DatabaseName>,
     pub completed_at_unix_seconds: Option<u64>,
     pub expires_at_unix_seconds: Option<u64>,
     pub compressed_bytes: Option<u64>,
@@ -166,7 +159,7 @@ pub struct CacheListReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CachePurgeReady {
     pub profile: ProfileName,
-    pub tenant: TenantLookup,
+    pub database: DatabaseName,
     pub report: CachePurgeReport,
 }
 
@@ -238,7 +231,7 @@ mod tests {
     fn purge_requires_an_active_profile_before_touching_the_cache() {
         let directory = tempdir().unwrap();
         let error = service(directory.path())
-            .purge(&TenantLookup::try_from("sagatec").unwrap())
+            .purge(&DatabaseName::try_from("acme_production").unwrap())
             .unwrap_err();
 
         assert!(matches!(error, CacheServiceError::NoActiveProfile));

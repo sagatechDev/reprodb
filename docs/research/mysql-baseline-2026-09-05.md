@@ -1,5 +1,7 @@
 # RDB-001 — Baseline MySQL local e de CI do Salt
 
+> **Histórico.** Pesquisa datada, anterior à remoção do conceito de tenant. Mantida como registro.
+
 > Levantamento realizado em 5 de setembro de 2026 sem conexão com produção e sem leitura de dados de negócio.
 
 ## Objetivo
@@ -71,9 +73,9 @@ Foram encontrados `salt_central` e onze outros schemas `salt_*`.
 | `salt_empresa_1` | 505 | 24 MiB |
 | `salt_empresa_2` | 505 | 23 MiB |
 | `salt_fk_probe` | 453 | 20 MiB |
-| `salt_polymer` | 504 | 183 MiB |
-| `salt_polymer1` | 456 | 177 MiB |
-| `salt_sagatec` | 519 | 2,38 GiB |
+| `globex_production` | 504 | 183 MiB |
+| `globex_production1` | 456 | 177 MiB |
+| `acme_production` | 519 | 2,38 GiB |
 | `salt_sigga` | 486 | 858 MiB |
 | `salt_test` | 9 | 240 KiB |
 | `salt_watt_construtora` | 484 | 48 MiB |
@@ -97,7 +99,7 @@ Esses números justificam `--single-transaction` no ambiente local, mas não sub
 Os schemas não compartilham uma única collation:
 
 - vários usam `utf8mb4_0900_ai_ci`;
-- `salt_ct`, `salt_fk_probe`, `salt_sagatec` e `salt_test` usam `utf8mb4_unicode_ci` no ambiente examinado.
+- `salt_ct`, `salt_fk_probe`, `acme_production` e `salt_test` usam `utf8mb4_unicode_ci` no ambiente examinado.
 
 O restore deve criar o database target com charset e collation registrados no metadata do dump. Usar apenas o default do target pode mudar comparação e ordenação de strings.
 
@@ -122,7 +124,7 @@ O database `salt_central` contém:
 Exemplos observados sem leitura de dados de negócio:
 
 ```text
-sagatec -> salt_sagatec -> salt_sagatec
+acme -> acme_production -> acme_production
 sigga   -> salt_sigga   -> salt_sigga
 watt    -> salt_watt_construtora -> salt_watt_construtora
 ```

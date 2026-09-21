@@ -2,7 +2,7 @@
 
 Este roteiro permite avaliar a experiência planejada do `reprodb` antes de os fluxos reais estarem completos.
 
-Os comandos com `--preview` são simulações determinísticas e sem efeitos colaterais. Eles não leem nem escrevem configuração, não acessam Keychain/Secret Service, não executam Docker e não conectam em MySQL. Os containers, versões, bancos e resultados exibidos são exemplos.
+Os comandos com `--preview` são simulações determinísticas e sem efeitos colaterais. Eles não leem nem escrevem configuração, não acessam credential store local, não executam Docker e não conectam em MySQL. Os containers, versões, bancos e resultados exibidos são exemplos.
 
 ## 1. Preparação
 
@@ -28,7 +28,7 @@ $REPRODB --help
 $REPRODB profile --help
 $REPRODB profile add --help
 $REPRODB profile edit --help
-$REPRODB tenant list --help
+$REPRODB db list --help
 $REPRODB pull --help
 ```
 
@@ -36,7 +36,7 @@ Observe:
 
 - se os nomes dos comandos deixam clara a intenção;
 - se os argumentos obrigatórios são descobertos sem consultar documentação;
-- se `source profile`, `local target`, `tenant` e `dump` parecem conceitos distintos;
+- se `source profile`, `local target`, `database` e `dump` parecem conceitos distintos;
 - se `--fresh` comunica corretamente que ignora um cache válido.
 
 ## 3. Jornada principal simulada
@@ -55,7 +55,7 @@ O fluxo real também pode ser percorrido sem salvar: execute o comando abaixo, s
 $REPRODB setup --color never
 ```
 
-Sem `--preview`, a descoberta consulta o Docker real. Se você concluir todos os prompts com uma credencial válida, o target será testado e salvo no Keychain/Secret Service e no TOML local.
+Sem `--preview`, a descoberta consulta o Docker real. Se você concluir todos os prompts com uma credencial válida, o target será testado e salvo no credential store local e no TOML local.
 
 ### 3.2 Cadastrar uma conexão source
 
@@ -68,7 +68,7 @@ Avalie principalmente:
 - a ordem de host, porta, usuário e senha;
 - se fica claro que essa conexão é a origem do dump;
 - se a detecção automática da versão e a seleção do client fazem sentido;
-- se a diferença entre resolver tenant e escolher database está compreensível;
+- se a diferença entre database de origem e database local está compreensível;
 - se o resumo final é suficiente antes de salvar;
 - se a localização da senha está clara sem expor seu valor.
 
@@ -95,10 +95,10 @@ Num profile já configurado, o database central pode ser corrigido sem solicitar
 $REPRODB profile edit sandbox --central-database outro_central
 ```
 
-`tenant list` não possui preview porque seu resultado depende do source real. Ele é somente leitura, mas abre uma conexão e executa um `SELECT`; use-o apenas quando quiser consultar conscientemente o ambiente configurado:
+`db list` não possui preview porque seu resultado depende do source real. Ele é somente leitura, mas abre uma conexão e executa um `SELECT`; use-o apenas quando quiser consultar conscientemente o ambiente configurado:
 
 ```bash
-$REPRODB tenant list
+$REPRODB db list
 ```
 
 ### 3.3 Diagnosticar o ambiente
@@ -118,18 +118,18 @@ echo $?
 
 Ele não baixa a imagem do client, inicia o target ou altera bancos/configuração. Os probes executam containers efêmeros `--rm` do client já presente. É normal obter falhas acionáveis enquanto `profile add` ou `setup` ainda não estiverem completos. Confira se checks independentes continuam aparecendo depois da primeira falha e se as seções `Configuration`, `Storage`, `Docker`, `Source` e `Local target` deixam claro onde agir.
 
-### 3.4 Reproduzir um tenant
+### 3.4 Reproduzir um database
 
 Fluxo normal, com consulta ao cache:
 
 ```bash
-$REPRODB pull sagatec --preview
+$REPRODB pull acme --preview
 ```
 
 Fluxo que força um dump novo:
 
 ```bash
-$REPRODB pull sagatec --fresh --preview
+$REPRODB pull acme --fresh --preview
 ```
 
 Compare as mensagens de cache e confirme se source, target, progresso sem percentual e resultado final ficam claros.
@@ -137,10 +137,10 @@ Compare as mensagens de cache e confirme se source, target, progresso sem percen
 Repita com outro database observado no ambiente local:
 
 ```bash
-$REPRODB pull polymer --preview
+$REPRODB pull globex --preview
 ```
 
-As resoluções ilustradas são `sagatec → salt_sagatec` e `polymer → salt_polymer`. Para qualquer outro alias, a prévia mostra placeholders em vez de inventar um nome de database.
+As resoluções ilustradas são `acme → acme_production` e `globex → globex_production`. Para qualquer outro alias, a prévia mostra placeholders em vez de inventar um nome de database.
 
 ## 4. Cores e acessibilidade
 
@@ -149,9 +149,9 @@ Por padrão, cores são usadas somente quando a saída está ligada a um termina
 Force ou desabilite as cores para comparar:
 
 ```bash
-$REPRODB pull sagatec --preview --color always
-$REPRODB pull sagatec --preview --color never
-NO_COLOR=1 $REPRODB pull sagatec --preview
+$REPRODB pull acme --preview --color always
+$REPRODB pull acme --preview --color never
+NO_COLOR=1 $REPRODB pull acme --preview
 ```
 
 Observe se verde comunica sucesso, amarelo chama atenção sem parecer falha concluída e ciano indica seleção/contexto. O modo sem cor precisa continuar inteiramente compreensível.
@@ -171,33 +171,32 @@ Ele também para imediatamente se algum cenário retornar erro inesperado.
 O setup de um container existente e o ciclo de source profiles já são reais:
 
 ```bash
-$REPRODB profile add salt-local
+$REPRODB profile add local-source
 $REPRODB profile list
-$REPRODB profile use salt-local
-$REPRODB profile remove salt-local
+$REPRODB profile use local-source
+$REPRODB profile remove local-source
 ```
 
-Esses comandos podem acessar Docker, MySQL, configuração e Keychain/Secret Service. Use `--preview` quando quiser apenas avaliar a apresentação. `doctor` executa checks reais somente-leitura.
+Esses comandos podem acessar Docker, MySQL, configuração e credential store local. Use `--preview` quando quiser apenas avaliar a apresentação. `doctor` executa checks reais somente-leitura.
 
 Depois de configurar um source MySQL local, o dump já pode ser exercitado de ponta a ponta:
 
 ```bash
-$REPRODB profile use salt-local
+$REPRODB profile use local-source
 $REPRODB doctor
-$REPRODB dump sagatec
+$REPRODB dump acme
 echo $?
 ```
 
-Esse comando é uma operação real: ele consulta o source, resolve `sagatec` pelo `salt_central`, lê `salt_sagatec` com `mysqldump` e grava um `.sql.zst` no cache da aplicação. Para avaliar a UX sem acessar produção, use um profile local. Um profile classificado como produção deve exibir `PRODUCTION SOURCE` em vermelho antes de qualquer acesso e só deve ser usado durante o piloto autorizado descrito na RDB-073.
+Esse comando é uma operação real: ele consulta o source, lê `acme_production` com `mysqldump` e grava um `.sql.zst` no cache da aplicação. Para avaliar a UX sem acessar produção, use um profile local. Um profile classificado como produção deve exibir `PRODUCTION SOURCE` em vermelho antes de qualquer acesso e só deve ser usado durante o piloto autorizado descrito na RDB-073.
 
 Uma execução bem-sucedida deve terminar aproximadamente assim:
 
 ```text
 ✓ Dump ready
 
-  Profile:   salt-local
-  Tenant:    salt_sagatec
-  Database:  salt_sagatec
+  Profile:   local-source
+  Database:  acme_production
   Dump ID:   <uuid>
   MySQL:     8.4.4 (client 8.4.4)
   Data:      <tamanho SQL> → <tamanho Zstd>
@@ -210,45 +209,45 @@ Durante a exportação em um terminal interativo, observe se a linha única de p
 Copie o `Dump ID` retornado e exercite o restore real no target escolhido pelo `setup`:
 
 ```bash
-$REPRODB restore sagatec --dump-id <uuid>
+$REPRODB restore acme --dump-id <uuid>
 echo $?
 ```
 
-Antes de substituir o database local, confira se o plano mostra o profile source gravado no dump, `salt_sagatec`, o container `mysql-8`, o mesmo UUID e o domain `sagatec`. O comando não consulta novamente o source, mas executa `DROP/CREATE` no database tenant local, importa o SQL e atualiza `salt_central`; não use um target que contenha dados locais que você queira preservar.
+Antes de substituir o database local, confira se o plano mostra o profile source gravado no dump, `acme_production`, o container `mysql-8` e o mesmo UUID. O comando não consulta novamente o source, mas executa `DROP/CREATE` no database local e importa o SQL; não use um target que contenha dados locais que você queira preservar.
 
 Repita o mesmo comando para avaliar o retry idempotente. Um UUID inválido deve terminar com exit code `2`, e um UUID válido mas ausente do cache deve terminar com exit code `50`, ambos antes de acessar Docker:
 
 ```bash
-$REPRODB restore sagatec --dump-id ../../dump.sql.zst
-$REPRODB restore sagatec --dump-id 550e8400-e29b-41d4-a716-446655440000
+$REPRODB restore acme --dump-id ../../dump.sql.zst
+$REPRODB restore acme --dump-id 550e8400-e29b-41d4-a716-446655440000
 ```
 
 O fluxo completo também está disponível. A primeira chamada normalmente cria um dump e a segunda deve mostrar um cache hit com o mesmo UUID:
 
 ```bash
-$REPRODB pull sagatec
-$REPRODB pull sagatec
-$REPRODB pull sagatec --fresh
-$REPRODB pull sagatec --database salt_sagatec_debug
-$REPRODB pull polymer --target mysql-target --database salt_polymer_debug
+$REPRODB pull acme
+$REPRODB pull acme
+$REPRODB pull acme --fresh
+$REPRODB pull acme --database acme_production_debug
+$REPRODB pull globex --target mysql-target --database globex_production_debug
 ```
 
-Compare a indicação `new dump`/`reused`, a idade do cache e o aviso antes da substituição local. Com dois containers cadastrados por `setup`, o prompt de container deve listar ambos e marcar o default; `--target` deve pular essa escolha. Em seguida, o prompt de database deve oferecer `salt_sagatec`; pressionar Enter mantém o default. `--fresh` deve gerar outro UUID. A opção `--database` deve restaurar no nome alternativo permitido e atualizar o registro correspondente no `salt_central` do target escolhido.
+Compare a indicação `new dump`/`reused`, a idade do cache e o aviso antes da substituição local. Com dois containers cadastrados por `setup`, o prompt de container deve listar ambos e marcar o default; `--target` deve pular essa escolha. Em seguida, o prompt de database deve oferecer `acme_production`; pressionar Enter mantém o default. `--fresh` deve gerar outro UUID. A opção `--database` deve restaurar no nome alternativo informado.
 
 Inspecione então a pasta local e compare os UUIDs, idades e estados de integridade:
 
 ```bash
 $REPRODB cache list
 $REPRODB cache clean
-$REPRODB cache purge sagatec
+$REPRODB cache purge acme
 ```
 
-`cache list` lê os dumps completos para validar SHA-256 e pode demorar em caches grandes. `clean` remove somente itens vencidos/abandonados; `purge` remove os dumps do tenant somente no profile ativo e não altera o database já restaurado no `mysql-8`.
+`cache list` lê os dumps completos para validar SHA-256 e pode demorar em caches grandes. `clean` remove somente itens vencidos/abandonados; `purge` remove os dumps do database somente no profile ativo e não altera o database já restaurado no `mysql-8`.
 
 A prévia continua disponível para avaliar o fluxo sem tocar nos bancos:
 
 ```bash
-$REPRODB pull sagatec --preview
+$REPRODB pull acme --preview
 ```
 
 ## 7. Checklist para feedback

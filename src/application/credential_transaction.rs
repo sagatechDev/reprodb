@@ -98,7 +98,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        domain::{ContainerId, ContainerName, CredentialScope, DatabaseName},
+        domain::{ContainerId, ContainerName, CredentialScope},
         infrastructure::{
             config::{AppPaths, LocalTargetConfig},
             credentials::{CredentialError, MemoryCredentialStore},
@@ -131,9 +131,7 @@ mod tests {
                 container_id: ContainerId::try_from("a".repeat(64)).unwrap(),
                 username: "root".to_owned(),
                 credential_key: key,
-                central_database: DatabaseName::try_from("salt_central").unwrap(),
                 trust: crate::infrastructure::config::LocalTargetTrust::UserConfirmed,
-                legacy_tenant_database_prefix: None,
             }),
             ..AppConfig::default()
         }

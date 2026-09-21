@@ -8,15 +8,11 @@ use reprodb::{
         PullRestoreDependencies, PullService, PullTargetChoice, PullTargetSelectionError,
         PullTargetSelector,
     },
-    domain::{
-        CredentialKey, CredentialScope, DatabaseName, DomainAlias, MysqlTlsMode, ProfileName,
-        TenantLookup,
-    },
+    domain::{CredentialKey, CredentialScope, DatabaseName, MysqlTlsMode, ProfileName},
     infrastructure::{
         config::{
             AppConfig, AppPaths, ClientRuntimeConfig, ConfigRepository, LocalTargetConfig,
             LocalTargetTrust, MysqlClientConfig, MysqlFamily, SourceProfileConfig,
-            TenantResolverConfig,
         },
         credentials::{
             CredentialStore, MYSQL_OPTION_FILE_CONTAINER_PATH, MYSQL_SECRETS_CONTAINER_DIRECTORY,
@@ -24,8 +20,8 @@ use reprodb::{
         },
         docker::DockerTargetDiscovery,
         mysql::{
-            ClientCatalog, DockerDumpWorkflow, DockerLocalTargetAttestor, DockerLocalTenantWriter,
-            DockerMysqlDumpExecutor, DockerMysqlRestoreExecutor,
+            ClientCatalog, DockerDumpWorkflow, DockerLocalTargetAttestor, DockerMysqlDumpExecutor,
+            DockerMysqlRestoreExecutor,
         },
         process::TokioProcessRunner,
     },
@@ -62,7 +58,7 @@ impl PullTargetSelector for DefaultTarget {
 
 #[tokio::test]
 #[ignore = "creates isolated MySQL source/target containers and proves pull plus cache reuse"]
-async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
+async fn pulls_a_real_database_then_reuses_cache_without_the_source_credential() {
     let (context, _) = DockerTargetDiscovery::new(TokioProcessRunner)
         .discover()
         .await
@@ -96,8 +92,8 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
         .into_iter()
         .find(|candidate| candidate.name.as_str() == target_name)
         .expect("the temporary target MySQL container was not discovered");
-    let database = DatabaseName::try_from(format!("salt_reprodb_pull_{suffix}")).unwrap();
-    let domain = DomainAlias::try_from(format!("reprodb-pull-{}", &suffix[..16])).unwrap();
+    let _database = DatabaseName::try_from(format!("salt_reprodb_pull_{suffix}")).unwrap();
+    let database = DatabaseName::try_from(format!("reprodb_pull_{}", &suffix[..16])).unwrap();
     let benchmark_rows = benchmark_row_count();
     let profile_name = ProfileName::try_from("pull-local-source").unwrap();
     let client = ClientCatalog::resolve("8.4").unwrap();
@@ -123,13 +119,11 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
                 container_id: target_candidate.id.clone(),
                 username: "root".to_owned(),
                 credential_key: target_key,
-                central_database: DatabaseName::try_from("salt_central").unwrap(),
                 trust: if target_candidate.managed_by_reprodb {
                     LocalTargetTrust::ReprodbManaged
                 } else {
                     LocalTargetTrust::UserConfirmed
                 },
-                legacy_tenant_database_prefix: None,
             }),
             profiles: std::collections::BTreeMap::from([(
                 profile_name,
@@ -145,10 +139,6 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
                     tls_material: Default::default(),
                     client: MysqlClientConfig {
                         image: client.image().to_owned(),
-                    },
-                    tenant_resolver: TenantResolverConfig::SaltCentral {
-                        central_database: DatabaseName::try_from("salt_central").unwrap(),
-                        allow_domain_lookup: true,
                     },
                 },
             )]),
@@ -179,35 +169,6 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
         &target_password,
     )
     .await;
-    create_salt_central(
-        &context,
-        source_candidate.id.as_str(),
-        client.image(),
-        &source_password,
-    );
-    create_salt_central(
-        &context,
-        target_candidate.id.as_str(),
-        client.image(),
-        &target_password,
-    );
-
-    let collision = run_mysql_query(
-        &context,
-        source_candidate.id.as_str(),
-        client.image(),
-        &source_password,
-        MysqlTlsMode::Required,
-        Some(&DatabaseName::try_from("salt_central").unwrap()),
-        &format!(
-            "SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE BINARY SCHEMA_NAME = BINARY 0x{database}), (SELECT COUNT(*) FROM tenants WHERE BINARY id = BINARY 0x{tenant}), (SELECT COUNT(*) FROM domains WHERE BINARY domain = BINARY 0x{domain})",
-            database = hex_utf8(database.as_str()),
-            tenant = hex_utf8(database.as_str()),
-            domain = hex_utf8(domain.as_str()),
-        ),
-    )
-    .unwrap();
-    assert_eq!(collision, b"0\t0\t0\n");
 
     let fixture = run_mysql_query(
         &context,
@@ -221,12 +182,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
              CREATE TABLE `{database}`.`reprodb_pull_items` (`id` BIGINT NOT NULL PRIMARY KEY, `label` VARCHAR(255) NOT NULL, `payload` MEDIUMTEXT NOT NULL) ENGINE=InnoDB; \
              CREATE TABLE `{database}`.`reprodb_pull_details` (`item_id` BIGINT NOT NULL PRIMARY KEY, `amount` DECIMAL(12,2) NOT NULL, `occurred_at` DATETIME NOT NULL, `binary_payload` BLOB NOT NULL, `nullable_note` VARCHAR(255) NULL, CONSTRAINT `reprodb_pull_details_item_fk` FOREIGN KEY (`item_id`) REFERENCES `reprodb_pull_items` (`id`)) ENGINE=InnoDB; \
              INSERT INTO `{database}`.`reprodb_pull_items` VALUES (1, CONVERT(0x5361676174656320F09FA782 USING utf8mb4), 'small-fixture-one'), (2, 'Polymer', 'small-fixture-two'); \
-             INSERT INTO `{database}`.`reprodb_pull_details` VALUES (1, 1234567890.12, '2026-09-07 12:34:56', 0x0001FEFF, NULL); \
-             INSERT INTO `salt_central`.`tenants` (`id`, `created_at`, `updated_at`, `data`) VALUES (CONVERT(0x{tenant} USING utf8mb4), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, JSON_OBJECT('tenancy_db_name', CONVERT(0x{database_hex} USING utf8mb4), 'tenancy_app_color', 'green')); \
-             INSERT INTO `salt_central`.`domains` (`domain`, `tenant_id`, `created_at`, `updated_at`) VALUES (CONVERT(0x{domain} USING utf8mb4), CONVERT(0x{tenant} USING utf8mb4), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            tenant = hex_utf8(database.as_str()),
-            database_hex = hex_utf8(database.as_str()),
-            domain = hex_utf8(domain.as_str()),
+             INSERT INTO `{database}`.`reprodb_pull_details` VALUES (1, 1234567890.12, '2026-09-07 12:34:56', 0x0001FEFF, NULL);",
         ),
     );
     let generated_fixture = fixture.and_then(|_| {
@@ -267,8 +223,7 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
             MysqlTlsMode::Required,
             None,
             &format!(
-                "CREATE USER 'reprodb_reader'@'%' IDENTIFIED BY '{}'; \
-                 GRANT SELECT, SHOW VIEW, TRIGGER ON `salt_central`.* TO 'reprodb_reader'@'%'; \
+                "CREATE USER 'reprodb_reader'@'%' IDENTIFIED BY '{}';  \
                  GRANT SELECT, SHOW VIEW, TRIGGER ON `{database}`.* TO 'reprodb_reader'@'%'",
                 dump_password.expose_secret()
             ),
@@ -288,18 +243,16 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
             .pull(
                 &credentials,
                 PullDumpDependencies {
-                    tenant_resolver: &workflow,
                     preflight: &workflow,
                     executor: &dump_executor,
                 },
                 PullRestoreDependencies {
                     target_attestor: &attestor,
                     executor: DockerMysqlRestoreExecutor::default(),
-                    tenant_writer: DockerLocalTenantWriter::new(TokioProcessRunner),
                     target_selector: &DefaultTarget,
                     database_selector: &SourceDatabase,
                 },
-                TenantLookup::try_from(domain.as_str()).unwrap(),
+                database.clone(),
                 false,
             )
             .await
@@ -313,18 +266,16 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
             .pull(
                 &credentials,
                 PullDumpDependencies {
-                    tenant_resolver: &workflow,
                     preflight: &workflow,
                     executor: &dump_executor,
                 },
                 PullRestoreDependencies {
                     target_attestor: &attestor,
                     executor: DockerMysqlRestoreExecutor::default(),
-                    tenant_writer: DockerLocalTenantWriter::new(TokioProcessRunner),
                     target_selector: &DefaultTarget,
                     database_selector: &SourceDatabase,
                 },
-                TenantLookup::try_from(domain.as_str()).unwrap(),
+                database.clone(),
                 false,
             )
             .await
@@ -354,22 +305,6 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
             MysqlTlsMode::Required,
             Some(&database),
             "SELECT COUNT(*) FROM reprodb_pull_items",
-        ))
-    } else {
-        None
-    };
-    let central_verification = if second.is_ok() {
-        Some(run_mysql_query(
-            &context,
-            target_candidate.id.as_str(),
-            client.image(),
-            &target_password,
-            MysqlTlsMode::Required,
-            Some(&DatabaseName::try_from("salt_central").unwrap()),
-            &format!(
-                "SELECT JSON_UNQUOTE(JSON_EXTRACT(data, '$.tenancy_db_name')), JSON_UNQUOTE(JSON_EXTRACT(data, '$.tenancy_app_color')) FROM tenants WHERE BINARY id = BINARY 0x{}",
-                hex_utf8(database.as_str())
-            ),
         ))
     } else {
         None
@@ -415,10 +350,6 @@ async fn pulls_a_real_tenant_then_reuses_cache_without_the_source_credential() {
     assert_eq!(
         String::from_utf8(verification.unwrap().unwrap()).unwrap(),
         "1\t5361676174656320F09FA782\n2\t506F6C796D6572\n"
-    );
-    assert_eq!(
-        String::from_utf8(central_verification.unwrap().unwrap()).unwrap(),
-        format!("{database}\tgreen\n")
     );
     assert_eq!(
         String::from_utf8(row_count_verification.unwrap().unwrap()).unwrap(),
@@ -479,7 +410,6 @@ fn generated_rows_sql(rows: u64) -> String {
     )
 }
 
-#[cfg(feature = "test-file-credential-store")]
 #[tokio::test]
 #[ignore = "creates isolated MySQL containers and executes the real CLI across processes"]
 async fn real_cli_configures_pulls_and_reuses_cache_with_the_source_offline() {
@@ -543,21 +473,8 @@ async fn real_cli_configures_pulls_and_reuses_cache_with_the_source_offline() {
         &target_password,
     )
     .await;
-    create_salt_central(
-        &context,
-        source.id.as_str(),
-        client.image(),
-        &source_password,
-    );
-    create_salt_central(
-        &context,
-        target.id.as_str(),
-        client.image(),
-        &target_password,
-    );
 
-    let database = DatabaseName::try_from(format!("salt_cli_{suffix}")).unwrap();
-    let domain = DomainAlias::try_from(format!("cli-e2e-{}", &suffix[..16])).unwrap();
+    let database = DatabaseName::try_from(format!("cli_e2e_{suffix}")).unwrap();
     run_mysql_query(
         &context,
         source.id.as_str(),
@@ -568,12 +485,7 @@ async fn real_cli_configures_pulls_and_reuses_cache_with_the_source_offline() {
         &format!(
             "CREATE DATABASE `{database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; \
              CREATE TABLE `{database}`.`cli_items` (`id` BIGINT NOT NULL PRIMARY KEY, `label` VARCHAR(255) NOT NULL) ENGINE=InnoDB; \
-             INSERT INTO `{database}`.`cli_items` VALUES (1, 'Sagatec'), (2, 'Polymer'); \
-             INSERT INTO `salt_central`.`tenants` (`id`, `created_at`, `updated_at`, `data`) VALUES (CONVERT(0x{tenant} USING utf8mb4), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, JSON_OBJECT('tenancy_db_name', CONVERT(0x{database_hex} USING utf8mb4), 'tenancy_app_color', 'blue')); \
-             INSERT INTO `salt_central`.`domains` (`domain`, `tenant_id`, `created_at`, `updated_at`) VALUES (CONVERT(0x{domain_hex} USING utf8mb4), CONVERT(0x{tenant} USING utf8mb4), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            tenant = hex_utf8(database.as_str()),
-            database_hex = hex_utf8(database.as_str()),
-            domain_hex = hex_utf8(domain.as_str()),
+             INSERT INTO `{database}`.`cli_items` VALUES (1, 'Sagatec'), (2, 'Polymer');",
         ),
     )
     .expect("the CLI source fixture must be created");
@@ -624,7 +536,7 @@ async fn real_cli_configures_pulls_and_reuses_cache_with_the_source_offline() {
 
     let pull_arguments = [
         "pull",
-        domain.as_str(),
+        database.as_str(),
         "--target",
         &target_name,
         "--database",
@@ -672,7 +584,6 @@ async fn real_cli_configures_pulls_and_reuses_cache_with_the_source_offline() {
     );
 }
 
-#[cfg(feature = "test-file-credential-store")]
 fn run_real_cli(
     home: &std::path::Path,
     credential_dir: &std::path::Path,
@@ -710,7 +621,6 @@ fn run_real_cli(
     output
 }
 
-#[cfg(feature = "test-file-credential-store")]
 fn assert_cli_success(operation: &str, output: &std::process::Output) {
     assert!(
         output.status.success(),
@@ -786,26 +696,6 @@ fn start_mysql_container(
     }
 }
 
-fn create_salt_central(
-    context: &str,
-    container_id: &str,
-    client_image: &str,
-    password: &SecretString,
-) {
-    run_mysql_query(
-        context,
-        container_id,
-        client_image,
-        password,
-        MysqlTlsMode::Required,
-        None,
-        "CREATE DATABASE `salt_central` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; \
-         CREATE TABLE `salt_central`.`tenants` (`id` VARCHAR(255) NOT NULL PRIMARY KEY, `created_at` TIMESTAMP NULL, `updated_at` TIMESTAMP NULL, `data` JSON NULL) ENGINE=InnoDB; \
-         CREATE TABLE `salt_central`.`domains` (`id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, `domain` VARCHAR(255) NOT NULL UNIQUE, `tenant_id` VARCHAR(255) NOT NULL, `created_at` TIMESTAMP NULL, `updated_at` TIMESTAMP NULL, CONSTRAINT `domains_tenant_fk` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`)) ENGINE=InnoDB",
-    )
-    .expect("the temporary salt_central fixture must be created");
-}
-
 async fn wait_for_mysql(
     context: &str,
     container_id: &str,
@@ -832,10 +722,6 @@ async fn wait_for_mysql(
         "temporary MySQL target did not become ready: {}",
         last_error.unwrap_or_else(|| "no diagnostic".to_owned())
     );
-}
-
-fn hex_utf8(value: &str) -> String {
-    value.bytes().map(|byte| format!("{byte:02X}")).collect()
 }
 
 fn run_mysql_query(

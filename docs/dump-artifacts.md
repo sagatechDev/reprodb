@@ -6,7 +6,7 @@ Cada dump completo é uma unidade imutável identificada por UUID:
 cache/
 └── profiles/
     └── local-source/
-        └── salt_sagatec/
+        └── acme_production/
             └── 8f2d.../
                 ├── dump.sql.zst
                 └── metadata.json
@@ -39,12 +39,10 @@ No Unix, diretórios recebem modo `0700` e arquivos `0600`. macOS e Linux seguem
 O formato `mysql-sql-zstd-v1` registra:
 
 - dump ID;
-- tenant lookup e tenant ID canônico;
 - database e profile;
 - fingerprint da configuração e UUID observado do servidor source;
 - versões do source e client;
 - charset e collation;
-- snapshot tipado das features permitidas para o tenant local;
 - versão da DumpPolicy;
 - criação e conclusão em segundos Unix;
 - bytes SQL e comprimidos;

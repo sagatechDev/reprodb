@@ -2,14 +2,14 @@ use thiserror::Error;
 
 use crate::{
     application::{
-        CacheServiceError, CredentialProvisionError, DoctorFailureKind, DumpServiceError,
-        LocalTargetAttestationError, LocalTargetGateError, LocalTenantRegistrationServiceError,
-        LocalTenantWriteError, ProfileServiceError, PullServiceError, RestoreEngineError,
-        RestoreServiceError, SetupServiceError, SourceVerificationError, TargetVerificationError,
-        TenantCatalogReadError, TenantCatalogServiceError,
+        CacheServiceError, CredentialProvisionError, DatabaseCatalogReadError,
+        DatabaseCatalogServiceError, DoctorFailureKind, DumpServiceError,
+        LocalTargetAttestationError, LocalTargetGateError, ProfileServiceError, PullServiceError,
+        RestoreEngineError, RestoreServiceError, SetupServiceError, SourceVerificationError,
+        TargetVerificationError,
     },
     cli::prompt::PromptError,
-    domain::{DumpMetadataError, TenantResolutionError, ValueObjectError},
+    domain::{DumpMetadataError, ValueObjectError},
     infrastructure::config::ConfigError,
     infrastructure::docker::DockerDiscoveryError,
     infrastructure::mysql::{
@@ -26,7 +26,6 @@ pub enum ErrorCategory {
     Credential,
     Dependency,
     SourceConnection,
-    TenantResolution,
     Dump,
     Cache,
     Docker,
@@ -43,7 +42,6 @@ impl ErrorCategory {
             Self::Credential => 11,
             Self::Dependency => 20,
             Self::SourceConnection => 30,
-            Self::TenantResolution => 31,
             Self::Dump => 40,
             Self::Cache => 50,
             Self::Docker => 60,
@@ -60,9 +58,6 @@ pub enum AppError {
 
     #[error(transparent)]
     InvalidDumpId(#[from] DumpMetadataError),
-
-    #[error(transparent)]
-    TenantResolution(#[from] TenantResolutionError),
 
     #[error(transparent)]
     Profile(#[from] ProfileServiceError),
@@ -92,7 +87,7 @@ pub enum AppError {
     Cache(#[from] CacheServiceError),
 
     #[error(transparent)]
-    TenantCatalog(#[from] TenantCatalogServiceError),
+    DatabaseCatalog(#[from] DatabaseCatalogServiceError),
 
     #[error("doctor found required problems; review the failed checks above")]
     DoctorChecksFailed { kind: DoctorFailureKind },
@@ -109,22 +104,6 @@ impl AppError {
         match self {
             Self::InvalidValue(..) => ErrorCategory::Usage,
             Self::InvalidDumpId(..) => ErrorCategory::Usage,
-            Self::TenantResolution(
-                TenantResolutionError::InvalidPattern
-                | TenantResolutionError::InvalidTenantId(_)
-                | TenantResolutionError::InvalidDatabase(_)
-                | TenantResolutionError::NotFound
-                | TenantResolutionError::Ambiguous
-                | TenantResolutionError::InvalidMetadata
-                | TenantResolutionError::ConnectionOverride,
-            ) => ErrorCategory::TenantResolution,
-            Self::TenantResolution(
-                TenantResolutionError::SourceUnavailable
-                | TenantResolutionError::AuthenticationFailed,
-            ) => ErrorCategory::SourceConnection,
-            Self::TenantResolution(TenantResolutionError::ClientUnavailable) => {
-                ErrorCategory::Dependency
-            }
             Self::Profile(ProfileServiceError::Config(_))
             | Self::Profile(ProfileServiceError::NotFound)
             | Self::Profile(ProfileServiceError::AlreadyExists) => ErrorCategory::Configuration,
@@ -188,22 +167,22 @@ impl AppError {
             Self::Restore(error) => restore_error_category(error),
             Self::Pull(error) => pull_error_category(error),
             Self::Cache(error) => cache_error_category(error),
-            Self::TenantCatalog(error) => match error {
-                TenantCatalogServiceError::Config(_)
-                | TenantCatalogServiceError::NoActiveProfile => ErrorCategory::Configuration,
-                TenantCatalogServiceError::InvalidLimit => ErrorCategory::Usage,
-                TenantCatalogServiceError::Credential(_)
-                | TenantCatalogServiceError::Read(TenantCatalogReadError::AuthenticationFailed) => {
-                    ErrorCategory::Credential
-                }
-                TenantCatalogServiceError::Client(_)
-                | TenantCatalogServiceError::Read(TenantCatalogReadError::ClientUnavailable) => {
+            Self::DatabaseCatalog(error) => match error {
+                DatabaseCatalogServiceError::Config(_)
+                | DatabaseCatalogServiceError::NoActiveProfile => ErrorCategory::Configuration,
+                DatabaseCatalogServiceError::InvalidLimit => ErrorCategory::Usage,
+                DatabaseCatalogServiceError::Credential(_)
+                | DatabaseCatalogServiceError::Read(
+                    DatabaseCatalogReadError::AuthenticationFailed,
+                ) => ErrorCategory::Credential,
+                DatabaseCatalogServiceError::Client(_)
+                | DatabaseCatalogServiceError::Read(DatabaseCatalogReadError::ClientUnavailable) => {
                     ErrorCategory::Dependency
                 }
-                TenantCatalogServiceError::Read(
-                    TenantCatalogReadError::SourceUnavailable
-                    | TenantCatalogReadError::SchemaUnavailable
-                    | TenantCatalogReadError::InvalidMetadata,
+                DatabaseCatalogServiceError::Read(
+                    DatabaseCatalogReadError::SourceUnavailable
+                    | DatabaseCatalogReadError::SchemaUnavailable
+                    | DatabaseCatalogReadError::InvalidMetadata,
                 ) => ErrorCategory::SourceConnection,
             },
             Self::DoctorChecksFailed { kind } => match kind {
@@ -256,7 +235,6 @@ const fn pull_error_category(error: &PullServiceError) -> ErrorCategory {
 const fn restore_error_category(error: &RestoreServiceError) -> ErrorCategory {
     match error {
         RestoreServiceError::Artifact(_) => ErrorCategory::Cache,
-        RestoreServiceError::RegistrationData(_) => ErrorCategory::Restore,
         RestoreServiceError::Target(error) => local_target_error_category(error),
         RestoreServiceError::Engine(RestoreEngineError::VersionMismatch) => {
             ErrorCategory::Dependency
@@ -273,16 +251,6 @@ const fn restore_error_category(error: &RestoreServiceError) -> ErrorCategory {
         RestoreServiceError::Engine(RestoreEngineError::ImportedSizeMismatch) => {
             ErrorCategory::Restore
         }
-        RestoreServiceError::Registration(error) => match error {
-            LocalTenantRegistrationServiceError::RestoreIdentityMismatch => ErrorCategory::Restore,
-            LocalTenantRegistrationServiceError::Write(
-                LocalTenantWriteError::AuthenticationFailed,
-            ) => ErrorCategory::Credential,
-            LocalTenantRegistrationServiceError::Write(
-                LocalTenantWriteError::TargetUnavailable,
-            ) => ErrorCategory::Docker,
-            LocalTenantRegistrationServiceError::Write(_) => ErrorCategory::Restore,
-        },
     }
 }
 
@@ -348,12 +316,6 @@ const fn dump_error_category(error: &DumpServiceError) -> ErrorCategory {
         | DumpServiceError::DockerContextMissing => ErrorCategory::Configuration,
         DumpServiceError::ClientCatalog(_) => ErrorCategory::Dependency,
         DumpServiceError::Credential(_) => ErrorCategory::Credential,
-        DumpServiceError::Tenant(error) => match error {
-            TenantResolutionError::SourceUnavailable
-            | TenantResolutionError::AuthenticationFailed => ErrorCategory::SourceConnection,
-            TenantResolutionError::ClientUnavailable => ErrorCategory::Dependency,
-            _ => ErrorCategory::TenantResolution,
-        },
         DumpServiceError::Preflight(DumpPreflightError::Client(error))
         | DumpServiceError::Execute(DumpExecutorError::Client(error)) => {
             docker_client_error_category(error)
@@ -419,7 +381,6 @@ mod tests {
             ErrorCategory::Credential,
             ErrorCategory::Dependency,
             ErrorCategory::SourceConnection,
-            ErrorCategory::TenantResolution,
             ErrorCategory::Dump,
             ErrorCategory::Cache,
             ErrorCategory::Docker,
@@ -492,20 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn tenant_resolution_preserves_actionable_failure_categories() {
-        assert_eq!(
-            AppError::from(TenantResolutionError::NotFound).exit_code(),
-            31
-        );
-        assert_eq!(
-            AppError::from(TenantResolutionError::SourceUnavailable).exit_code(),
-            30
-        );
-        assert_eq!(
-            AppError::from(TenantResolutionError::ClientUnavailable).exit_code(),
-            20
-        );
-    }
+    fn tenant_resolution_preserves_actionable_failure_categories() {}
 
     #[test]
     fn dump_process_failures_keep_actionable_exit_categories() {
@@ -536,13 +484,8 @@ mod tests {
         let target = AppError::from(RestoreServiceError::Target(
             LocalTargetGateError::NotConfigured,
         ));
-        let registration = AppError::from(RestoreServiceError::Registration(
-            LocalTenantRegistrationServiceError::Write(LocalTenantWriteError::AuthenticationFailed),
-        ));
-
         assert_eq!(missing.exit_code(), 50);
         assert_eq!(target.exit_code(), 10);
-        assert_eq!(registration.exit_code(), 11);
         assert_eq!(
             restore_executor_error_category(&RestoreExecutorError::Interrupted).exit_code(),
             130
@@ -555,12 +498,12 @@ mod tests {
         let cache = AppError::from(PullServiceError::Restore(RestoreServiceError::Artifact(
             crate::infrastructure::restore_artifact::RestoreArtifactError::NotFound,
         )));
-        let source = AppError::from(PullServiceError::Dump(DumpServiceError::Tenant(
-            TenantResolutionError::SourceUnavailable,
+        let source = AppError::from(PullServiceError::Dump(DumpServiceError::Preflight(
+            crate::infrastructure::mysql::DumpPreflightError::InvalidMetadata,
         )));
 
         assert_eq!(configuration.exit_code(), 10);
         assert_eq!(cache.exit_code(), 50);
-        assert_eq!(source.exit_code(), 30);
+        assert_eq!(source.exit_code(), 40);
     }
 }

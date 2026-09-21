@@ -8,9 +8,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-    domain::{
-        DatabaseName, DumpArtifactMetadata, ProfileName, Sha256Digest, TenantId, TenantLookup,
-    },
+    domain::{DatabaseName, DumpArtifactMetadata, ProfileName, Sha256Digest},
     infrastructure::artifact_store::{
         ArtifactLease, ArtifactLeaseError, ArtifactStoreError, LocalArtifactStore,
         PublishedDumpArtifact,
@@ -23,7 +21,6 @@ const CHECKSUM_BUFFER_BYTES: usize = 64 * 1024;
 
 pub struct CacheLookup<'a> {
     pub profile: &'a ProfileName,
-    pub tenant_id: &'a TenantId,
     pub database: &'a DatabaseName,
     pub source_fingerprint: Sha256Digest,
     pub policy_version: u32,
@@ -32,9 +29,9 @@ pub struct CacheLookup<'a> {
     pub fresh: bool,
 }
 
-pub struct CacheTenantLookup<'a> {
+pub struct CacheDatabaseLookup<'a> {
     pub profile: &'a ProfileName,
-    pub tenant: &'a TenantLookup,
+    pub database: &'a DatabaseName,
     pub source_fingerprint: Sha256Digest,
     pub policy_version: u32,
     pub now_unix_seconds: u64,
@@ -111,10 +108,8 @@ pub enum CacheEntryStatus {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CacheInventoryEntry {
     pub profile: ProfileName,
-    pub tenant_id: TenantId,
+    pub database: DatabaseName,
     pub dump_id: crate::domain::DumpId,
-    pub tenant_lookup: Option<TenantLookup>,
-    pub database: Option<DatabaseName>,
     pub completed_at_unix_seconds: Option<u64>,
     pub expires_at_unix_seconds: Option<u64>,
     pub compressed_bytes: Option<u64>,
@@ -137,7 +132,7 @@ impl LocalCacheValidator {
 
         let artifacts = self
             .store
-            .list_complete(request.profile, request.tenant_id)?;
+            .list_complete(request.profile, request.database)?;
         if artifacts.is_empty() {
             return Ok(CacheLookupResult::Miss(CacheMissReason::NotFound));
         }
@@ -185,9 +180,9 @@ impl LocalCacheValidator {
         ))
     }
 
-    pub fn lookup_by_tenant(
+    pub fn lookup_by_database(
         &self,
-        request: &CacheTenantLookup<'_>,
+        request: &CacheDatabaseLookup<'_>,
     ) -> Result<CacheLookupResult, CacheError> {
         if request.fresh {
             return Ok(CacheLookupResult::Miss(CacheMissReason::FreshRequested));
@@ -200,7 +195,7 @@ impl LocalCacheValidator {
         let mut candidates = Vec::new();
         let mut unreadable_metadata = None;
         for located in artifacts {
-            let (profile, tenant_id, artifact) = located.into_parts();
+            let (profile, database, artifact) = located.into_parts();
             let lease = match self.store.try_acquire_lease(&artifact) {
                 Ok(lease) => lease,
                 Err(ArtifactLeaseError::NotFound) => {
@@ -222,27 +217,24 @@ impl LocalCacheValidator {
                     continue;
                 }
             };
-            if profile != *request.profile || tenant_id != metadata.tenant_id {
+            if profile != *request.profile || database != metadata.database {
                 unreadable_metadata.get_or_insert(CacheMissReason::IdentityChanged);
                 continue;
             }
-            if metadata.tenant_lookup != *request.tenant
-                && metadata.tenant_id.as_str() != request.tenant.as_str()
-            {
+            if metadata.database != *request.database {
                 continue;
             }
-            candidates.push((artifact, metadata, tenant_id, lease));
+            candidates.push((artifact, metadata, database, lease));
         }
         candidates.sort_by_key(|(_, metadata, _, _)| {
             std::cmp::Reverse(metadata.completed_at_unix_seconds)
         });
 
         let mut newest_invalid = None;
-        for (artifact, metadata, tenant_id, lease) in candidates {
+        for (artifact, metadata, database, lease) in candidates {
             let candidate_request = CacheLookup {
                 profile: request.profile,
-                tenant_id: &tenant_id,
-                database: &metadata.database,
+                database: &database,
                 source_fingerprint: request.source_fingerprint,
                 policy_version: request.policy_version,
                 now_unix_seconds: request.now_unix_seconds,
@@ -269,17 +261,15 @@ impl LocalCacheValidator {
     ) -> Result<Vec<CacheInventoryEntry>, CacheError> {
         let mut entries = Vec::new();
         for located in self.store.list_all_candidates()? {
-            let (profile, tenant_id, artifact) = located.into_parts();
+            let (profile, database, artifact) = located.into_parts();
             let dump_id = artifact.dump_id;
             let lease = match self.store.try_acquire_lease(&artifact) {
                 Ok(lease) => lease,
                 Err(ArtifactLeaseError::NotFound) => {
                     entries.push(CacheInventoryEntry {
                         profile,
-                        tenant_id,
+                        database,
                         dump_id,
-                        tenant_lookup: None,
-                        database: None,
                         completed_at_unix_seconds: None,
                         expires_at_unix_seconds: None,
                         compressed_bytes: None,
@@ -290,10 +280,8 @@ impl LocalCacheValidator {
                 Err(ArtifactLeaseError::Busy) => {
                     entries.push(CacheInventoryEntry {
                         profile,
-                        tenant_id,
+                        database,
                         dump_id,
-                        tenant_lookup: None,
-                        database: None,
                         completed_at_unix_seconds: None,
                         expires_at_unix_seconds: None,
                         compressed_bytes: None,
@@ -310,10 +298,8 @@ impl LocalCacheValidator {
                 Err(reason) => {
                     entries.push(CacheInventoryEntry {
                         profile,
-                        tenant_id,
+                        database,
                         dump_id,
-                        tenant_lookup: None,
-                        database: None,
                         completed_at_unix_seconds: None,
                         expires_at_unix_seconds: None,
                         compressed_bytes: file_size(&artifact.dump_path)?,
@@ -332,7 +318,7 @@ impl LocalCacheValidator {
                 .saturating_add(request.ttl_seconds);
             let status = if metadata.dump_id != dump_id
                 || metadata.profile != profile
-                || metadata.tenant_id != tenant_id
+                || metadata.database != database
             {
                 CacheEntryStatus::IdentityChanged
             } else if actual_size.is_none() {
@@ -358,10 +344,8 @@ impl LocalCacheValidator {
             };
             entries.push(CacheInventoryEntry {
                 profile,
-                tenant_id,
+                database,
                 dump_id,
-                tenant_lookup: Some(metadata.tenant_lookup),
-                database: Some(metadata.database),
                 completed_at_unix_seconds: Some(metadata.completed_at_unix_seconds),
                 expires_at_unix_seconds: Some(expires_at),
                 compressed_bytes: actual_size,
@@ -374,7 +358,7 @@ impl LocalCacheValidator {
                 .completed_at_unix_seconds
                 .cmp(&left.completed_at_unix_seconds)
                 .then_with(|| left.profile.cmp(&right.profile))
-                .then_with(|| left.tenant_id.cmp(&right.tenant_id))
+                .then_with(|| left.database.cmp(&right.database))
                 .then_with(|| left.dump_id.to_string().cmp(&right.dump_id.to_string()))
         });
         Ok(entries)
@@ -421,7 +405,7 @@ fn validate_candidate(
 ) -> Result<Result<ValidatedCacheHit, CacheMissReason>, CacheError> {
     if metadata.dump_id != artifact.dump_id
         || &metadata.profile != request.profile
-        || &metadata.tenant_id != request.tenant_id
+        || &metadata.database != request.database
         || &metadata.database != request.database
     {
         return Ok(Err(CacheMissReason::IdentityChanged));
@@ -502,7 +486,6 @@ mod tests {
 
     use crate::domain::{
         DatabaseEncoding, DumpArtifactCompletion, DumpArtifactContext, DumpId, MysqlVersion,
-        TenantLookup,
     };
 
     use super::*;
@@ -511,12 +494,8 @@ mod tests {
         ProfileName::try_from("local-source").unwrap()
     }
 
-    fn tenant_id() -> TenantId {
-        TenantId::try_from("salt_sagatec").unwrap()
-    }
-
     fn database() -> DatabaseName {
-        DatabaseName::try_from("salt_sagatec").unwrap()
+        DatabaseName::try_from("acme_production").unwrap()
     }
 
     fn fingerprint(byte: u8) -> Sha256Digest {
@@ -525,13 +504,11 @@ mod tests {
 
     fn write_artifact(root: &Path, completed_at: u64) -> (DumpId, DumpArtifactMetadata) {
         let dump_id = DumpId::new();
-        let dump = zstd::stream::encode_all(&b"SELECT * FROM salt_sagatec;"[..], 1).unwrap();
+        let dump = zstd::stream::encode_all(&b"SELECT * FROM acme_production;"[..], 1).unwrap();
         let checksum = Sha256Digest::from_bytes(Sha256::digest(&dump).into());
         let metadata = DumpArtifactMetadata::try_new(
             dump_id,
             DumpArtifactContext {
-                tenant_lookup: TenantLookup::try_from("sagatec").unwrap(),
-                tenant_id: tenant_id(),
                 database: database(),
                 profile: profile(),
                 source_fingerprint: fingerprint(1),
@@ -543,7 +520,6 @@ mod tests {
                     "utf8mb4_0900_ai_ci".to_owned(),
                 )
                 .unwrap(),
-                local_tenant_features: Default::default(),
                 policy_version: 1,
             },
             DumpArtifactCompletion {
@@ -559,7 +535,7 @@ mod tests {
         let path = root
             .join("profiles")
             .join(profile().as_str())
-            .join(tenant_id().as_str())
+            .join(database().as_str())
             .join(dump_id.to_string());
         fs::create_dir_all(&path).unwrap();
         fs::write(path.join("dump.sql.zst"), dump).unwrap();
@@ -571,14 +547,9 @@ mod tests {
         (dump_id, metadata)
     }
 
-    fn request<'a>(
-        profile: &'a ProfileName,
-        tenant: &'a TenantId,
-        database: &'a DatabaseName,
-    ) -> CacheLookup<'a> {
+    fn request<'a>(profile: &'a ProfileName, database: &'a DatabaseName) -> CacheLookup<'a> {
         CacheLookup {
             profile,
-            tenant_id: tenant,
             database,
             source_fingerprint: fingerprint(1),
             policy_version: 1,
@@ -600,11 +571,9 @@ mod tests {
         let directory = tempdir().unwrap();
         let (dump_id, _) = write_artifact(directory.path(), 9_900);
         let validator = LocalCacheValidator::new(LocalArtifactStore::new(directory.path()));
-        let (profile, tenant, database) = (profile(), tenant_id(), database());
+        let (profile, database) = (profile(), database());
 
-        let result = validator
-            .lookup(&request(&profile, &tenant, &database))
-            .unwrap();
+        let result = validator.lookup(&request(&profile, &database)).unwrap();
 
         let CacheLookupResult::Hit(hit) = result else {
             panic!("expected hit")
@@ -614,17 +583,17 @@ mod tests {
     }
 
     #[test]
-    fn tenant_lookup_finds_the_same_artifact_by_original_alias_or_canonical_id() {
+    fn lookup_finds_the_artifact_by_its_database_name() {
         let directory = tempdir().unwrap();
         let (dump_id, _) = write_artifact(directory.path(), 9_900);
         let validator = LocalCacheValidator::new(LocalArtifactStore::new(directory.path()));
         let profile = profile();
 
-        for tenant in ["sagatec", "salt_sagatec"] {
+        for tenant in ["acme_production"] {
             let result = validator
-                .lookup_by_tenant(&CacheTenantLookup {
+                .lookup_by_database(&CacheDatabaseLookup {
                     profile: &profile,
-                    tenant: &TenantLookup::try_from(tenant).unwrap(),
+                    database: &DatabaseName::try_from(tenant).unwrap(),
                     source_fingerprint: fingerprint(1),
                     policy_version: 1,
                     now_unix_seconds: 10_000,
@@ -641,9 +610,9 @@ mod tests {
 
         assert_miss(
             validator
-                .lookup_by_tenant(&CacheTenantLookup {
+                .lookup_by_database(&CacheDatabaseLookup {
                     profile: &profile,
-                    tenant: &TenantLookup::try_from("polymer").unwrap(),
+                    database: &DatabaseName::try_from("globex_production").unwrap(),
                     source_fingerprint: fingerprint(1),
                     policy_version: 1,
                     now_unix_seconds: 10_000,
@@ -666,7 +635,7 @@ mod tests {
         let incomplete_id = DumpId::new();
         let incomplete = directory
             .path()
-            .join("profiles/local-source/salt_sagatec")
+            .join("profiles/local-source/acme_production")
             .join(incomplete_id.to_string());
         fs::create_dir(&incomplete).unwrap();
         fs::write(incomplete.join("dump.sql.zst"), b"incomplete").unwrap();
@@ -682,7 +651,7 @@ mod tests {
         assert_eq!(ready.len(), 2);
         assert_eq!(ready[0].dump_id, dump_id);
         assert_eq!(ready[0].status, CacheEntryStatus::Ready);
-        assert_eq!(ready[0].tenant_lookup.as_ref().unwrap().as_str(), "sagatec");
+        assert_eq!(ready[0].database.as_str(), "acme_production");
         assert_eq!(ready[0].expires_at_unix_seconds, Some(10_100));
         assert!(ready.iter().any(|entry| {
             entry.dump_id == incomplete_id && entry.status == CacheEntryStatus::MissingFile
@@ -700,7 +669,7 @@ mod tests {
 
         let dump_path = directory
             .path()
-            .join("profiles/local-source/salt_sagatec")
+            .join("profiles/local-source/acme_production")
             .join(dump_id.to_string())
             .join("dump.sql.zst");
         let mut bytes = fs::read(&dump_path).unwrap();
@@ -722,8 +691,8 @@ mod tests {
         let directory = tempdir().unwrap();
         let validator =
             LocalCacheValidator::new(LocalArtifactStore::new(directory.path().join("missing")));
-        let (profile, tenant, database) = (profile(), tenant_id(), database());
-        let mut lookup = request(&profile, &tenant, &database);
+        let (profile, database) = (profile(), database());
+        let mut lookup = request(&profile, &database);
         lookup.fresh = true;
 
         assert_miss(
@@ -737,8 +706,8 @@ mod tests {
         let directory = tempdir().unwrap();
         write_artifact(directory.path(), 9_900);
         let validator = LocalCacheValidator::new(LocalArtifactStore::new(directory.path()));
-        let (profile, tenant, database) = (profile(), tenant_id(), database());
-        let mut lookup = request(&profile, &tenant, &database);
+        let (profile, database) = (profile(), database());
+        let mut lookup = request(&profile, &database);
         lookup.ttl_seconds = 100;
         assert_miss(validator.lookup(&lookup).unwrap(), CacheMissReason::Expired);
 
@@ -754,27 +723,20 @@ mod tests {
         let directory = tempdir().unwrap();
         write_artifact(directory.path(), 9_900);
         let validator = LocalCacheValidator::new(LocalArtifactStore::new(directory.path()));
-        let (profile, tenant, database) = (profile(), tenant_id(), database());
+        let (profile, database) = (profile(), database());
 
-        let mut changed = request(&profile, &tenant, &database);
+        let mut changed = request(&profile, &database);
         changed.source_fingerprint = fingerprint(9);
         assert_miss(
             validator.lookup(&changed).unwrap(),
             CacheMissReason::SourceChanged,
         );
 
-        let mut changed = request(&profile, &tenant, &database);
+        let mut changed = request(&profile, &database);
         changed.policy_version = 2;
         assert_miss(
             validator.lookup(&changed).unwrap(),
             CacheMissReason::PolicyChanged,
-        );
-
-        let other_database = DatabaseName::try_from("salt_polymer").unwrap();
-        let changed = request(&profile, &tenant, &other_database);
-        assert_miss(
-            validator.lookup(&changed).unwrap(),
-            CacheMissReason::IdentityChanged,
         );
     }
 
@@ -785,7 +747,7 @@ mod tests {
         let (newer_id, newer_metadata) = write_artifact(directory.path(), 9_900);
         let newer_path = directory
             .path()
-            .join("profiles/local-source/salt_sagatec")
+            .join("profiles/local-source/acme_production")
             .join(newer_id.to_string())
             .join("dump.sql.zst");
         fs::write(
@@ -795,10 +757,8 @@ mod tests {
         .unwrap();
 
         let validator = LocalCacheValidator::new(LocalArtifactStore::new(directory.path()));
-        let (profile, tenant, database) = (profile(), tenant_id(), database());
-        let CacheLookupResult::Hit(hit) = validator
-            .lookup(&request(&profile, &tenant, &database))
-            .unwrap()
+        let (profile, database) = (profile(), database());
+        let CacheLookupResult::Hit(hit) = validator.lookup(&request(&profile, &database)).unwrap()
         else {
             panic!("expected the older artifact to be reused")
         };
@@ -809,7 +769,7 @@ mod tests {
 
     #[test]
     fn corrupt_metadata_missing_file_size_and_checksum_are_not_hits() {
-        let (profile, tenant, database) = (profile(), tenant_id(), database());
+        let (profile, database) = (profile(), database());
         for (mutation, expected) in [
             ("metadata", CacheMissReason::CorruptMetadata),
             ("identity", CacheMissReason::IdentityChanged),
@@ -821,7 +781,7 @@ mod tests {
             let (dump_id, metadata) = write_artifact(directory.path(), 9_900);
             let path = directory
                 .path()
-                .join("profiles/local-source/salt_sagatec")
+                .join("profiles/local-source/acme_production")
                 .join(dump_id.to_string());
             match mutation {
                 "metadata" => fs::write(path.join("metadata.json"), b"{broken").unwrap(),
@@ -849,9 +809,7 @@ mod tests {
             }
             let validator = LocalCacheValidator::new(LocalArtifactStore::new(directory.path()));
             assert_miss(
-                validator
-                    .lookup(&request(&profile, &tenant, &database))
-                    .unwrap(),
+                validator.lookup(&request(&profile, &database)).unwrap(),
                 expected,
             );
         }

@@ -14,9 +14,9 @@ pub mod error;
 pub mod infrastructure;
 
 use cli::output::OutputStyle;
-use cli::{CacheCommands, ProfileCommands, TenantCommands};
+use cli::{CacheCommands, DatabaseCommands, ProfileCommands};
 pub use cli::{Cli, Commands};
-use domain::{ProfileName, TenantLookup};
+use domain::{DatabaseName, ProfileName};
 pub use error::{AppError, ErrorCategory};
 use infrastructure::config::ConfigRepository;
 
@@ -210,17 +210,18 @@ pub async fn execute_with_cancellation(
             Ok(())
         }
         Commands::Database(arguments) => match arguments.command {
-            TenantCommands::List(arguments) => {
-                print!("{}", cli::tenant::render_start(&style));
+            DatabaseCommands::List(arguments) => {
+                print!("{}", cli::database::render_start(&style));
                 std::io::stdout().flush().map_err(AppError::Output)?;
-                let service = application::TenantCatalogService::new(ConfigRepository::discover()?);
-                let reader = infrastructure::mysql::DockerTenantCatalogReader::new(
+                let service =
+                    application::DatabaseCatalogService::new(ConfigRepository::discover()?);
+                let reader = infrastructure::mysql::DockerDatabaseCatalogReader::new(
                     infrastructure::process::TokioProcessRunner,
                 );
                 let page = service
                     .list(&credential_store, &reader, arguments.limit)
                     .await?;
-                print!("{}", cli::tenant::render_page(&style, &page));
+                print!("{}", cli::database::render_page(&style, &page));
                 Ok(())
             }
         },
@@ -248,7 +249,7 @@ pub async fn execute_with_cancellation(
             Ok(())
         }
         Commands::Dump(arguments) => {
-            let tenant = TenantLookup::try_from(arguments.tenant)?;
+            let database = DatabaseName::try_from(arguments.database)?;
             print!("{}", cli::dump::render_start(&style));
             std::io::stdout().flush().map_err(AppError::Output)?;
             let repository = ConfigRepository::discover()?;
@@ -262,7 +263,7 @@ pub async fn execute_with_cancellation(
             let executor =
                 infrastructure::mysql::DockerMysqlDumpExecutor::new(cancellation.clone());
             let result = service
-                .create(&credential_store, &workflow, &workflow, &executor, tenant)
+                .create(&credential_store, &workflow, &executor, database)
                 .await;
             progress.finish();
             let created = result?;
@@ -270,14 +271,14 @@ pub async fn execute_with_cancellation(
             Ok(())
         }
         Commands::Restore(arguments) => {
-            let tenant = TenantLookup::try_from(arguments.tenant)?;
+            let database = DatabaseName::try_from(arguments.database)?;
             let dump_id = arguments.dump_id.parse::<domain::DumpId>()?;
             let target_container = arguments
                 .target
                 .map(domain::ContainerName::try_from)
                 .transpose()?;
             let target_database = arguments
-                .database
+                .target_database
                 .map(domain::DatabaseName::try_from)
                 .transpose()?;
             print!("{}", cli::restore::render_start(&style));
@@ -295,11 +296,8 @@ pub async fn execute_with_cancellation(
                         infrastructure::process::TokioProcessRunner,
                     ),
                     executor,
-                    infrastructure::mysql::DockerLocalTenantWriter::new(
-                        infrastructure::process::TokioProcessRunner,
-                    ),
                     application::RestoreRequest {
-                        tenant,
+                        database,
                         dump_id,
                         target_container,
                         target_database,
@@ -310,20 +308,20 @@ pub async fn execute_with_cancellation(
             Ok(())
         }
         Commands::Pull(arguments) if arguments.preview => {
-            let tenant = TenantLookup::try_from(arguments.tenant)?;
+            let database = DatabaseName::try_from(arguments.database)?;
             let target_container = arguments
                 .target
                 .map(domain::ContainerName::try_from)
                 .transpose()?;
             let target_database = arguments
-                .database
+                .target_database
                 .map(domain::DatabaseName::try_from)
                 .transpose()?;
             print!(
                 "{}",
                 cli::preview::pull(
                     &style,
-                    &tenant,
+                    &database,
                     arguments.fresh,
                     target_container.as_ref(),
                     target_database.as_ref(),
@@ -332,13 +330,13 @@ pub async fn execute_with_cancellation(
             Ok(())
         }
         Commands::Pull(arguments) => {
-            let tenant = TenantLookup::try_from(arguments.tenant)?;
+            let database = DatabaseName::try_from(arguments.database)?;
             let target_container = arguments
                 .target
                 .map(domain::ContainerName::try_from)
                 .transpose()?;
             let target_database = arguments
-                .database
+                .target_database
                 .map(domain::DatabaseName::try_from)
                 .transpose()?;
             let database_selector = cli::pull::CliPullDatabaseSelector::new(target_database);
@@ -363,7 +361,6 @@ pub async fn execute_with_cancellation(
                 .pull(
                     &credential_store,
                     application::PullDumpDependencies {
-                        tenant_resolver: &workflow,
                         preflight: &workflow,
                         executor: &dump_executor,
                     },
@@ -372,13 +369,10 @@ pub async fn execute_with_cancellation(
                             infrastructure::process::TokioProcessRunner,
                         ),
                         executor: restore_executor,
-                        tenant_writer: infrastructure::mysql::DockerLocalTenantWriter::new(
-                            infrastructure::process::TokioProcessRunner,
-                        ),
                         target_selector: &target_selector,
                         database_selector: &database_selector,
                     },
-                    tenant,
+                    database,
                     arguments.fresh,
                 )
                 .await;
@@ -401,8 +395,8 @@ pub async fn execute_with_cancellation(
                     print!("{}", cli::cache::render_clean(&style, report));
                 }
                 CacheCommands::Purge(arguments) => {
-                    let tenant = TenantLookup::try_from(arguments.tenant)?;
-                    let ready = service.purge(&tenant)?;
+                    let database = DatabaseName::try_from(arguments.database)?;
+                    let ready = service.purge(&database)?;
                     print!("{}", cli::cache::render_purge(&style, &ready));
                 }
             }

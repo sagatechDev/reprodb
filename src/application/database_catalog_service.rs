@@ -11,10 +11,10 @@ use crate::{
     },
 };
 
-pub const DEFAULT_TENANT_LIST_LIMIT: u16 = 100;
-pub const MAX_TENANT_LIST_LIMIT: u16 = 500;
+pub const DEFAULT_DATABASE_LIST_LIMIT: u16 = 100;
+pub const MAX_DATABASE_LIST_LIMIT: u16 = 500;
 
-pub struct TenantCatalogSource {
+pub struct DatabaseCatalogSource {
     pub profile_name: String,
     pub docker_context: String,
     pub host: String,
@@ -27,19 +27,19 @@ pub struct TenantCatalogSource {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TenantCatalogEntry {
+pub struct DatabaseCatalogEntry {
     pub database: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TenantCatalogPage {
+pub struct DatabaseCatalogPage {
     pub profile_name: String,
-    pub entries: Vec<TenantCatalogEntry>,
+    pub entries: Vec<DatabaseCatalogEntry>,
     pub truncated: bool,
 }
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
-pub enum TenantCatalogReadError {
+pub enum DatabaseCatalogReadError {
     #[error("the approved MySQL client is unavailable; run `reprodb doctor`")]
     ClientUnavailable,
     #[error("the tenant catalog source could not be reached")]
@@ -53,35 +53,35 @@ pub enum TenantCatalogReadError {
 }
 
 #[async_trait]
-pub trait TenantCatalogReader: Send + Sync {
+pub trait DatabaseCatalogReader: Send + Sync {
     async fn list(
         &self,
-        source: &TenantCatalogSource,
+        source: &DatabaseCatalogSource,
         limit: u16,
-    ) -> Result<TenantCatalogPage, TenantCatalogReadError>;
+    ) -> Result<DatabaseCatalogPage, DatabaseCatalogReadError>;
 }
 
 #[derive(Debug, Error)]
-pub enum TenantCatalogServiceError {
+pub enum DatabaseCatalogServiceError {
     #[error(transparent)]
     Config(#[from] ConfigError),
     #[error("no active source profile; run `reprodb profile use NAME`")]
     NoActiveProfile,
-    #[error("database list limit must be between 1 and {MAX_TENANT_LIST_LIMIT}")]
+    #[error("database list limit must be between 1 and {MAX_DATABASE_LIST_LIMIT}")]
     InvalidLimit,
     #[error(transparent)]
     Credential(#[from] CredentialError),
     #[error(transparent)]
     Client(#[from] ClientCatalogError),
     #[error(transparent)]
-    Read(#[from] TenantCatalogReadError),
+    Read(#[from] DatabaseCatalogReadError),
 }
 
-pub struct TenantCatalogService {
+pub struct DatabaseCatalogService {
     repository: ConfigRepository,
 }
 
-impl TenantCatalogService {
+impl DatabaseCatalogService {
     pub fn new(repository: ConfigRepository) -> Self {
         Self { repository }
     }
@@ -89,32 +89,32 @@ impl TenantCatalogService {
     pub async fn list(
         &self,
         credentials: &dyn CredentialStore,
-        reader: &dyn TenantCatalogReader,
+        reader: &dyn DatabaseCatalogReader,
         limit: u16,
-    ) -> Result<TenantCatalogPage, TenantCatalogServiceError> {
-        if limit == 0 || limit > MAX_TENANT_LIST_LIMIT {
-            return Err(TenantCatalogServiceError::InvalidLimit);
+    ) -> Result<DatabaseCatalogPage, DatabaseCatalogServiceError> {
+        if limit == 0 || limit > MAX_DATABASE_LIST_LIMIT {
+            return Err(DatabaseCatalogServiceError::InvalidLimit);
         }
         let config = self.repository.load()?;
         let profile_name = config
             .active_profile
             .as_ref()
-            .ok_or(TenantCatalogServiceError::NoActiveProfile)?;
+            .ok_or(DatabaseCatalogServiceError::NoActiveProfile)?;
         let profile = config
             .profiles
             .get(profile_name)
-            .ok_or(TenantCatalogServiceError::NoActiveProfile)?;
+            .ok_or(DatabaseCatalogServiceError::NoActiveProfile)?;
         let docker_context = config
             .client_runtime
             .docker_context
             .clone()
-            .ok_or(TenantCatalogServiceError::NoActiveProfile)?;
+            .ok_or(DatabaseCatalogServiceError::NoActiveProfile)?;
         let password = credentials.get(&profile.credential_key).await?;
         let client = ClientCatalog::validate(&profile.mysql_series, &profile.client.image)?;
 
         reader
             .list(
-                &TenantCatalogSource {
+                &DatabaseCatalogSource {
                     profile_name: profile_name.as_str().to_owned(),
                     docker_context,
                     host: profile.host.clone(),
@@ -144,11 +144,11 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::{
-        domain::{CredentialKey, CredentialScope, DatabaseName, MysqlTlsMode, ProfileName},
+        domain::{CredentialKey, CredentialScope, MysqlTlsMode, ProfileName},
         infrastructure::{
             config::{
                 AppConfig, AppPaths, ClientRuntimeConfig, MysqlClientConfig, MysqlFamily,
-                SourceProfileConfig, TenantResolverConfig,
+                SourceProfileConfig,
             },
             credentials::MemoryCredentialStore,
         },
@@ -161,17 +161,17 @@ mod tests {
     }
 
     #[async_trait]
-    impl TenantCatalogReader for FakeReader {
+    impl DatabaseCatalogReader for FakeReader {
         async fn list(
             &self,
-            source: &TenantCatalogSource,
+            source: &DatabaseCatalogSource,
             limit: u16,
-        ) -> Result<TenantCatalogPage, TenantCatalogReadError> {
+        ) -> Result<DatabaseCatalogPage, DatabaseCatalogReadError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             assert_eq!(source.profile_name, "sandbox");
             assert_eq!(source.docker_context, "desktop-linux");
             assert_eq!(limit, 25);
-            Ok(TenantCatalogPage {
+            Ok(DatabaseCatalogPage {
                 profile_name: source.profile_name.clone(),
                 entries: Vec::new(),
                 truncated: false,
@@ -206,10 +206,6 @@ mod tests {
                         client: MysqlClientConfig {
                             image: client.image().to_owned(),
                         },
-                        tenant_resolver: TenantResolverConfig::SaltCentral {
-                            central_database: DatabaseName::try_from("sandbox_central").unwrap(),
-                            allow_domain_lookup: true,
-                        },
                     },
                 )]),
                 ..AppConfig::default()
@@ -231,7 +227,7 @@ mod tests {
             calls: AtomicUsize::new(0),
         };
 
-        let page = TenantCatalogService::new(repository)
+        let page = DatabaseCatalogService::new(repository)
             .list(&credentials, &reader, 25)
             .await
             .unwrap();
@@ -248,12 +244,12 @@ mod tests {
         };
 
         let error =
-            TenantCatalogService::new(ConfigRepository::new(AppPaths::from_root(temp.path())))
+            DatabaseCatalogService::new(ConfigRepository::new(AppPaths::from_root(temp.path())))
                 .list(&MemoryCredentialStore::default(), &reader, 0)
                 .await
                 .unwrap_err();
 
-        assert!(matches!(error, TenantCatalogServiceError::InvalidLimit));
+        assert!(matches!(error, DatabaseCatalogServiceError::InvalidLimit));
         assert_eq!(reader.calls.load(Ordering::SeqCst), 0);
     }
 }

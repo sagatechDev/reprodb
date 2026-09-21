@@ -1,5 +1,7 @@
 # RDB-003 — Spike end-to-end dump → Zstd → restore
 
+> **Histórico.** Pesquisa datada, anterior à remoção do conceito de tenant. Mantida como registro.
+
 > Status: concluído no ambiente macOS em 5 de setembro de 2026. A validação equivalente em Linux permanece nas issues cross-platform RDB-002 e RDB-061.
 
 ## O que foi implementado
@@ -100,7 +102,7 @@ Após o teste também foram confirmados:
 - nenhum diretório temporário do harness permaneceu em `/tmp`;
 - nenhum `.part` permaneceu;
 - nenhum client container nomeado pelo spike permaneceu;
-- `cargo fmt --check`, `cargo test`, `cargo clippy --all-targets --all-features -- -D warnings` e `cargo build --release` passaram;
+- `cargo fmt --check`, `cargo test`, `cargo clippy --all-targets -- -D warnings` e `cargo build --release` passaram;
 - os três testes unitários de validação de database e caminho parcial passaram.
 
 ## Descoberta importante

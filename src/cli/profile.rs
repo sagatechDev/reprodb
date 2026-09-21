@@ -172,7 +172,7 @@ mod tests {
         let output = render_created(
             &OutputStyle::colored(),
             &ProfileCreated {
-                name: ProfileName::try_from("salt-production").unwrap(),
+                name: ProfileName::try_from("prod-sourceuction").unwrap(),
                 docker_context: "desktop-linux".to_owned(),
                 server_version: "8.4.4".parse().unwrap(),
                 vendor: "MySQL Community Server".to_owned(),

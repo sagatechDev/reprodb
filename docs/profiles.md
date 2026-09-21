@@ -1,6 +1,6 @@
 # Source profiles
 
-Um source profile descreve uma conexão MySQL da qual o reprodb poderá gerar dumps. Senhas não pertencem ao profile serializado: o TOML guarda somente a chave da entrada correspondente no Keychain do macOS ou no Secret Service do Linux.
+Um source profile descreve uma conexão MySQL da qual o reprodb poderá gerar dumps. Senhas não pertencem ao profile serializado: o TOML guarda somente a chave da entrada correspondente no credential store local do macOS ou no credential store local do Linux.
 
 ## Comandos
 
@@ -14,7 +14,7 @@ reprodb profile edit NAME --central-database DATABASE
 reprodb profile remove NAME
 ```
 
-`profile add` pergunta host, porta, usuário, senha e o database central que contém `tenants` e `domains` (default `salt_central`). Durante a senha, a CLI mostra um `*` por caractere para deixar a digitação visível sem revelar seu conteúdo. Texto colado também é aceito; use o atalho do seu terminal (`Cmd+V` normalmente no macOS e `Ctrl+Shift+V` normalmente no Linux). Em seguida a CLI pergunta se o source é produção e define a política TLS — `REQUIRED` é o default local. Produção seleciona obrigatoriamente `VERIFY_IDENTITY` e pede o path absoluto da CA. Certificado e chave de cliente também podem ser informados quando o servidor exigir mTLS.
+`profile add` pergunta host, porta, usuário e senha. Durante a senha, a CLI mostra um `*` por caractere para deixar a digitação visível sem revelar seu conteúdo. Texto colado também é aceito; use o atalho do seu terminal (`Cmd+V` normalmente no macOS e `Ctrl+Shift+V` normalmente no Linux). Em seguida a CLI pergunta se o source é produção e define a política TLS — `REQUIRED` é o default local. Produção seleciona obrigatoriamente `VERIFY_IDENTITY` e pede o path absoluto da CA. Certificado e chave de cliente também podem ser informados quando o servidor exigir mTLS.
 
 Antes de salvar, o comando:
 

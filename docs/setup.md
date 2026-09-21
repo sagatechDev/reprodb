@@ -14,7 +14,7 @@ O comando:
 4. mostra imagem, estado, healthcheck e portas publicadas;
 5. alerta quando a porta está publicada em `0.0.0.0` ou `::`;
 6. permite escolher o target interativamente;
-7. pede usuário, senha mascarada por `*`, database central local e prefixo permitido para databases de tenant;
+7. pede usuário e senha mascarada por `*`;
 8. prepara o client MySQL aprovado;
 9. conecta ao namespace de rede do container pelo ID completo e valida versão/vendor;
 10. salva o ID, nome, context, tipo de confiança, allowlist e chave da credencial no TOML, mantendo a senha no credential store do sistema;
@@ -22,7 +22,7 @@ O comando:
 
 O ID completo é a identidade de segurança. O nome fica salvo para apresentação, mas `reprodb restore` recusa um container recriado com o mesmo nome e outro ID.
 
-O prefixo sugerido é `salt_`: ele permite `salt_sagatec` e `salt_polymer`, mas a barreira de restore recusa o `salt_central` configurado. Depois do setup, context, identidade, label quando aplicável, conexão, vendor e versão são atestados novamente antes de qualquer operação destrutiva.
+A barreira de restore recusa os databases administrativos do MySQL (`mysql`, `information_schema`, `performance_schema`, `sys`). Depois do setup, context, identidade, label quando aplicável, conexão, vendor e versão são atestados novamente antes de qualquer operação destrutiva.
 
 Contrato completo: [`docs/local-target-safety.md`](local-target-safety.md).
 

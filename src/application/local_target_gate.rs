@@ -144,7 +144,6 @@ impl LocalTargetGate {
             container_id: configured.container_id.clone(),
             username: configured.username.clone(),
             password,
-            central_database: configured.central_database.clone(),
             server_version: attested.server_version,
             server_uuid: attested.server_uuid,
             vendor: attested.vendor,
@@ -159,7 +158,6 @@ pub struct GuardedLocalTarget {
     container_id: ContainerId,
     username: String,
     password: SecretString,
-    central_database: DatabaseName,
     server_version: MysqlVersion,
     server_uuid: MysqlServerUuid,
     vendor: String,
@@ -174,7 +172,6 @@ impl std::fmt::Debug for GuardedLocalTarget {
             .field("container_name", &self.container_name)
             .field("container_id", &self.container_id)
             .field("username", &self.username)
-            .field("central_database", &self.central_database)
             .field("server_version", &self.server_version)
             .field("server_uuid", &self.server_uuid)
             .field("vendor", &self.vendor)
@@ -200,7 +197,7 @@ impl GuardedLocalTarget {
         &self.vendor
     }
 
-    pub fn authorize_tenant_database(
+    pub fn authorize_database(
         self,
         database: DatabaseName,
     ) -> Result<AuthorizedLocalTarget, LocalTargetGateError> {
@@ -259,10 +256,6 @@ impl AuthorizedLocalTarget {
         &self.target.password
     }
 
-    pub fn central_database(&self) -> &DatabaseName {
-        &self.target.central_database
-    }
-
     pub const fn client(&self) -> ApprovedMysqlClient {
         self.target.client
     }
@@ -276,7 +269,6 @@ impl AuthorizedLocalTarget {
                 container_id: ContainerId::try_from("a".repeat(64)).unwrap(),
                 username: "root".to_owned(),
                 password: SecretString::from("local-test-password"),
-                central_database: DatabaseName::try_from("salt_central").unwrap(),
                 server_version: "8.4.4".parse().unwrap(),
                 server_uuid: "22222222-2222-4222-8222-222222222222".parse().unwrap(),
                 vendor: "MySQL Community Server - GPL".to_owned(),
@@ -380,9 +372,7 @@ mod tests {
             container_id: ContainerId::try_from("a".repeat(64)).unwrap(),
             username: "root".to_owned(),
             credential_key: target_key(),
-            central_database: DatabaseName::try_from("salt_central").unwrap(),
             trust,
-            legacy_tenant_database_prefix: None,
         }
     }
 
@@ -444,11 +434,11 @@ mod tests {
             .unwrap();
 
         let authorized = guarded
-            .authorize_tenant_database(DatabaseName::try_from("salt_polymer").unwrap())
+            .authorize_database(DatabaseName::try_from("globex_production").unwrap())
             .unwrap();
 
         assert_eq!(authorized.container_name().as_str(), "mysql-8");
-        assert_eq!(authorized.database().as_str(), "salt_polymer");
+        assert_eq!(authorized.database().as_str(), "globex_production");
         assert_eq!(authorized.server_version().to_string(), "8.4.4");
         assert_eq!(attestor.calls.load(Ordering::SeqCst), 1);
     }
@@ -468,9 +458,7 @@ mod tests {
                 container_id: ContainerId::try_from("b".repeat(64)).unwrap(),
                 username: "root".to_owned(),
                 credential_key: key,
-                central_database: DatabaseName::try_from("salt_central").unwrap(),
                 trust: LocalTargetTrust::UserConfirmed,
-                legacy_tenant_database_prefix: None,
             },
         );
         repository.save(&config).unwrap();
@@ -499,7 +487,7 @@ mod tests {
 
     #[tokio::test]
     async fn allows_every_valid_non_administrative_database_name() {
-        for database in ["customer_data", "demo_sagatec", "salt_central"] {
+        for database in ["customer_data", "demo_acme", "app_central"] {
             let temp = TempDir::new().unwrap();
             let guarded = LocalTargetGate::new(repository(&temp, LocalTargetTrust::UserConfirmed))
                 .verify(
@@ -514,7 +502,7 @@ mod tests {
 
             assert!(
                 guarded
-                    .authorize_tenant_database(DatabaseName::try_from(database).unwrap())
+                    .authorize_database(DatabaseName::try_from(database).unwrap())
                     .is_ok()
             );
         }

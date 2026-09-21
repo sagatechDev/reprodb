@@ -288,8 +288,6 @@ pub fn collect_local_target(
         container_id: candidate.id.clone(),
         username,
         password,
-        central_database: DatabaseName::try_from("salt_central")
-            .expect("legacy target metadata remains valid"),
         managed_by_reprodb: candidate.managed_by_reprodb,
     })
 }
@@ -310,8 +308,6 @@ pub fn collect_local_target_non_interactive(
         container_id: candidate.id.clone(),
         username: arguments.username.clone(),
         password: read_password_from_stdin()?,
-        central_database: DatabaseName::try_from("salt_central")
-            .expect("legacy target metadata remains valid"),
         managed_by_reprodb: candidate.managed_by_reprodb,
     })
 }

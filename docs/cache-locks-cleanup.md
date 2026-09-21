@@ -47,4 +47,4 @@ Se o processo cair depois do rename, a próxima limpeza reconhece o nome `.delet
 
 Entradas com relógio futuro ou metadata inválida são preservadas e contabilizadas no relatório, pois apagá-las oportunisticamente esconderia um problema que aparece em `cache list`/`cache clean`. Os comandos usam o mesmo protocolo de lease desta infraestrutura.
 
-O relatório diferencia artefatos expirados, partials órfãos, deleções interrompidas, locks ativos, relógio futuro e entradas inválidas. `cache purge TENANT` limita a remoção ao profile ativo e também mantém qualquer artefato com lease ativa.
+O relatório diferencia artefatos expirados, partials órfãos, deleções interrompidas, locks ativos, relógio futuro e entradas inválidas. `cache purge DATABASE` limita a remoção ao profile ativo e também mantém qualquer artefato com lease ativa.

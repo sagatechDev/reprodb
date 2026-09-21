@@ -1,5 +1,7 @@
 # RDB-002 — Spike do client MySQL em Docker
 
+> **Histórico.** Pesquisa datada, anterior à remoção do conceito de tenant. Mantida como registro.
+
 > Status: em andamento. Caminho macOS validado em 5 de setembro de 2026; Linux e VPN ainda pendentes.
 
 ## Objetivo

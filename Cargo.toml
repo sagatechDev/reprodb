@@ -7,12 +7,6 @@ publish = false
 description = "Local CLI for reproducing Salt tenant databases"
 license = "Proprietary"
 
-[features]
-default = []
-# CI-only plaintext credential persistence inside an isolated REPRODB_HOME.
-# Normal developer and release builds do not compile this backend.
-test-file-credential-store = []
-
 [dependencies]
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
@@ -20,7 +14,6 @@ directories = "6"
 dialoguer = { version = "0.12", default-features = false }
 rpassword = "7.5"
 fs4 = "1"
-keyring = "4"
 secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

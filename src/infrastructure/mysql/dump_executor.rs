@@ -302,7 +302,7 @@ mod tests {
         },
         infrastructure::{
             compression::NoCompressionProgress,
-            config::{MysqlClientConfig, MysqlFamily, SourceProfileConfig, TenantResolverConfig},
+            config::{MysqlClientConfig, MysqlFamily, SourceProfileConfig},
             mysql::ClientCatalog,
         },
     };
@@ -342,9 +342,6 @@ mod tests {
             client: MysqlClientConfig {
                 image: ClientCatalog::resolve("8.4").unwrap().image().to_owned(),
             },
-            tenant_resolver: TenantResolverConfig::Pattern {
-                pattern: "salt_{tenant}".to_owned(),
-            },
         }
     }
 
@@ -353,7 +350,7 @@ mod tests {
             "8.4.4".parse::<MysqlVersion>().unwrap(),
             "MySQL Community Server - GPL",
             "8.4.4".parse::<MysqlVersion>().unwrap(),
-            &DatabaseName::try_from("salt_sagatec").unwrap(),
+            &DatabaseName::try_from("acme_production").unwrap(),
             &DumpPreflight {
                 encoding: DatabaseEncoding::try_new(
                     "utf8mb4".to_owned(),

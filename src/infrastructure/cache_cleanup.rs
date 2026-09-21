@@ -8,7 +8,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    domain::{DumpArtifactMetadata, DumpId, ProfileName, TenantId, TenantLookup},
+    domain::{DatabaseName, DumpArtifactMetadata, DumpId, ProfileName},
     infrastructure::artifact_store::{
         ArtifactStoreError, METADATA_FILE_NAME, PART_SUFFIX, PROFILES_DIRECTORY,
         try_acquire_exclusive_artifact_lock,
@@ -78,7 +78,7 @@ impl LocalCacheCleaner {
                 continue;
             }
             for tenant in read_directories(&profile)? {
-                if !has_valid_name::<TenantId>(&tenant) {
+                if !has_valid_name::<DatabaseName>(&tenant) {
                     report.invalid_entries_skipped += 1;
                     continue;
                 }
@@ -93,56 +93,27 @@ impl LocalCacheCleaner {
     pub fn purge(
         &self,
         profile: &ProfileName,
-        tenant_lookup: &TenantLookup,
+        database: &DatabaseName,
     ) -> Result<CachePurgeReport, CacheCleanupError> {
         let mut report = CachePurgeReport::default();
-        let profile_path = self
+        let database_path = self
             .cache_root
             .join(PROFILES_DIRECTORY)
-            .join(profile.as_str());
-        for tenant_path in read_directories(&profile_path)? {
-            let Some(tenant_name) = tenant_path.file_name().and_then(|name| name.to_str()) else {
+            .join(profile.as_str())
+            .join(database.as_str());
+        for artifact_path in read_directories(&database_path)? {
+            let Some(artifact_name) = artifact_path.file_name().and_then(|name| name.to_str())
+            else {
                 report.invalid_entries_skipped += 1;
                 continue;
             };
-            let Ok(tenant_id) = TenantId::try_from(tenant_name) else {
-                report.invalid_entries_skipped += 1;
+            if artifact_name.parse::<DumpId>().is_err() {
                 continue;
-            };
-            let direct_tenant_match = tenant_id.as_str() == tenant_lookup.as_str();
-            for artifact_path in read_directories(&tenant_path)? {
-                let Some(artifact_name) = artifact_path.file_name().and_then(|name| name.to_str())
-                else {
-                    report.invalid_entries_skipped += 1;
-                    continue;
-                };
-                if artifact_name.parse::<DumpId>().is_err() {
-                    continue;
-                }
-                let selected = if direct_tenant_match {
-                    true
-                } else {
-                    match read_metadata(&artifact_path)? {
-                        Some(metadata) => {
-                            metadata.profile == *profile
-                                && metadata.tenant_id == tenant_id
-                                && (metadata.tenant_lookup == *tenant_lookup
-                                    || metadata.tenant_id.as_str() == tenant_lookup.as_str())
-                        }
-                        None => {
-                            report.invalid_entries_skipped += 1;
-                            false
-                        }
-                    }
-                };
-                if !selected {
-                    continue;
-                }
-                match isolate_and_remove(&artifact_path)? {
-                    RemovalOutcome::Removed => report.artifacts_removed += 1,
-                    RemovalOutcome::Locked => report.locked_entries_skipped += 1,
-                    RemovalOutcome::Gone => {}
-                }
+            }
+            match isolate_and_remove(&artifact_path)? {
+                RemovalOutcome::Removed => report.artifacts_removed += 1,
+                RemovalOutcome::Locked => report.locked_entries_skipped += 1,
+                RemovalOutcome::Gone => {}
             }
         }
         Ok(report)
@@ -407,7 +378,7 @@ mod tests {
     use crate::{
         domain::{
             DatabaseEncoding, DatabaseName, DumpArtifactCompletion, DumpArtifactContext,
-            MysqlVersion, ProfileName, Sha256Digest, TenantId, TenantLookup,
+            MysqlVersion, ProfileName, Sha256Digest,
         },
         infrastructure::{
             artifact_store::{ARTIFACT_LOCK_FILE_NAME, LocalArtifactStore},
@@ -422,8 +393,8 @@ mod tests {
         ProfileName::try_from("local-source").unwrap()
     }
 
-    fn tenant() -> TenantId {
-        TenantId::try_from("salt_sagatec").unwrap()
+    fn database() -> DatabaseName {
+        DatabaseName::try_from("acme_production").unwrap()
     }
 
     async fn publish(
@@ -431,7 +402,7 @@ mod tests {
         completed_at: u64,
     ) -> crate::infrastructure::artifact_store::PublishedDumpArtifact {
         let store = LocalArtifactStore::new(root);
-        let stage = store.begin(&profile(), &tenant()).unwrap();
+        let stage = store.begin(&profile(), &database()).unwrap();
         let id = stage.dump_id();
         let metrics = ZstdCompressor::default()
             .compress(
@@ -444,9 +415,7 @@ mod tests {
         let metadata = DumpArtifactMetadata::try_new(
             id,
             DumpArtifactContext {
-                tenant_lookup: TenantLookup::try_from("sagatec").unwrap(),
-                tenant_id: tenant(),
-                database: DatabaseName::try_from("salt_sagatec").unwrap(),
+                database: database(),
                 profile: profile(),
                 source_fingerprint: Sha256Digest::from_bytes([1; 32]),
                 source_server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
@@ -457,7 +426,6 @@ mod tests {
                     "utf8mb4_0900_ai_ci".to_owned(),
                 )
                 .unwrap(),
-                local_tenant_features: Default::default(),
                 policy_version: 1,
             },
             DumpArtifactCompletion {
@@ -499,7 +467,7 @@ mod tests {
     fn removes_stale_partials_but_preserves_recent_and_locked_ones() {
         let directory = tempdir().unwrap();
         let store = LocalArtifactStore::new(directory.path());
-        let locked = store.begin(&profile(), &tenant()).unwrap();
+        let locked = store.begin(&profile(), &database()).unwrap();
         let locked_path = locked.stage_path().to_owned();
         let parent = locked_path.parent().unwrap();
         let stale = parent.join(format!("{}.part", DumpId::new()));
@@ -544,13 +512,12 @@ mod tests {
         let directory = tempdir().unwrap();
         let artifact = publish(directory.path(), 100).await;
         let profile = profile();
-        let tenant = tenant();
-        let database = DatabaseName::try_from("salt_sagatec").unwrap();
+        let _database = database();
+        let database = DatabaseName::try_from("acme_production").unwrap();
         let validator = LocalCacheValidator::new(LocalArtifactStore::new(directory.path()));
         let hit = validator
             .lookup(&CacheLookup {
                 profile: &profile,
-                tenant_id: &tenant,
                 database: &database,
                 source_fingerprint: Sha256Digest::from_bytes([1; 32]),
                 policy_version: 1,
@@ -577,13 +544,12 @@ mod tests {
         let directory = tempdir().unwrap();
         let artifact = publish(directory.path(), 100).await;
         let profile = profile();
-        let tenant = tenant();
-        let database = DatabaseName::try_from("salt_sagatec").unwrap();
+        let _database = database();
+        let database = DatabaseName::try_from("acme_production").unwrap();
         let validator = LocalCacheValidator::new(LocalArtifactStore::new(directory.path()));
         let hit = validator
             .lookup(&CacheLookup {
                 profile: &profile,
-                tenant_id: &tenant,
                 database: &database,
                 source_fingerprint: Sha256Digest::from_bytes([1; 32]),
                 policy_version: 1,
@@ -593,7 +559,7 @@ mod tests {
             })
             .unwrap();
         let cleaner = LocalCacheCleaner::new(directory.path());
-        let lookup = TenantLookup::try_from("sagatec").unwrap();
+        let lookup = DatabaseName::try_from("acme_production").unwrap();
 
         let report = cleaner.purge(&profile, &lookup).unwrap();
         assert_eq!(report.artifacts_removed, 0);
@@ -609,7 +575,9 @@ mod tests {
     #[test]
     fn interrupted_deletion_is_recovered_without_following_symlinks() {
         let directory = tempdir().unwrap();
-        let parent = directory.path().join("profiles/local-source/salt_sagatec");
+        let parent = directory
+            .path()
+            .join("profiles/local-source/acme_production");
         fs::create_dir_all(&parent).unwrap();
         let deleting = parent.join(format!(
             "{}{DELETING_MARKER}{}",

@@ -59,7 +59,6 @@ where
                 container_id: candidate.id.clone(),
                 username: request.configured.username.clone(),
                 password: request.password.clone(),
-                central_database: request.configured.central_database.clone(),
                 managed_by_reprodb: matches!(
                     request.configured.trust,
                     LocalTargetTrust::ReprodbManaged

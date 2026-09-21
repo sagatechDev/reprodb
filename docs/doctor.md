@@ -38,7 +38,7 @@ Sucesso retorna `0`. Quando há falhas, o código representa a primeira categori
 
 ## Limite do check de espaço
 
-Os 5 GiB são apenas um piso de segurança para iniciar o MVP, não uma estimativa do dump. O tamanho comprimido e o espaço necessário pelo MySQL target variam por tenant. Um preflight posterior deverá usar metadata histórica/estimada para exigir espaço proporcional ao artefato selecionado.
+Os 5 GiB são apenas um piso de segurança para iniciar o MVP, não uma estimativa do dump. O tamanho comprimido e o espaço necessário pelo MySQL target variam por database. Um preflight posterior deverá usar metadata histórica/estimada para exigir espaço proporcional ao artefato selecionado.
 
 ## Teste sem efeitos externos
 

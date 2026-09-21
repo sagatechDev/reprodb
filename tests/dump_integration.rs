@@ -7,13 +7,11 @@ use std::{
 
 use reprodb::{
     application::DumpService,
-    domain::{
-        CredentialKey, CredentialScope, DatabaseName, MysqlTlsMode, ProfileName, TenantLookup,
-    },
+    domain::{CredentialKey, CredentialScope, DatabaseName, MysqlTlsMode, ProfileName},
     infrastructure::{
         config::{
             AppConfig, AppPaths, ClientRuntimeConfig, ClientRuntimeKind, ConfigRepository,
-            MysqlClientConfig, MysqlFamily, SourceProfileConfig, TenantResolverConfig,
+            MysqlClientConfig, MysqlFamily, SourceProfileConfig,
         },
         credentials::{CredentialStore, MemoryCredentialStore},
         mysql::{ClientCatalog, DockerDumpWorkflow, DockerMysqlDumpExecutor},
@@ -24,8 +22,8 @@ use secrecy::{SecretString, zeroize::Zeroize};
 use tempfile::TempDir;
 
 #[tokio::test]
-#[ignore = "requires the local mysql-8 container with salt_sagatec and the approved client image"]
-async fn dumps_the_real_local_salt_tenant_into_a_managed_zstd_artifact() {
+#[ignore = "requires the local mysql-8 container with acme_production and the approved client image"]
+async fn dumps_a_real_local_database_into_a_managed_zstd_artifact() {
     let container =
         std::env::var("REPRODB_TEST_MYSQL_CONTAINER").unwrap_or_else(|_| "mysql-8".to_owned());
     let docker_context = current_docker_context();
@@ -55,10 +53,6 @@ async fn dumps_the_real_local_salt_tenant_into_a_managed_zstd_artifact() {
             client: MysqlClientConfig {
                 image: client.image().to_owned(),
             },
-            tenant_resolver: TenantResolverConfig::SaltCentral {
-                central_database: DatabaseName::try_from("salt_central").unwrap(),
-                allow_domain_lookup: true,
-            },
         },
     );
     repository
@@ -80,15 +74,13 @@ async fn dumps_the_real_local_salt_tenant_into_a_managed_zstd_artifact() {
         .create(
             &credentials,
             &workflow,
-            &workflow,
             &DockerMysqlDumpExecutor::default(),
-            TenantLookup::try_from("sagatec").unwrap(),
+            DatabaseName::try_from("acme_production").unwrap(),
         )
         .await
         .unwrap();
 
-    assert_eq!(created.tenant_id.as_str(), "salt_sagatec");
-    assert_eq!(created.database.as_str(), "salt_sagatec");
+    assert_eq!(created.database.as_str(), "acme_production");
     assert!(created.uncompressed_bytes > created.compressed_bytes);
     let sql = zstd::stream::decode_all(
         std::fs::File::open(created.artifact_path.join("dump.sql.zst")).unwrap(),

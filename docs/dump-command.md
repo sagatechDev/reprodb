@@ -1,29 +1,26 @@
 # `reprodb dump` — contrato operacional
 
-`reprodb dump TENANT` cria um dump lógico comprimido no cache local e não executa restore.
+`reprodb dump DATABASE` cria um dump lógico comprimido no cache local e não executa restore.
 
-O cache fica em `~/.reprodb/cache`. Um resultado para o profile `local` e tenant `salt_sagatec` é publicado em:
+O cache fica em `~/.reprodb/cache`. Um resultado para o profile `local` e database `acme_production` é publicado em:
 
 ```text
-~/.reprodb/cache/profiles/local/salt_sagatec/<dump-id>/
+~/.reprodb/cache/profiles/local/acme_production/<dump-id>/
 ```
-
-Exemplo com os nomes usados no Salt:
 
 ```bash
-reprodb profile use salt-local
+reprodb profile use local-source
 reprodb doctor
-reprodb dump sagatec
+reprodb dump acme_production
 ```
 
-O alias `sagatec` é resolvido pelo `salt_central` para o tenant e database canônicos, por exemplo `salt_sagatec`. O input do terminal nunca é usado diretamente como identificador SQL.
+O argumento é o nome do database na origem. Ele é validado como `DatabaseName` antes de qualquer conexão; o input do terminal nunca é usado diretamente como identificador SQL.
 
 ## Fluxo
 
 ```text
 config/profile
     -> credential store
-    -> tenant resolver
     -> lock local por profile+database
     -> preflight do source
     -> mysqldump em client Docker aprovado
@@ -34,7 +31,7 @@ config/profile
 
 O comando mostra bytes processados, throughput e duração quando executado em terminal. Depois de uma amostra mínima, acrescenta `ETA ~mm:ss` calculado a partir de `information_schema.tables.data_length` e da vazão real do stream. O sinal `~` deixa explícito que a previsão é aproximada; não há percentual porque o tamanho do SQL não é conhecido exatamente.
 
-Ao concluir, a saída informa o profile, tenant, database, versões do source e client, tamanhos, duração, ID e caminho do artefato. Esse ID é a entrada do [`reprodb restore`](restore-command.md).
+Ao concluir, a saída informa o profile, database, versões do source e client, tamanhos, duração, ID e caminho do artefato. Esse ID é a entrada do [`reprodb restore`](restore-command.md).
 
 ## Segurança e integridade
 
@@ -74,7 +71,7 @@ Não há uma implementação alternativa para produção. A classificação ativ
 
 ## Falhas e limitações desta etapa
 
-Erros são classificados em configuração, credencial, dependência, conexão source, resolução do tenant, dump, cache ou Docker, cada categoria com exit code estável. O stderr bruto do `mysqldump` não é repetido para evitar vazar dados retornados pelo client.
+Erros são classificados em configuração, credencial, dependência, conexão source, dump, cache ou Docker, cada categoria com exit code estável. O stderr bruto do `mysqldump` não é repetido para evitar vazar dados retornados pelo client.
 
 `Ctrl+C` cancela cooperativamente a compressão, encerra e aguarda o `docker run`, remove explicitamente o client container efêmero e descarta o `.part`. Um dump completo anterior continua disponível e o processo termina com código 130.
 

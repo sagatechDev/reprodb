@@ -61,9 +61,6 @@ impl MysqlTlsMaterialPaths {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ValueKind {
     ProfileName,
-    TenantLookup,
-    TenantId,
-    DomainAlias,
     DatabaseName,
     ContainerName,
     ContainerId,
@@ -77,9 +74,6 @@ impl fmt::Display for ValueKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
             Self::ProfileName => "profile name",
-            Self::TenantLookup => "tenant lookup",
-            Self::TenantId => "tenant ID",
-            Self::DomainAlias => "domain alias",
             Self::DatabaseName => "database name",
             Self::ContainerName => "container name",
             Self::ContainerId => "container ID",
@@ -264,9 +258,6 @@ macro_rules! validated_string {
 }
 
 validated_string!(ProfileName, validate_profile_name);
-validated_string!(TenantLookup, validate_tenant_lookup);
-validated_string!(TenantId, validate_tenant_id);
-validated_string!(DomainAlias, validate_domain_alias);
 validated_string!(DatabaseName, validate_database_name);
 validated_string!(ContainerName, validate_container_name);
 validated_string!(MysqlServerUuid, validate_mysql_server_uuid);
@@ -280,50 +271,6 @@ fn validate_profile_name(value: &str) -> Result<(), ValueObjectError> {
         "1-64 ASCII letters, digits, `_` or `-`, starting with a letter or digit",
         |byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'),
     )
-}
-
-fn validate_tenant_lookup(value: &str) -> Result<(), ValueObjectError> {
-    validate_simple_identifier(
-        value,
-        ValueKind::TenantLookup,
-        255,
-        "1-255 ASCII letters, digits, `_` or `-`, starting with a letter or digit",
-        |byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'),
-    )
-}
-
-fn validate_tenant_id(value: &str) -> Result<(), ValueObjectError> {
-    validate_simple_identifier(
-        value,
-        ValueKind::TenantId,
-        255,
-        "1-255 ASCII letters, digits, `_` or `-`, starting with a letter or digit",
-        |byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'),
-    )
-}
-
-fn validate_domain_alias(value: &str) -> Result<(), ValueObjectError> {
-    const EXPECTED: &str =
-        "a lowercase DNS label up to 63 characters, without leading or trailing `-`";
-    validate_length(value, ValueKind::DomainAlias, 63)?;
-
-    let valid = value
-        .bytes()
-        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        && value
-            .first_byte()
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
-        && value
-            .last_byte()
-            .is_some_and(|byte| byte.is_ascii_alphanumeric());
-
-    if !valid {
-        return Err(ValueObjectError::InvalidFormat {
-            kind: ValueKind::DomainAlias,
-            expected: EXPECTED,
-        });
-    }
-    Ok(())
 }
 
 fn validate_database_name(value: &str) -> Result<(), ValueObjectError> {
@@ -410,21 +357,6 @@ fn validate_length(value: &str, kind: ValueKind, max: usize) -> Result<(), Value
         return Err(ValueObjectError::TooLong { kind, max });
     }
     Ok(())
-}
-
-trait StringBoundaryBytes {
-    fn first_byte(&self) -> Option<u8>;
-    fn last_byte(&self) -> Option<u8>;
-}
-
-impl StringBoundaryBytes for str {
-    fn first_byte(&self) -> Option<u8> {
-        self.as_bytes().first().copied()
-    }
-
-    fn last_byte(&self) -> Option<u8> {
-        self.as_bytes().last().copied()
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -607,12 +539,9 @@ mod tests {
     }
 
     #[test]
-    fn accepts_observed_salt_identifiers() {
-        assert!(ProfileName::try_from("salt-local").is_ok());
-        assert!(TenantLookup::try_from("watt").is_ok());
-        assert!(TenantId::try_from("salt_watt_construtora").is_ok());
-        assert!(DomainAlias::try_from("sagatec").is_ok());
-        assert!(DatabaseName::try_from("salt_watt_construtora").is_ok());
+    fn accepts_observed_identifiers() {
+        assert!(ProfileName::try_from("local-mysql").is_ok());
+        assert!(DatabaseName::try_from("acme_production").is_ok());
         assert!(ContainerName::try_from("mysql-8").is_ok());
         assert!(MysqlServerUuid::try_from("11111111-1111-4111-8111-111111111111").is_ok());
     }
@@ -634,23 +563,18 @@ mod tests {
             DatabaseName::try_from("a".repeat(65)),
             Err(ValueObjectError::TooLong { max: 64, .. })
         ));
-        assert!(matches!(
-            DomainAlias::try_from("a".repeat(64)),
-            Err(ValueObjectError::TooLong { max: 63, .. })
-        ));
     }
 
     #[test]
     fn rejects_injection_and_path_inputs() {
         for value in [
             "../../mysql",
-            "tenant;DROP DATABASE mysql",
-            "tenant name",
-            "tenant`name",
-            "tenant/name",
-            "tenant\0name",
+            "database;DROP DATABASE mysql",
+            "database name",
+            "database`name",
+            "database/name",
+            "database\0name",
         ] {
-            assert!(TenantLookup::try_from(value).is_err(), "{value:?}");
             assert!(DatabaseName::try_from(value).is_err(), "{value:?}");
         }
     }
@@ -664,13 +588,6 @@ mod tests {
                     kind: ValueKind::DatabaseName
                 })
             ));
-        }
-    }
-
-    #[test]
-    fn domain_alias_is_a_lowercase_dns_label() {
-        for invalid in ["Salt", "-salt", "salt-", "salt.localhost", "salt_test"] {
-            assert!(DomainAlias::try_from(invalid).is_err(), "{invalid}");
         }
     }
 
@@ -761,7 +678,7 @@ mod tests {
             credential: CredentialKey,
         }
 
-        let profile = ProfileName::try_from("salt-local").unwrap();
+        let profile = ProfileName::try_from("local-source").unwrap();
         let key = CredentialKey::new(CredentialScope::Target);
         let values = Values {
             profile,

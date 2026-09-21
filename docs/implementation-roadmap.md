@@ -1,6 +1,8 @@
 # reprodb — Roadmap de implementação
 
 > Documento de referência para transformar o plano arquitetural do reprodb em milestones e issues executáveis.
+
+> **Histórico.** Este documento registra o planejamento original, quando o reprodb ainda modelava tenants e resolvia databases por um catálogo central. Esse conceito foi removido: hoje a CLI copia um database nomeado de um host para outro. Leia-o como registro de decisões, não como descrição do comportamento atual — para isso use os demais documentos em `docs/`.
 >
 > Estado da análise: 5 de setembro de 2026.
 
@@ -10,9 +12,9 @@ Construir uma CLI local em Rust que permita a um desenvolvedor reproduzir um ten
 
 ```bash
 reprodb setup
-reprodb profile add salt-local
+reprodb profile add local-source
 reprodb doctor
-reprodb pull sagatec
+reprodb pull acme
 ```
 
 O fluxo completo deve:
@@ -58,7 +60,7 @@ Esta seção registra o que foi observado no ambiente local usado para desenhar 
 Exemplos reais de resolução encontrados:
 
 ```text
-domain sagatec -> tenant id salt_sagatec -> database salt_sagatec
+domain acme -> tenant id acme_production -> database acme_production
 domain sigga   -> tenant id salt_sigga   -> database salt_sigga
 domain watt    -> tenant id salt_watt_construtora -> database salt_watt_construtora
 ```
@@ -100,7 +102,7 @@ central database local
 database pattern/policy local
 ```
 
-Durante a senha, a CLI mostra um `*` por caractere digitado ou colado. O conteúdo nunca é exibido e é persistido somente no keyring do sistema operacional. O TOML guarda apenas `credential_key`.
+Durante a senha, a CLI mostra um `*` por caractere digitado ou colado. O conteúdo nunca é exibido e é persistido somente no credential store do sistema operacional. O TOML guarda apenas `credential_key`.
 
 ### 3.3 Client MySQL controlado por Docker
 
@@ -231,7 +233,7 @@ Fingerprint e database resolvido ficam na metadata e são revalidados em todo hi
 O MVP não aceitará um SQL/Zstd arbitrário por path como fluxo normal.
 
 ```bash
-reprodb restore sagatec --dump-id <id>
+reprodb restore acme --dump-id <id>
 ```
 
 Importação de arquivo externo ficará fora do MVP ou exigirá um comando separado, aviso explícito e validações adicionais.
@@ -242,7 +244,7 @@ Exemplo sem secrets:
 
 ```toml
 schema_version = 1
-active_profile = "salt-local"
+active_profile = "local-source"
 
 [client_runtime]
 type = "docker"
@@ -256,7 +258,7 @@ username = "root"
 credential_key = "target:<uuid>"
 central_database = "salt_central"
 
-[profiles.salt-local]
+[profiles.local-source]
 host = "127.0.0.1"
 port = 3306
 username = "root"
@@ -266,10 +268,10 @@ mysql_series = "8.4"
 production = false
 tls_mode = "required"
 
-[profiles.salt-local.client]
+[profiles.local-source.client]
 image = "mysql:<tested-tag>@sha256:<tested-digest>"
 
-[profiles.salt-local.tenant_resolver]
+[profiles.local-source.tenant_resolver]
 type = "salt-central"
 central_database = "salt_central"
 allow_domain_lookup = true
@@ -421,7 +423,7 @@ Critério da milestone: provar conectividade, autenticação, dump, compressão 
 
 **Objetivo:** fixar uma estratégia única para source e target.
 
-**Decisão esperada:** keyring → `SecretString` → option file temporário restrito → mount read-only → `--defaults-file`.
+**Decisão esperada:** credential store → `SecretString` → option file temporário restrito → mount read-only → `--defaults-file`.
 
 **Aceite:** testes com espaços, aspas, `#`, `;`, barra invertida e newline; segredo ausente de config, Debug, logs, argv e mensagens de erro.
 
@@ -451,7 +453,7 @@ Critério da milestone: binário compilável, command tree estável, testes unit
 
 **Labels:** `priority:p0`, `type:feature`, `area:cli`, `area:cross-platform`
 
-**Status:** implementada — crate principal, MSRV 1.88 e CI macOS/Linux adicionados; a primeira execução remota do workflow ainda depende de push. O MSRV foi elevado de 1.85 porque `keyring` 4, adotado na RDB-022, requer Rust 1.88.
+**Status:** implementada — crate principal, MSRV 1.88 e CI macOS/Linux adicionados; a primeira execução remota do workflow ainda depende de push. O MSRV foi elevado de 1.85 porque `credential store` 4, adotado na RDB-022, requer Rust 1.88.
 
 **Escopo:**
 
@@ -492,7 +494,7 @@ Critério da milestone: binário compilável, command tree estável, testes unit
 
 **Escopo:** builders, clock fake, credential store em memória, diretórios temporários, client runtime fake e fixtures SQL.
 
-**Aceite:** testes de aplicação não dependem do keyring nem do Docker; integrações reais são marcadas e executadas separadamente.
+**Aceite:** testes de aplicação não dependem do credential store nem do Docker; integrações reais são marcadas e executadas separadamente.
 
 ### Milestone 2 — Configuração, credenciais e setup
 
@@ -522,7 +524,7 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 
 **Labels:** `priority:p0`, `type:feature`, `area:credentials`, `area:security`
 
-**Status:** implementação concluída e integração com o Keychain do macOS validada; a execução real contra Secret Service no Linux permanece pendente antes de encerrar o aceite cross-platform.
+**Status:** implementação concluída e integração com o credential store local do macOS validada; a execução real contra credential store local no Linux permanece pendente antes de encerrar o aceite cross-platform.
 
 **Escopo:** `OsCredentialStore`, `MemoryCredentialStore`, `SecretString`, arquivo temporário restrito e rollback de cadastro incompleto.
 
@@ -544,11 +546,11 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 
 **Labels:** `priority:p0`, `type:feature`, `area:config`, `area:credentials`
 
-**Status:** implementada no macOS — `add`, `list`, `use` e `remove` operam sobre configuração e credential store reais. O cadastro usa senha mascarada por asteriscos, aceita texto colado, aplica TLS explícito, prepara o client Docker aprovado e faz conexão real com detecção de versão antes da persistência. Nenhum profile é salvo quando a verificação falha. A integração com `mysql-8` passou usando `REQUIRED`; a execução do fluxo completo com Secret Service permanece pendente no Linux.
+**Status:** implementada no macOS — `add`, `list`, `use` e `remove` operam sobre configuração e credential store reais. O cadastro usa senha mascarada por asteriscos, aceita texto colado, aplica TLS explícito, prepara o client Docker aprovado e faz conexão real com detecção de versão antes da persistência. Nenhum profile é salvo quando a verificação falha. A integração com `mysql-8` passou usando `REQUIRED`; a execução do fluxo completo com credential store local permanece pendente no Linux.
 
 **Escopo:** `add`, `list`, `use`, `remove`; prompts interativos; senha mascarada sem revelar conteúdo; teste da conexão antes do commit.
 
-**Aceite:** profile duplicado, remoção do ativo, keyring indisponível, conexão inválida e cleanup da credencial são testados.
+**Aceite:** profile duplicado, remoção do ativo, credential store indisponível, conexão inválida e cleanup da credencial são testados.
 
 **Depende de:** RDB-020, RDB-022 e RDB-023.
 
@@ -579,7 +581,7 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 
 **Status:** implementada e validada no macOS contra o `mysql-8` real. O comando agrega checks de configuração, credenciais, filesystem, Docker, identidade do target, client aprovado, conexões, versões e TLS sem baixar imagem, iniciar o target ou persistir configuração. Os probes usam containers efêmeros `--rm` do client. Compilação Linux está validada; execução real em Docker Engine Linux permanece na RDB-002/RDB-061.
 
-**Escopo:** config, profiles, keyring, Docker context, client image, target ID, source/target connection, versões, vendor, TLS, espaço livre e matriz de compatibilidade.
+**Escopo:** config, profiles, credential store, Docker context, client image, target ID, source/target connection, versões, vendor, TLS, espaço livre e matriz de compatibilidade.
 
 **Aceite:** cada check falha isoladamente com ação recomendada; doctor não altera bancos.
 
@@ -587,7 +589,7 @@ Critério da milestone: target Docker e múltiplos source profiles podem ser con
 
 ### Milestone 3 — Resolução de tenant Salt
 
-Critério da milestone: um alias como `sagatec` resolve de modo seguro para tenant e database reais.
+Critério da milestone: um alias como `acme` resolve de modo seguro para tenant e database reais.
 
 #### RDB-030 — Implementar PatternTenantResolver
 
@@ -603,7 +605,7 @@ Critério da milestone: um alias como `sagatec` resolve de modo seguro para tena
 
 **Labels:** `priority:p0`, `type:feature`, `area:tenant`, `area:mysql`
 
-**Status:** implementada e validada contra o `salt_central` local — lookup binário por tenant ID/domain, fallback/override de `tenancy_db_name`, saída mínima em hex, ambiguidade e metadata inválida possuem cobertura. Os aliases reais `sagatec` e `polymer` resolveram para `salt_sagatec` e `salt_polymer` sem transportar o JSON central.
+**Status:** implementada e validada contra o `salt_central` local — lookup binário por tenant ID/domain, fallback/override de `tenancy_db_name`, saída mínima em hex, ambiguidade e metadata inválida possuem cobertura. Os aliases reais `acme` e `globex` resolveram para `acme_production` e `globex_production` sem transportar o JSON central.
 
 **Escopo:** lookup por `tenants.id` ou `domains.domain`, resolução de `tenancy_db_name`, output estruturado e validação final.
 
@@ -863,7 +865,7 @@ Critério da milestone: falhas deixam estado compreensível e o fluxo é comprov
 
 **Labels:** `priority:p0`, `type:test`, `area:cross-platform`
 
-**Status:** implementada e validada em Apple Silicon (`arm64`) — a suite reproduzível cobre testes, Clippy, permissões, locks/sinais, Keychain temporário, Docker Desktop, descoberta/conexão com o `mysql-8` e o E2E do binário entre dois containers. A execução Intel (`x86_64`) permanece pendente e será obrigatória somente se essa arquitetura ainda fizer parte do parque suportado.
+**Status:** implementada e validada em Apple Silicon (`arm64`) — a suite reproduzível cobre testes, Clippy, permissões, locks/sinais, credential store local temporário, Docker Desktop, descoberta/conexão com o `mysql-8` e o E2E do binário entre dois containers. A execução Intel (`x86_64`) permanece pendente e será obrigatória somente se essa arquitetura ainda fizer parte do parque suportado.
 
 **Escopo:** paths, keychain, Docker Desktop, host gateway, imagem do client, sinais e permissões.
 
@@ -944,7 +946,7 @@ RDB-004 ─┘                         │
 RDB-005 ─> registro central local ─> pull realmente utilizável no Salt
 
 Implementação local completa no macOS
-  ─> Docker Engine + Secret Service + E2E real no Linux
+  ─> Docker Engine + credential store local + E2E real no Linux
   ─> MVP local completo em macOS/Linux
   ─> TLS + matriz do source real
   ─> piloto de produção
@@ -973,7 +975,7 @@ Não iniciar integração de produção antes de concluir as milestones 0 a 6.
 - [x] Ctrl+C limpa child, partial, option file e lock.
 - [x] E2E do binário real passa no Docker Desktop/macOS entre source e target isolados, incluindo cache hit com source desligado.
 - [ ] `setup`, conexão source e networking do client passam em Docker Engine Linux real.
-- [ ] `profile add/get/remove` passam com o Secret Service nativo de uma sessão Linux de desenvolvedor.
+- [ ] `profile add/get/remove` passam com o credential store local nativo de uma sessão Linux de desenvolvedor.
 - [ ] E2E do binário real passa num runner Linux com Docker.
 - [x] Smoke suite passa no macOS Apple Silicon usado no desenvolvimento; Intel depende da confirmação do parque suportado.
 

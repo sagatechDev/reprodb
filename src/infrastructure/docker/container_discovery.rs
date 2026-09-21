@@ -512,7 +512,7 @@ mod tests {
             "Id": id('c'),
             "Name": "/custom-database",
             "Config": {
-                "Image": "sagatech/database:local",
+                "Image": "example/database:local",
                 "Labels": {},
                 "ExposedPorts": {"3306/tcp": {}}
             },

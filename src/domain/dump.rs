@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn creates_an_exact_ordered_argument_list_without_a_shell() {
-        let database = DatabaseName::try_from("salt_sagatec").unwrap();
+        let database = DatabaseName::try_from("acme_production").unwrap();
 
         let plan = Mysql8DumpPolicy::evaluate(
             version("8.4.4"),
@@ -348,7 +348,7 @@ mod tests {
                 "--skip-events",
                 "--skip-lock-tables",
                 "--default-character-set=utf8mb4",
-                "salt_sagatec",
+                "acme_production",
             ]
         );
         assert!(
@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn accepts_each_approved_mysql_8_series_with_a_matching_client() {
-        let database = DatabaseName::try_from("salt_sagatec").unwrap();
+        let database = DatabaseName::try_from("acme_production").unwrap();
 
         for supported in ["8.0.46", "8.4.4"] {
             let plan = Mysql8DumpPolicy::evaluate(
@@ -376,7 +376,7 @@ mod tests {
             )
             .unwrap();
 
-            assert_eq!(plan.arguments().last().unwrap(), "salt_sagatec");
+            assert_eq!(plan.arguments().last().unwrap(), "acme_production");
         }
     }
 
@@ -391,7 +391,7 @@ mod tests {
             version("8.4.4"),
             "MySQL Community Server - GPL",
             version("8.4.4"),
-            &DatabaseName::try_from("salt_polymer").unwrap(),
+            &DatabaseName::try_from("globex_production").unwrap(),
             &preflight,
         )
         .unwrap_err();
@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn blocks_routines_and_events_until_restore_semantics_are_defined() {
-        let database = DatabaseName::try_from("salt_polymer").unwrap();
+        let database = DatabaseName::try_from("globex_production").unwrap();
         let mut routines = safe_preflight();
         routines.objects.routines = 1;
         assert!(matches!(
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn blocks_views_triggers_and_definers_until_restore_semantics_are_defined() {
-        let database = DatabaseName::try_from("salt_polymer").unwrap();
+        let database = DatabaseName::try_from("globex_production").unwrap();
 
         let mut definer = safe_preflight();
         definer.objects.views = 1;
@@ -479,7 +479,7 @@ mod tests {
 
     #[test]
     fn requires_mysql_vendor_supported_series_and_matching_client() {
-        let database = DatabaseName::try_from("salt_sagatec").unwrap();
+        let database = DatabaseName::try_from("acme_production").unwrap();
         let preflight = safe_preflight();
 
         assert_eq!(

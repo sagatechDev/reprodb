@@ -4,8 +4,7 @@ use thiserror::Error;
 
 use crate::{
     domain::{
-        ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseName, MysqlServerUuid,
-        MysqlVersion,
+        ContainerId, ContainerName, CredentialKey, CredentialScope, MysqlServerUuid, MysqlVersion,
     },
     infrastructure::{
         config::{ConfigError, ConfigRepository, LocalTargetConfig, LocalTargetTrust},
@@ -22,7 +21,6 @@ pub struct NewLocalTargetInput {
     pub container_id: ContainerId,
     pub username: String,
     pub password: SecretString,
-    pub central_database: DatabaseName,
     pub managed_by_reprodb: bool,
 }
 
@@ -176,13 +174,11 @@ impl SetupService {
             container_id: input.container_id,
             username: input.username,
             credential_key,
-            central_database: input.central_database,
             trust: if input.managed_by_reprodb {
                 LocalTargetTrust::ReprodbManaged
             } else {
                 LocalTargetTrust::UserConfirmed
             },
-            legacy_tenant_database_prefix: None,
         });
 
         persist_config_with_credential(
@@ -253,10 +249,7 @@ mod tests {
     use crate::{
         domain::{CredentialScope, MysqlTlsMode, ProfileName},
         infrastructure::{
-            config::{
-                AppConfig, AppPaths, MysqlClientConfig, MysqlFamily, SourceProfileConfig,
-                TenantResolverConfig,
-            },
+            config::{AppConfig, AppPaths, MysqlClientConfig, MysqlFamily, SourceProfileConfig},
             credentials::MemoryCredentialStore,
             mysql::ClientCatalog,
         },
@@ -277,7 +270,6 @@ mod tests {
             container_id: ContainerId::try_from("a".repeat(64)).unwrap(),
             username: "root".to_owned(),
             password: SecretString::from("password-that-must-not-leak"),
-            central_database: DatabaseName::try_from("salt_central").unwrap(),
             managed_by_reprodb: false,
         }
     }
@@ -332,7 +324,6 @@ mod tests {
         let target = config.local_target.unwrap();
         assert_eq!(target.container_id.as_str(), "a".repeat(64));
         assert_eq!(target.trust, LocalTargetTrust::UserConfirmed);
-        assert!(target.legacy_tenant_database_prefix.is_none());
         assert_eq!(
             config.client_runtime.docker_context.as_deref(),
             Some("desktop-linux")
@@ -373,10 +364,6 @@ mod tests {
                         tls_material: Default::default(),
                         client: MysqlClientConfig {
                             image: client.image().to_owned(),
-                        },
-                        tenant_resolver: TenantResolverConfig::SaltCentral {
-                            central_database: DatabaseName::try_from("salt_central").unwrap(),
-                            allow_domain_lookup: true,
                         },
                     },
                 )]),

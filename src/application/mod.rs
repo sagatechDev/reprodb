@@ -1,21 +1,25 @@
 mod cache_service;
 mod credential_transaction;
+mod database_catalog_service;
 mod doctor_service;
 mod dump_service;
 mod local_target_gate;
-mod local_tenant_registration_service;
 mod profile_service;
 mod pull_service;
 mod restore_engine;
 mod restore_service;
 mod setup_service;
-mod tenant_catalog_service;
 
 pub use cache_service::{
     CacheListEntry, CacheListReport, CacheListStatus, CachePurgeReady, CacheService,
     CacheServiceError,
 };
 pub use credential_transaction::{CredentialProvisionError, persist_config_with_credential};
+pub use database_catalog_service::{
+    DEFAULT_DATABASE_LIST_LIMIT, DatabaseCatalogEntry, DatabaseCatalogPage,
+    DatabaseCatalogReadError, DatabaseCatalogReader, DatabaseCatalogService,
+    DatabaseCatalogServiceError, DatabaseCatalogSource, MAX_DATABASE_LIST_LIMIT,
+};
 pub use doctor_service::{
     DoctorCheck, DoctorDockerContainer, DoctorDockerError, DoctorDockerInspector,
     DoctorDockerInventory, DoctorFailureKind, DoctorReport, DoctorSection, DoctorService,
@@ -23,15 +27,11 @@ pub use doctor_service::{
 };
 pub use dump_service::{
     Clock, ClockError, DumpCreated, DumpPreflightGateway, DumpService, DumpServiceError,
-    DumpSource, DumpStatus, DumpStatusObserver, DumpTenantResolver, NoDumpStatus, SystemClock,
+    DumpSource, DumpStatus, DumpStatusObserver, NoDumpStatus, SystemClock,
 };
 pub use local_target_gate::{
     AuthorizedLocalTarget, GuardedLocalTarget, LocalTargetAttestation, LocalTargetAttestationError,
     LocalTargetAttestationRequest, LocalTargetAttestor, LocalTargetGate, LocalTargetGateError,
-};
-pub use local_tenant_registration_service::{
-    LocalTenantRegistered, LocalTenantRegistrationService, LocalTenantRegistrationServiceError,
-    LocalTenantWriteError, LocalTenantWriter,
 };
 pub use profile_service::{
     NewProfileInput, ProfileCreated, ProfileRemoval, ProfileService, ProfileServiceError,
@@ -51,9 +51,4 @@ pub use restore_service::{
 pub use setup_service::{
     LocalTargetConfigured, LocalTargetVerifier, NewLocalTargetInput, SetupService,
     SetupServiceError, TargetVerificationError, VerifiedLocalTarget,
-};
-pub use tenant_catalog_service::{
-    DEFAULT_TENANT_LIST_LIMIT, MAX_TENANT_LIST_LIMIT, TenantCatalogEntry, TenantCatalogPage,
-    TenantCatalogReadError, TenantCatalogReader, TenantCatalogService, TenantCatalogServiceError,
-    TenantCatalogSource,
 };

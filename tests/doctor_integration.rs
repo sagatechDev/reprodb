@@ -6,7 +6,7 @@ use reprodb::{
     application::{
         DoctorService, NewLocalTargetInput, NewProfileInput, ProfileService, SetupService,
     },
-    domain::{DatabaseName, MysqlTlsMode, ProfileName},
+    domain::{MysqlTlsMode, ProfileName},
     infrastructure::{
         config::{AppPaths, ConfigRepository},
         credentials::MemoryCredentialStore,
@@ -66,7 +66,6 @@ async fn doctor_validates_the_real_environment_without_changing_configuration() 
                 container_id: candidate.id,
                 username: "root".to_owned(),
                 password: local_container_root_password_from_current_context(&expected),
-                central_database: DatabaseName::try_from("salt_central").unwrap(),
                 managed_by_reprodb: candidate.managed_by_reprodb,
             },
         )

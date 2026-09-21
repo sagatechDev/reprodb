@@ -24,7 +24,7 @@ metadata estrita
     -> estado ready
 ```
 
-Um arquivo arbitrário não pode ser convertido diretamente em `ValidatedRestoreArtifact`. O comando localiza um UUID único sob `~/.reprodb/cache/profiles`, recupera profile e tenant ID dos diretórios tipados e então valida a identidade completa. O validator mantém uma lease compartilhada durante todo o restore e recusa metadata divergente, corrupção, truncamento e stream Zstd inválido antes de qualquer operação destrutiva.
+Um arquivo arbitrário não pode ser convertido diretamente em `ValidatedRestoreArtifact`. O comando localiza um UUID único sob `~/.reprodb/cache/profiles`, recupera profile e nome do database dos diretórios tipados e então valida a identidade completa. O validator mantém uma lease compartilhada durante todo o restore e recusa metadata divergente, corrupção, truncamento e stream Zstd inválido antes de qualquer operação destrutiva.
 
 O checksum do SQL é conferido uma segunda vez durante a importação. Isso detecta uma alteração entre a validação e o consumo, sem carregar o dump na memória.
 
@@ -79,7 +79,6 @@ cargo test --test pull_integration -- --ignored --nocapture
 
 ## Limites mantidos para as próximas issues
 
-- RDB-052 registra o tenant mínimo no `salt_central` local somente após o tenant estar pronto;
 - RDB-053 liga lookup, dump ID, target gate, engine, registro central e UX no comando `restore`;
 - RDB-060 adicionou cancelamento explícito do client container, espera do child, cleanup e exit code 130;
 - nenhum restore em host arbitrário, source profile ou Docker context remoto é suportado.

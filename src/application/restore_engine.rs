@@ -68,7 +68,6 @@ where
             .save(target, metadata.dump_id, RestoreStatus::Ready)?;
 
         Ok(RestoreCompleted {
-            tenant_id: metadata.tenant_id.clone(),
             database: target.database().clone(),
             dump_id: metadata.dump_id,
             imported_bytes: metrics.imported_bytes(),
@@ -96,17 +95,12 @@ fn versions_are_restore_compatible(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RestoreCompleted {
-    tenant_id: crate::domain::TenantId,
     database: DatabaseName,
     dump_id: DumpId,
     imported_bytes: u64,
 }
 
 impl RestoreCompleted {
-    pub fn tenant_id(&self) -> &crate::domain::TenantId {
-        &self.tenant_id
-    }
-
     pub fn database(&self) -> &DatabaseName {
         &self.database
     }
@@ -117,16 +111,6 @@ impl RestoreCompleted {
 
     pub const fn imported_bytes(&self) -> u64 {
         self.imported_bytes
-    }
-
-    #[cfg(test)]
-    pub(crate) fn for_test(database: DatabaseName) -> Self {
-        Self {
-            tenant_id: crate::domain::TenantId::try_from("salt_sagatec").unwrap(),
-            database,
-            dump_id: DumpId::new(),
-            imported_bytes: 100,
-        }
     }
 }
 
@@ -161,7 +145,7 @@ mod tests {
     use crate::{
         domain::{
             DatabaseEncoding, DumpArtifactCompletion, DumpArtifactContext, MysqlVersion,
-            ProfileName, Sha256Digest, TenantId, TenantLookup,
+            ProfileName, Sha256Digest,
         },
         infrastructure::{
             artifact_store::LocalArtifactStore,
@@ -230,9 +214,9 @@ mod tests {
 
     async fn artifact(root: &std::path::Path) -> ValidatedRestoreArtifact {
         let profile = ProfileName::try_from("local-source").unwrap();
-        let tenant = TenantId::try_from("salt_sagatec").unwrap();
+        let database = DatabaseName::try_from("acme_production").unwrap();
         let store = LocalArtifactStore::new(root);
-        let stage = store.begin(&profile, &tenant).unwrap();
+        let stage = store.begin(&profile, &database).unwrap();
         let dump_id = stage.dump_id();
         let output = stage.create_dump_writer().unwrap();
         let metrics = ZstdCompressor::default()
@@ -246,9 +230,7 @@ mod tests {
         let metadata = crate::domain::DumpArtifactMetadata::try_new(
             dump_id,
             DumpArtifactContext {
-                tenant_lookup: TenantLookup::try_from("sagatec").unwrap(),
-                tenant_id: tenant.clone(),
-                database: DatabaseName::try_from("salt_sagatec").unwrap(),
+                database: database.clone(),
                 profile: profile.clone(),
                 source_fingerprint: Sha256Digest::from_bytes([1; 32]),
                 source_server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
@@ -259,7 +241,6 @@ mod tests {
                     "utf8mb4_0900_ai_ci".to_owned(),
                 )
                 .unwrap(),
-                local_tenant_features: Default::default(),
                 policy_version: 1,
             },
             DumpArtifactCompletion {
@@ -276,7 +257,7 @@ mod tests {
         LocalRestoreArtifactValidator::new(root)
             .validate(RestoreArtifactRequest {
                 profile: &profile,
-                tenant_id: &tenant,
+                database: &database,
                 dump_id,
             })
             .await
@@ -288,7 +269,7 @@ mod tests {
         let directory = tempdir().unwrap();
         let artifact = artifact(&directory.path().join("cache")).await;
         let target =
-            AuthorizedLocalTarget::for_test(DatabaseName::try_from("salt_sagatec").unwrap());
+            AuthorizedLocalTarget::for_test(DatabaseName::try_from("acme_production").unwrap());
         let calls = Arc::new(Mutex::new(Vec::new()));
         let engine = RestoreEngine::new(
             FakeExecutor {
@@ -302,7 +283,7 @@ mod tests {
         let completed = engine.restore(&target, &artifact).await.unwrap();
 
         assert_eq!(*calls.lock().unwrap(), ["recreate", "import"]);
-        assert_eq!(completed.database().as_str(), "salt_sagatec");
+        assert_eq!(completed.database().as_str(), "acme_production");
         assert_eq!(
             engine.states.load(&target).unwrap().status,
             RestoreStatus::Ready
@@ -330,7 +311,7 @@ mod tests {
                 state_file.metadata().unwrap().permissions().mode() & 0o777,
                 0o600
             );
-            assert!(!state_file.file_name().to_string_lossy().contains("sagatec"));
+            assert!(!state_file.file_name().to_string_lossy().contains("acme"));
         }
     }
 
@@ -339,7 +320,7 @@ mod tests {
         let directory = tempdir().unwrap();
         let artifact = artifact(&directory.path().join("cache")).await;
         let target =
-            AuthorizedLocalTarget::for_test(DatabaseName::try_from("salt_sagatec").unwrap());
+            AuthorizedLocalTarget::for_test(DatabaseName::try_from("acme_production").unwrap());
         let engine = RestoreEngine::new(
             FakeExecutor {
                 calls: Arc::new(Mutex::new(Vec::new())),
@@ -391,7 +372,7 @@ mod tests {
         let directory = tempdir().unwrap();
         let artifact = artifact(&directory.path().join("cache")).await;
         let target =
-            AuthorizedLocalTarget::for_test(DatabaseName::try_from("salt_polymer").unwrap());
+            AuthorizedLocalTarget::for_test(DatabaseName::try_from("globex_production").unwrap());
         let calls = Arc::new(Mutex::new(Vec::new()));
         let engine = RestoreEngine::new(
             FakeExecutor {
@@ -404,7 +385,7 @@ mod tests {
 
         let completed = engine.restore(&target, &artifact).await.unwrap();
 
-        assert_eq!(completed.database().as_str(), "salt_polymer");
+        assert_eq!(completed.database().as_str(), "globex_production");
         assert_eq!(*calls.lock().unwrap(), ["recreate", "import"]);
         assert_eq!(
             engine.states.load(&target).unwrap().status,
@@ -417,7 +398,7 @@ mod tests {
         let directory = tempdir().unwrap();
         let artifact = artifact(&directory.path().join("cache")).await;
         let target = AuthorizedLocalTarget::for_test_on_server(
-            DatabaseName::try_from("salt_polymer").unwrap(),
+            DatabaseName::try_from("globex_production").unwrap(),
             "11111111-1111-4111-8111-111111111111".parse().unwrap(),
         );
         let calls = Arc::new(Mutex::new(Vec::new()));

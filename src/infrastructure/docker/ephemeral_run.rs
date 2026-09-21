@@ -53,7 +53,7 @@ mod tests {
 
         assert_ne!(first, second);
         assert!(first.starts_with("reprodb-dump-"));
-        assert!(!first.contains("salt_sagatec"));
+        assert!(!first.contains("acme_production"));
         assert!(
             first
                 .bytes()

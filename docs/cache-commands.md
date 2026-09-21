@@ -3,7 +3,7 @@
 Todo o estado local do reprodb continua sob `~/.reprodb`. Os dumps gerenciados ficam em:
 
 ```text
-~/.reprodb/cache/profiles/<profile>/<tenant-id>/<dump-id>/
+~/.reprodb/cache/profiles/<profile>/<database>/<dump-id>/
 ├── dump.sql.zst
 ├── metadata.json
 └── .artifact.lock
@@ -36,15 +36,15 @@ reprodb cache clean
 
 Remove dumps expirados, partials abandonados há pelo menos uma hora e deleções interrompidas. Metadata inválida e timestamps futuros são mantidos para inspeção; uma entrada locked também é preservada. O relatório diferencia tudo que foi removido e tudo que ficou por segurança.
 
-## Remover um tenant
+## Remover os dumps de um database
 
 ```bash
-reprodb profile use salt-local
-reprodb cache purge sagatec
+reprodb profile use local-source
+reprodb cache purge acme_production
 ```
 
-`purge` atua somente no profile ativo. O tenant pode ser o lookup original (`sagatec`) ou o ID canônico (`salt_sagatec`), e todos os dumps completos correspondentes são removidos. Entradas em uso permanecem no disco e aparecem no relatório.
+`purge` atua somente no profile ativo e recebe o nome do database (`acme_production`). Todos os dumps completos correspondentes são removidos. Entradas em uso permanecem no disco e aparecem no relatório.
 
-Para um alias, metadata ilegível não é removida porque a CLI não consegue provar a qual tenant ela pertence. Informar o tenant ID canônico permite selecionar com segurança pelo diretório tipado. A remoção faz rename atômico para um nome isolado antes de apagar, sem seguir symlinks.
+A seleção é feita pelo diretório tipado do database. A remoção faz rename atômico para um nome isolado antes de apagar, sem seguir symlinks.
 
 Nenhum desses comandos remove configuração ou senha. `purge` também não altera o database restaurado no `mysql-8`; ele afeta somente os dumps locais.

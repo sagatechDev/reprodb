@@ -4,16 +4,15 @@ Um diretório publicado só é considerado cache hit depois de passar por todas 
 
 ## Chave e identidade
 
-A busca direta parte de `profile + tenant ID`. Para decidir um `pull` sem consultar o source, existe também uma busca sob o profile ativo pelo lookup original ou tenant ID canônico gravado na metadata. Em ambos os casos, a identidade do diretório precisa coincidir com a metadata, que ainda precisa conter:
+A busca parte de `profile + nome do database`. A identidade do diretório precisa coincidir com a metadata, que ainda precisa conter:
 
 - dump ID do diretório;
 - profile solicitado;
-- tenant ID canônico;
 - database resolvido;
 - fingerprint atual do source;
 - versão atual da política de dump.
 
-O fingerprint SHA-256 usa campos canônicos e separados por tamanho: nome do profile, host, porta, username, família e série MySQL, modo TLS, imagem imutável do client, flag de produção e configuração completa do tenant resolver. A `credential_key` e a senha ficam fora: rotacionar uma credencial sem trocar o source não invalida um dump.
+O fingerprint SHA-256 usa campos canônicos e separados por tamanho: nome do profile, host, porta, username, família e série MySQL, modo TLS, imagem imutável do client, e flag de produção. A `credential_key` e a senha ficam fora: rotacionar uma credencial sem trocar o source não invalida um dump.
 
 ## Tempo
 

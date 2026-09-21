@@ -208,7 +208,7 @@ mod tests {
     use super::*;
     use crate::{
         application::NewLocalTargetInput,
-        domain::{ContainerId, ContainerName, DatabaseName},
+        domain::{ContainerId, ContainerName},
         infrastructure::process::{ProcessError, ProcessOutput, ProcessSpec},
     };
 
@@ -262,7 +262,6 @@ mod tests {
             container_id: ContainerId::try_from("a".repeat(64)).unwrap(),
             username: "root".to_owned(),
             password: SecretString::from("secret"),
-            central_database: DatabaseName::try_from("salt_central").unwrap(),
             managed_by_reprodb: false,
         };
 
@@ -304,7 +303,6 @@ mod tests {
             container_id: ContainerId::try_from("a".repeat(64)).unwrap(),
             username: "root".to_owned(),
             password: SecretString::from("secret"),
-            central_database: DatabaseName::try_from("salt_central").unwrap(),
             managed_by_reprodb: false,
         };
 

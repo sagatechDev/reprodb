@@ -11,7 +11,6 @@ Os códigos abaixo fazem parte da interface da CLI. Novas mensagens podem ser ad
 | 11 | credencial | Keyring ou credencial indisponível |
 | 20 | dependência | Executável, imagem ou requisito local ausente |
 | 30 | conexão source | DNS, TCP, TLS ou autenticação no source |
-| 31 | resolução de tenant | Alias, tenant ou database não resolvido/permitido |
 | 40 | dump | Preflight ou `mysqldump` falhou |
 | 50 | cache/filesystem | Artefato, lock, checksum, espaço ou I/O local |
 | 60 | Docker | Context, container ou runtime inválido |

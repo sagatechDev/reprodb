@@ -20,7 +20,7 @@ pub fn render_list(style: &OutputStyle, report: &CacheListReport) -> String {
     );
     if report.entries.is_empty() {
         output.push_str(&format!(
-            "\n{} No managed dumps found.\n\n  Create one with: reprodb pull sagatec\n",
+            "\n{} No managed dumps found.\n\n  Create one with: reprodb pull acme\n",
             style.muted("—")
         ));
         return output;
@@ -77,9 +77,9 @@ pub fn render_clean(style: &OutputStyle, report: CacheCleanupReport) -> String {
 pub fn render_purge(style: &OutputStyle, ready: &CachePurgeReady) -> String {
     let report = ready.report;
     let mut output = format!(
-        "{} cache purge\n\n  Tenant:   {}\n  Profile:  {}\n\n",
+        "{} cache purge\n\n  Database: {}\n  Profile:  {}\n\n",
         style.brand("reprodb"),
-        style.value(ready.tenant.as_str()),
+        style.value(ready.database.as_str()),
         style.value(ready.profile.as_str()),
     );
     if report.artifacts_removed == 0 {
@@ -127,14 +127,7 @@ pub fn render_purge(style: &OutputStyle, ready: &CachePurgeReady) -> String {
 }
 
 fn render_entry(style: &OutputStyle, entry: &CacheListEntry, now: u64) -> String {
-    let lookup = entry
-        .tenant_lookup
-        .as_ref()
-        .map_or(entry.tenant_id.as_str(), |tenant| tenant.as_str());
-    let database = entry
-        .database
-        .as_ref()
-        .map_or(entry.tenant_id.as_str(), |database| database.as_str());
+    let database = entry.database.as_str();
     let age = entry
         .completed_at_unix_seconds
         .map(|completed| relative_age(now, completed))
@@ -148,10 +141,9 @@ fn render_entry(style: &OutputStyle, entry: &CacheListEntry, now: u64) -> String
         .map(format_bytes)
         .unwrap_or_else(|| "unknown".to_owned());
     format!(
-        "\n{}  {} → {}\n  Profile: {} · Age: {} · Expires: {} · Size: {}\n  Dump ID: {}\n",
+        "\n{}  {}\n  Profile: {} · Age: {} · Expires: {} · Size: {}\n  Dump ID: {}\n",
         render_status(style, entry.status),
-        style.value(lookup),
-        database,
+        style.value(database),
         entry.profile,
         age,
         expiration,
@@ -224,18 +216,16 @@ fn format_bytes(bytes: u64) -> String {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::domain::{DatabaseName, DumpId, ProfileName, TenantId, TenantLookup};
+    use crate::domain::{DatabaseName, DumpId, ProfileName};
     use crate::infrastructure::cache_cleanup::CachePurgeReport;
 
     use super::*;
 
     fn entry(status: CacheListStatus) -> CacheListEntry {
         CacheListEntry {
-            profile: ProfileName::try_from("salt-local").unwrap(),
-            tenant_id: TenantId::try_from("salt_sagatec").unwrap(),
+            profile: ProfileName::try_from("local-source").unwrap(),
             dump_id: DumpId::new(),
-            tenant_lookup: Some(TenantLookup::try_from("sagatec").unwrap()),
-            database: Some(DatabaseName::try_from("salt_sagatec").unwrap()),
+            database: DatabaseName::try_from("acme_production").unwrap(),
             completed_at_unix_seconds: Some(9_900),
             expires_at_unix_seconds: Some(10_100),
             compressed_bytes: Some(1_572_864),
@@ -259,8 +249,8 @@ mod tests {
         );
 
         assert!(output.contains("/Users/dev/.reprodb/cache"));
-        assert!(output.contains("✓ ready  sagatec → salt_sagatec"));
-        assert!(output.contains("Profile: salt-local"));
+        assert!(output.contains("✓ ready  acme_production"));
+        assert!(output.contains("Profile: local-source"));
         assert!(output.contains("Age: 1m"));
         assert!(output.contains("Expires: in 1m"));
         assert!(output.contains("Size: 1.5 MiB"));
@@ -284,8 +274,8 @@ mod tests {
         let purge = render_purge(
             &OutputStyle::plain(),
             &CachePurgeReady {
-                profile: ProfileName::try_from("salt-local").unwrap(),
-                tenant: TenantLookup::try_from("sagatec").unwrap(),
+                profile: ProfileName::try_from("local-source").unwrap(),
+                database: DatabaseName::try_from("acme_production").unwrap(),
                 report: CachePurgeReport {
                     artifacts_removed: 1,
                     locked_entries_skipped: 1,
@@ -293,8 +283,8 @@ mod tests {
                 },
             },
         );
-        assert!(purge.contains("Tenant:   sagatec"));
-        assert!(purge.contains("Profile:  salt-local"));
+        assert!(purge.contains("Database: acme_production"));
+        assert!(purge.contains("Profile:  local-source"));
         assert!(purge.contains("1 managed dump was removed"));
         assert!(purge.contains("1 dump is currently in use and kept"));
     }

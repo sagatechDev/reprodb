@@ -9,9 +9,8 @@ use std::{
 use reprodb::{
     application::{LocalTargetGate, RestoreService},
     domain::{
-        AppColor, CredentialKey, CredentialScope, DatabaseEncoding, DatabaseName, DomainAlias,
-        DumpArtifactCompletion, DumpArtifactContext, LocalTenantFeatures, MysqlTlsMode,
-        MysqlVersion, ProfileName, Sha256Digest, TenantId, TenantLookup,
+        CredentialKey, CredentialScope, DatabaseEncoding, DatabaseName, DumpArtifactCompletion,
+        DumpArtifactContext, MysqlTlsMode, MysqlVersion, ProfileName, Sha256Digest,
     },
     infrastructure::{
         artifact_store::LocalArtifactStore,
@@ -25,10 +24,7 @@ use reprodb::{
             MysqlOptionFile,
         },
         docker::DockerTargetDiscovery,
-        mysql::{
-            ClientCatalog, DockerLocalTargetAttestor, DockerLocalTenantWriter,
-            DockerMysqlRestoreExecutor,
-        },
+        mysql::{ClientCatalog, DockerLocalTargetAttestor, DockerMysqlRestoreExecutor},
         process::TokioProcessRunner,
     },
 };
@@ -51,10 +47,7 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
         .expect("the expected local MySQL container was not discovered");
     let password = local_container_root_password(&context, &expected);
     let database =
-        DatabaseName::try_from(format!("salt_reprodb_restore_{}", Uuid::new_v4().simple()))
-            .unwrap();
-    let local_domain =
-        DomainAlias::try_from(format!("reprodb-{}", Uuid::new_v4().simple())).unwrap();
+        DatabaseName::try_from(format!("reprodb_restore_{}", Uuid::new_v4().simple())).unwrap();
     let temp = TempDir::new().unwrap();
     let paths = AppPaths::new(
         temp.path().join("config"),
@@ -75,13 +68,11 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
                 container_id: candidate.id,
                 username: "root".to_owned(),
                 credential_key: key,
-                central_database: DatabaseName::try_from("salt_central").unwrap(),
                 trust: if candidate.managed_by_reprodb {
                     LocalTargetTrust::ReprodbManaged
                 } else {
                     LocalTargetTrust::UserConfirmed
                 },
-                legacy_tenant_database_prefix: None,
             }),
             ..AppConfig::default()
         })
@@ -95,29 +86,12 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
         )
         .await
         .unwrap();
-    let authorized = guarded.authorize_tenant_database(database.clone()).unwrap();
+    let authorized = guarded.authorize_database(database.clone()).unwrap();
 
     let profile = ProfileName::try_from("local-source").unwrap();
-    let tenant_id = TenantId::try_from(database.as_str()).unwrap();
     let client = ClientCatalog::resolve("8.4").unwrap();
-    let collision_check = run_mysql_query(
-        &context,
-        authorized.container_id().as_str(),
-        client.image(),
-        authorized.username(),
-        &password,
-        Some(authorized.central_database()),
-        &format!(
-            "SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE BINARY SCHEMA_NAME = BINARY 0x{database}), (SELECT COUNT(*) FROM tenants WHERE BINARY id = BINARY 0x{tenant}), (SELECT COUNT(*) FROM domains WHERE BINARY domain = BINARY 0x{domain})",
-            database = hex_utf8(database.as_str()),
-            tenant = hex_utf8(tenant_id.as_str()),
-            domain = hex_utf8(local_domain.as_str()),
-        ),
-    )
-    .unwrap();
-    assert_eq!(collision_check, b"0\t0\t0\n");
     let store = LocalArtifactStore::new(paths.cache_dir());
-    let stage = store.begin(&profile, &tenant_id).unwrap();
+    let stage = store.begin(&profile, &database).unwrap();
     let dump_id = stage.dump_id();
     let output = stage.create_dump_writer().unwrap();
     let sql = concat!(
@@ -126,7 +100,7 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
         "`label` VARCHAR(255) CHARACTER SET utf8mb4 NOT NULL,",
         "`payload` BLOB NULL) ENGINE=InnoDB;\n",
         "INSERT INTO `reprodb_items` VALUES ",
-        "(1,'Sagatec 🧂',X'00FF'),(2,'Polymer',NULL);\n"
+        "(1,'Acme 🧪',X'00FF'),(2,'Globex',NULL);\n"
     );
     let metrics = ZstdCompressor::default()
         .compress(
@@ -139,8 +113,6 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
     let metadata = reprodb::domain::DumpArtifactMetadata::try_new(
         dump_id,
         DumpArtifactContext {
-            tenant_lookup: TenantLookup::try_from(local_domain.as_str()).unwrap(),
-            tenant_id: tenant_id.clone(),
             database: database.clone(),
             profile: profile.clone(),
             source_fingerprint: Sha256Digest::from_bytes([1; 32]),
@@ -152,11 +124,6 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
                 "utf8mb4_0900_ai_ci".to_owned(),
             )
             .unwrap(),
-            local_tenant_features: LocalTenantFeatures {
-                app_color: Some(AppColor::try_from("green".to_owned()).unwrap()),
-                enable_stock_label_control: Some(true),
-                ..LocalTenantFeatures::default()
-            },
             policy_version: 1,
         },
         DumpArtifactCompletion {
@@ -171,7 +138,6 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
     .unwrap();
     stage.publish(&metadata, &metrics).unwrap();
 
-    let lookup = TenantLookup::try_from(local_domain.as_str()).unwrap();
     let attestor = DockerLocalTargetAttestor::new(TokioProcessRunner);
     let service = RestoreService::new(repository);
     let restore_result = service
@@ -179,54 +145,23 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
             &credentials,
             &attestor,
             DockerMysqlRestoreExecutor::default(),
-            DockerLocalTenantWriter::new(TokioProcessRunner),
-            lookup.clone(),
+            database.clone(),
             dump_id,
         )
         .await;
     let post_restore = match restore_result {
-        Ok(_) => {
-            let tenant_verification = async {
-                run_mysql_query(
-                    &context,
-                    authorized.container_id().as_str(),
-                    client.image(),
-                    authorized.username(),
-                    &password,
-                    Some(authorized.central_database()),
-                    &format!(
-                        "UPDATE tenants SET data = JSON_SET(data, '$.reprodb_local_only', 'keep') WHERE BINARY id = BINARY 0x{}",
-                        hex_utf8(tenant_id.as_str())
-                    ),
-                )?;
-                let completed = service
-                    .restore(
-                        &credentials,
-                        &attestor,
-                        DockerMysqlRestoreExecutor::default(),
-                        DockerLocalTenantWriter::new(TokioProcessRunner),
-                        lookup,
-                        dump_id,
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?;
-                let central = run_mysql_query(
-                    &context,
-                    authorized.container_id().as_str(),
-                    client.image(),
-                    authorized.username(),
-                    &password,
-                    Some(authorized.central_database()),
-                    &format!(
-                        "SELECT HEX(t.id), HEX(d.domain), JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.tenancy_db_name')), JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.tenancy_app_color')), JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.tenancy_enable_stock_label_control')), JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.reprodb_local_only')), JSON_LENGTH(t.data) FROM tenants t JOIN domains d ON d.tenant_id = t.id WHERE BINARY t.id = BINARY 0x{}",
-                        hex_utf8(tenant_id.as_str())
-                    ),
-                )?;
-                Ok::<_, String>((completed, central))
-            }
-            .await;
-            Some(tenant_verification)
-        }
+        Ok(_) => Some(
+            service
+                .restore(
+                    &credentials,
+                    &attestor,
+                    DockerMysqlRestoreExecutor::default(),
+                    database.clone(),
+                    dump_id,
+                )
+                .await
+                .map_err(|error| error.to_string()),
+        ),
         Err(_) => None,
     };
     let data_verification = if post_restore.as_ref().is_some_and(Result::is_ok) {
@@ -242,18 +177,6 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
     } else {
         None
     };
-    let central_cleanup = run_mysql_query(
-        &context,
-        authorized.container_id().as_str(),
-        client.image(),
-        authorized.username(),
-        &password,
-        Some(authorized.central_database()),
-        &format!(
-            "DELETE FROM tenants WHERE BINARY id = BINARY 0x{}",
-            hex_utf8(tenant_id.as_str())
-        ),
-    );
     let database_cleanup = run_mysql_query(
         &context,
         authorized.container_id().as_str(),
@@ -264,23 +187,20 @@ async fn restores_a_validated_zstd_artifact_into_the_guarded_mysql_8_target() {
         &format!("DROP DATABASE IF EXISTS `{database}`"),
     );
 
-    central_cleanup.expect("the unique central tenant fixture must be removed");
     database_cleanup.expect("the unique restore fixture database must be removed");
-    let (completed, central) = post_restore
+    let completed = post_restore
         .expect("the managed artifact must restore successfully")
         .expect("the public restore workflow must be safely repeatable");
     assert_eq!(completed.plan.database, database);
     assert_eq!(completed.imported_bytes, sql.len() as u64);
     assert_eq!(
         String::from_utf8(data_verification.unwrap().unwrap()).unwrap(),
-        "1\t5361676174656320F09FA782\t00FF\n2\t506F6C796D6572\tNULL\n"
+        format!(
+            "1\t{}\t00FF\n2\t{}\tNULL\n",
+            hex_utf8("Acme 🧪"),
+            hex_utf8("Globex")
+        )
     );
-    let central = String::from_utf8(central).unwrap();
-    let columns = central.trim_end().split('\t').collect::<Vec<_>>();
-    assert_eq!(columns[0], hex_utf8(tenant_id.as_str()));
-    assert!(columns[1].starts_with(&hex_utf8("reprodb-")));
-    assert_eq!(columns[2], database.as_str());
-    assert_eq!(&columns[3..], ["green", "true", "keep", "4"]);
 }
 
 fn hex_utf8(value: &str) -> String {

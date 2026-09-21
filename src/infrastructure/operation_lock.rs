@@ -209,7 +209,7 @@ mod tests {
     fn same_resource_is_exclusive_and_drop_releases_the_lock() {
         let directory = tempdir().unwrap();
         let manager = OperationLockManager::new(directory.path());
-        let key = OperationLockKey::source(&profile(), &database("salt_sagatec"));
+        let key = OperationLockKey::source(&profile(), &database("acme_production"));
 
         let guard = manager.try_acquire(key).unwrap();
         assert!(matches!(
@@ -227,10 +227,13 @@ mod tests {
     fn source_target_and_different_databases_have_independent_locks() {
         let directory = tempdir().unwrap();
         let manager = OperationLockManager::new(directory.path());
-        let source = OperationLockKey::source(&profile(), &database("salt_sagatec"));
-        let other_source = OperationLockKey::source(&profile(), &database("salt_polymer"));
-        let target =
-            OperationLockKey::target("desktop-linux", &container_id(), &database("salt_sagatec"));
+        let source = OperationLockKey::source(&profile(), &database("acme_production"));
+        let other_source = OperationLockKey::source(&profile(), &database("globex_production"));
+        let target = OperationLockKey::target(
+            "desktop-linux",
+            &container_id(),
+            &database("acme_production"),
+        );
 
         let _source = manager.try_acquire(source).unwrap();
         let _other_source = manager.try_acquire(other_source).unwrap();
@@ -247,7 +250,7 @@ mod tests {
         let _guard = manager
             .try_acquire(OperationLockKey::source(
                 &profile(),
-                &database("salt_sagatec"),
+                &database("acme_production"),
             ))
             .unwrap();
         let lock_directory = directory.path().join("locks/source");
@@ -265,6 +268,6 @@ mod tests {
             entry.metadata().unwrap().permissions().mode() & 0o777,
             0o600
         );
-        assert!(!entry.file_name().to_string_lossy().contains("sagatec"));
+        assert!(!entry.file_name().to_string_lossy().contains("acme"));
     }
 }

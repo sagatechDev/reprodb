@@ -10,7 +10,6 @@ use crate::{
     infrastructure::{
         config::{
             ConfigError, ConfigRepository, MysqlClientConfig, MysqlFamily, SourceProfileConfig,
-            TenantResolverConfig,
         },
         credentials::{CredentialError, CredentialStore},
         mysql::ApprovedMysqlClient,
@@ -221,9 +220,6 @@ impl ProfileService {
                 client: MysqlClientConfig {
                     image: verified.client.image().to_owned(),
                 },
-                tenant_resolver: TenantResolverConfig::Pattern {
-                    pattern: "{tenant}".to_owned(),
-                },
             },
         );
         config.active_profile = Some(input.name.clone());
@@ -387,12 +383,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        domain::{CredentialScope, DatabaseName, MysqlTlsMode},
+        domain::{CredentialScope, MysqlTlsMode},
         infrastructure::{
-            config::{
-                AppConfig, AppPaths, MysqlClientConfig, MysqlFamily, SourceProfileConfig,
-                TenantResolverConfig,
-            },
+            config::{AppConfig, AppPaths, MysqlClientConfig, MysqlFamily, SourceProfileConfig},
             mysql::ClientCatalog,
         },
     };
@@ -430,10 +423,6 @@ mod tests {
             },
             client: MysqlClientConfig {
                 image: client.image().to_owned(),
-            },
-            tenant_resolver: TenantResolverConfig::SaltCentral {
-                central_database: DatabaseName::try_from("salt_central").unwrap(),
-                allow_domain_lookup: true,
             },
         }
     }

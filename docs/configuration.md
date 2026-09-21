@@ -6,13 +6,12 @@ O reprodb mantém seu estado local sob uma única raiz:
 ~/.reprodb/
 ├── reprodb.toml
 ├── reprodb.lock
+├── credentials/
 ├── cache/
 └── data/
 ```
 
 Isso vale para macOS e Linux. Testes, CI ou instalações que precisem de isolamento podem definir um caminho absoluto em `REPRODB_HOME`; por exemplo, `REPRODB_HOME=/tmp/reprodb-test`. O override nunca é aceito como path relativo.
-
-Versões anteriores de desenvolvimento usavam os diretórios nativos retornados por `directories::ProjectDirs`. Quando o novo arquivo ainda não existe, a CLI consegue ler a configuração legada. A próxima alteração de configuração grava o estado em `~/.reprodb/reprodb.toml`; o arquivo antigo é preservado para permitir recuperação manual.
 
 A primeira leitura sem arquivo retorna uma configuração vazia na versão atual sem criar nada no disco. A primeira alteração cria o diretório e persiste o documento.
 
@@ -20,7 +19,7 @@ A primeira leitura sem arquivo retorna uma configuração vazia na versão atual
 
 ```toml
 schema_version = 1
-active_profile = "salt-local"
+active_profile = "local-source"
 
 [client_runtime]
 type = "docker"
@@ -32,9 +31,7 @@ container_name = "mysql-8"
 container_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 username = "root"
 credential_key = "target:550e8400-e29b-41d4-a716-446655440001"
-central_database = "salt_central"
 trust = "user-confirmed"
-tenant_database_prefix = "salt_"
 
 # Targets adicionais cadastrados anteriormente pelo setup.
 [local_targets.mysql-target]
@@ -43,11 +40,9 @@ container_name = "mysql-target"
 container_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 username = "root"
 credential_key = "target:550e8400-e29b-41d4-a716-446655440002"
-central_database = "salt_central"
 trust = "user-confirmed"
-tenant_database_prefix = "salt_"
 
-[profiles.salt-local]
+[profiles.local-source]
 host = "127.0.0.1"
 port = 3306
 username = "root"
@@ -58,25 +53,20 @@ production = false
 tls_mode = "required"
 
 # CA is mandatory for verify-ca / verify-identity. Paths must be absolute.
-[profiles.salt-local.tls_material]
+[profiles.local-source.tls_material]
 ca = "/Users/developer/.mysql/ca.pem"
 # cert = "/Users/developer/.mysql/client-cert.pem"
 # key = "/Users/developer/.mysql/client-key.pem"
 
-[profiles.salt-local.client]
+[profiles.local-source.client]
 image = "mysql:8.4.4@sha256:1d967fb75a64dc3c2894c69285becfc2304ae0c3c4f4c715c297f3c12d60b01c"
-
-[profiles.salt-local.tenant_resolver]
-type = "salt-central"
-central_database = "salt_central"
-allow_domain_lookup = true
 ```
 
-Senha não é um campo válido do schema. O TOML armazena apenas chaves opacas com escopo `source` ou `target`; a credencial é persistida pelo credential store do sistema operacional.
+Senha não é um campo válido do schema. O TOML armazena apenas chaves opacas com escopo `source` ou `target`; a credencial é persistida em `~/.reprodb/credentials/`, com o diretório em `0700` e cada arquivo em `0600`.
 
 O Docker context detectado durante o cadastro fica em `client_runtime.docker_context`. O `setup` seleciona um target no mesmo context, impedindo que verificação, dump e restore sejam executados acidentalmente em Engines diferentes.
 
-`local_target` é o target default (o último confirmado pelo `setup`). `local_targets` preserva os demais pelo nome validado do container. Cada entrada mantém identidade e credential key próprias; a senha continua fora do TOML. `trust` registra se o container foi criado/rotulado pelo reprodb ou se um container existente foi explicitamente confirmado. `tenant_database_prefix` é a allowlist inicial para restores de tenant; o database central fica sempre fora dela, mesmo quando compartilha o prefixo.
+`local_target` é o target default (o último confirmado pelo `setup`). `local_targets` preserva os demais pelo nome validado do container. Cada entrada mantém identidade e credential key próprias; a senha continua fora do TOML. `trust` registra se o container foi criado/rotulado pelo reprodb ou se um container existente foi explicitamente confirmado.
 
 Os modos TLS são `disabled`, `preferred`, `required`, `verify-ca` e `verify-identity`. `required` impede uma conexão sem criptografia, mas não valida a identidade do servidor. `verify-ca` valida a cadeia apresentada pelo servidor; `verify-identity` também compara o hostname do profile com o certificado.
 

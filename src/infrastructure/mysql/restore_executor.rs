@@ -489,7 +489,7 @@ pub enum RestoreExecutorError {
 mod tests {
     use crate::domain::{
         DatabaseEncoding, DatabaseName, DumpArtifactCompletion, DumpArtifactContext, DumpId,
-        MysqlVersion, ProfileName, Sha256Digest, TenantId, TenantLookup,
+        MysqlVersion, ProfileName, Sha256Digest,
     };
 
     use super::*;
@@ -498,8 +498,6 @@ mod tests {
         DumpArtifactMetadata::try_new(
             DumpId::new(),
             DumpArtifactContext {
-                tenant_lookup: TenantLookup::try_from("sagatec").unwrap(),
-                tenant_id: TenantId::try_from("salt_sagatec").unwrap(),
                 database,
                 profile: ProfileName::try_from("local-source").unwrap(),
                 source_fingerprint: Sha256Digest::from_bytes([1; 32]),
@@ -511,7 +509,6 @@ mod tests {
                     "utf8mb4_0900_ai_ci".to_owned(),
                 )
                 .unwrap(),
-                local_tenant_features: Default::default(),
                 policy_version: 1,
             },
             DumpArtifactCompletion {
@@ -536,7 +533,7 @@ mod tests {
     #[test]
     fn streaming_client_uses_i_without_t_and_exact_container_network() {
         let target =
-            AuthorizedLocalTarget::for_test(DatabaseName::try_from("salt_sagatec").unwrap());
+            AuthorizedLocalTarget::for_test(DatabaseName::try_from("acme_production").unwrap());
         let spec = mysql_process_spec(
             &target,
             std::path::Path::new("/tmp/reprodb/client.cnf"),
@@ -557,7 +554,7 @@ mod tests {
 
     #[test]
     fn recreation_sql_uses_only_validated_database_encoding_and_identifier() {
-        let database = DatabaseName::try_from("salt_sagatec").unwrap();
+        let database = DatabaseName::try_from("acme_production").unwrap();
         let target = AuthorizedLocalTarget::for_test(database.clone());
         let spec = recreate_process_spec(
             &target,
@@ -571,7 +568,7 @@ mod tests {
         assert_eq!(arguments[arguments.len() - 2], "--execute");
         assert_eq!(
             sql,
-            "DROP DATABASE IF EXISTS `salt_sagatec`; CREATE DATABASE `salt_sagatec` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
+            "DROP DATABASE IF EXISTS `acme_production`; CREATE DATABASE `acme_production` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
         );
     }
 

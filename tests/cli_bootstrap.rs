@@ -53,7 +53,7 @@ fn unknown_command_is_a_usage_error() {
 }
 
 #[test]
-fn dump_requires_a_tenant() {
+fn dump_requires_a_database() {
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
@@ -61,7 +61,7 @@ fn dump_requires_a_tenant() {
         .assert()
         .failure()
         .code(2)
-        .stderr(predicate::str::contains("<TENANT>"));
+        .stderr(predicate::str::contains("<DATABASE>"));
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn restore_requires_a_managed_dump_id() {
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
-        .args(["restore", "sagatec"])
+        .args(["restore", "acme"])
         .assert()
         .failure()
         .code(2)
@@ -143,7 +143,7 @@ fn cache_purge_requires_an_active_profile() {
 
     command
         .env("REPRODB_HOME", home.path())
-        .args(["cache", "purge", "sagatec"])
+        .args(["cache", "purge", "acme"])
         .assert()
         .failure()
         .code(10)
@@ -159,7 +159,7 @@ fn restore_searches_only_the_isolated_managed_cache() {
         .env("REPRODB_HOME", home.path())
         .args([
             "restore",
-            "sagatec",
+            "acme",
             "--dump-id",
             "550e8400-e29b-41d4-a716-446655440000",
         ])
@@ -180,7 +180,7 @@ fn restore_rejects_a_non_uuid_dump_id_as_usage() {
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
-        .args(["restore", "sagatec", "--dump-id", "../../dump.sql.zst"])
+        .args(["restore", "acme", "--dump-id", "../../dump.sql.zst"])
         .assert()
         .failure()
         .code(2)
@@ -238,12 +238,12 @@ fn pull_preview_can_show_the_fresh_path() {
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
-        .args(["pull", "sagatec", "--fresh", "--preview"])
+        .args(["pull", "acme", "--fresh", "--preview"])
         .assert()
         .success()
         .stdout(
             predicate::str::contains("Fresh dump requested")
-                .and(predicate::str::contains("Source DB  sagatec"))
+                .and(predicate::str::contains("Source DB  acme"))
                 .and(predicate::str::contains("were not accessed")),
         );
 }
@@ -255,19 +255,19 @@ fn pull_preview_shows_a_custom_local_database() {
     command
         .args([
             "pull",
-            "sagatec",
+            "acme",
             "--database",
-            "salt_sagatec_debug",
+            "acme_production_debug",
             "--preview",
         ])
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("Source DB  sagatec")
+            predicate::str::contains("Source DB  acme")
                 .and(predicate::str::contains(
-                    "Target DB  mysql-8/salt_sagatec_debug",
+                    "Target DB  mysql-8/acme_production_debug",
                 ))
-                .and(predicate::str::contains("Database   salt_sagatec_debug")),
+                .and(predicate::str::contains("Database   acme_production_debug")),
         );
 }
 
@@ -278,19 +278,19 @@ fn pull_preview_shows_a_custom_container_and_database() {
     command
         .args([
             "pull",
-            "polymer",
+            "globex",
             "--target",
             "mysql-target",
             "--database",
-            "salt_polymer_debug",
+            "globex_production_debug",
             "--preview",
         ])
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("Source DB  polymer")
+            predicate::str::contains("Source DB  globex")
                 .and(predicate::str::contains(
-                    "Target DB  mysql-target/salt_polymer_debug",
+                    "Target DB  mysql-target/globex_production_debug",
                 ))
                 .and(predicate::str::contains("Container  mysql-target")),
         );
@@ -303,7 +303,7 @@ fn pull_without_an_active_profile_fails_before_source_or_docker_access() {
 
     command
         .env("REPRODB_HOME", home.path())
-        .args(["pull", "sagatec"])
+        .args(["pull", "acme"])
         .assert()
         .failure()
         .code(10)
@@ -318,7 +318,7 @@ fn pull_rejects_an_administrative_target_database_before_external_access() {
 
     command
         .env("REPRODB_HOME", home.path())
-        .args(["pull", "sagatec", "--database", "mysql"])
+        .args(["pull", "acme", "--database", "mysql"])
         .assert()
         .failure()
         .code(2)
@@ -333,7 +333,7 @@ fn explicit_color_mode_adds_semantic_ansi_styles() {
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
-        .args(["pull", "sagatec", "--preview", "--color", "always"])
+        .args(["pull", "acme", "--preview", "--color", "always"])
         .assert()
         .success()
         .stdout(
@@ -370,7 +370,7 @@ fn preview_rejects_a_profile_name_that_could_control_the_terminal() {
 }
 
 #[test]
-fn errors_do_not_repeat_tenant_input() {
+fn errors_do_not_repeat_database_input() {
     let mut command = Command::cargo_bin("reprodb").unwrap();
 
     command
@@ -379,7 +379,7 @@ fn errors_do_not_repeat_tenant_input() {
         .failure()
         .code(2)
         .stderr(
-            predicate::str::contains("tenant lookup has an invalid format")
+            predicate::str::contains("database name has an invalid format")
                 .and(predicate::str::contains("sensitive-marker").not()),
         );
 }

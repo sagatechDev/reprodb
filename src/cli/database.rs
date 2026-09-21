@@ -1,4 +1,4 @@
-use crate::{application::TenantCatalogPage, cli::output::OutputStyle};
+use crate::{application::DatabaseCatalogPage, cli::output::OutputStyle};
 
 pub fn render_start(style: &OutputStyle) -> String {
     format!(
@@ -7,7 +7,7 @@ pub fn render_start(style: &OutputStyle) -> String {
     )
 }
 
-pub fn render_page(style: &OutputStyle, page: &TenantCatalogPage) -> String {
+pub fn render_page(style: &OutputStyle, page: &DatabaseCatalogPage) -> String {
     let mut output = format!(
         "\n{} · Source databases\n\nProfile   {}\nFound     {}{}\n\n",
         style.brand("reprodb"),
@@ -31,18 +31,18 @@ pub fn render_page(style: &OutputStyle, page: &TenantCatalogPage) -> String {
 #[cfg(test)]
 mod tests {
     use crate::{
-        application::{TenantCatalogEntry, TenantCatalogPage},
+        application::{DatabaseCatalogEntry, DatabaseCatalogPage},
         cli::output::OutputStyle,
     };
 
     use super::*;
 
     #[test]
-    fn renders_only_safe_tenant_catalog_fields_and_truncation() {
-        let page = TenantCatalogPage {
+    fn renders_only_safe_database_catalog_fields_and_truncation() {
+        let page = DatabaseCatalogPage {
             profile_name: "sandbox".to_owned(),
-            entries: vec![TenantCatalogEntry {
-                database: "demo_sagatec".to_owned(),
+            entries: vec![DatabaseCatalogEntry {
+                database: "demo_acme".to_owned(),
             }],
             truncated: true,
         };
@@ -51,7 +51,7 @@ mod tests {
 
         assert!(output.contains("Profile   sandbox"));
         assert!(output.contains("Source databases"));
-        assert!(output.contains("demo_sagatec"));
+        assert!(output.contains("demo_acme"));
         assert!(output.contains("Increase --limit"));
     }
 }

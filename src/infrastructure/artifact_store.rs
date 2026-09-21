@@ -7,7 +7,7 @@ use std::{
 use fs4::TryLockError;
 use thiserror::Error;
 
-use crate::domain::{DumpArtifactMetadata, DumpId, ProfileName, TenantId};
+use crate::domain::{DatabaseName, DumpArtifactMetadata, DumpId, ProfileName};
 use crate::infrastructure::compression::CompressionMetrics;
 
 pub(crate) const PROFILES_DIRECTORY: &str = "profiles";
@@ -30,22 +30,22 @@ impl LocalArtifactStore {
     pub fn begin(
         &self,
         profile: &ProfileName,
-        tenant_id: &TenantId,
+        database: &DatabaseName,
     ) -> Result<StagedDumpArtifact, ArtifactStoreError> {
-        self.begin_with_id(profile, tenant_id, DumpId::new())
+        self.begin_with_id(profile, database, DumpId::new())
     }
 
     fn begin_with_id(
         &self,
         profile: &ProfileName,
-        tenant_id: &TenantId,
+        database: &DatabaseName,
         dump_id: DumpId,
     ) -> Result<StagedDumpArtifact, ArtifactStoreError> {
         let parent = self
             .root
             .join(PROFILES_DIRECTORY)
             .join(profile.as_str())
-            .join(tenant_id.as_str());
+            .join(database.as_str());
         create_private_directories(&self.root, &parent)?;
 
         let stage_path = parent.join(format!("{dump_id}{PART_SUFFIX}"));
@@ -75,7 +75,7 @@ impl LocalArtifactStore {
         Ok(StagedDumpArtifact {
             dump_id,
             profile: profile.clone(),
-            tenant_id: tenant_id.clone(),
+            database: database.clone(),
             parent,
             stage_path,
             published_path,
@@ -87,13 +87,13 @@ impl LocalArtifactStore {
     pub fn list_complete(
         &self,
         profile: &ProfileName,
-        tenant_id: &TenantId,
+        database: &DatabaseName,
     ) -> Result<Vec<PublishedDumpArtifact>, ArtifactStoreError> {
         let parent = self
             .root
             .join(PROFILES_DIRECTORY)
             .join(profile.as_str())
-            .join(tenant_id.as_str());
+            .join(database.as_str());
         let entries = match fs::read_dir(&parent) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -179,33 +179,34 @@ impl LocalArtifactStore {
             let Ok(profile) = ProfileName::try_from(profile_name) else {
                 continue;
             };
-            let tenants =
+            let databases =
                 fs::read_dir(profile_entry.path()).map_err(|source| ArtifactStoreError::Io {
-                    operation: "list artifact tenants",
+                    operation: "list artifact databases",
                     source,
                 })?;
-            for tenant_entry in tenants {
-                let tenant_entry = tenant_entry.map_err(|source| ArtifactStoreError::Io {
-                    operation: "read an artifact tenant entry",
+            for database_entry in databases {
+                let database_entry = database_entry.map_err(|source| ArtifactStoreError::Io {
+                    operation: "read an artifact database entry",
                     source,
                 })?;
-                if !tenant_entry
+                if !database_entry
                     .file_type()
                     .map_err(|source| ArtifactStoreError::Io {
-                        operation: "inspect an artifact tenant entry",
+                        operation: "inspect an artifact database entry",
                         source,
                     })?
                     .is_dir()
                 {
                     continue;
                 }
-                let Some(tenant_name) = tenant_entry.file_name().to_str().map(str::to_owned) else {
+                let Some(database_name) = database_entry.file_name().to_str().map(str::to_owned)
+                else {
                     continue;
                 };
-                let Ok(tenant_id) = TenantId::try_from(tenant_name) else {
+                let Ok(database) = DatabaseName::try_from(database_name) else {
                     continue;
                 };
-                let path = tenant_entry.path().join(dump_id.to_string());
+                let path = database_entry.path().join(dump_id.to_string());
                 if !is_regular_directory(&path)? {
                     continue;
                 }
@@ -216,7 +217,7 @@ impl LocalArtifactStore {
                 }
                 artifacts.push(LocatedDumpArtifact {
                     profile: profile.clone(),
-                    tenant_id,
+                    database,
                     artifact: PublishedDumpArtifact {
                         dump_id,
                         path,
@@ -234,45 +235,47 @@ impl LocalArtifactStore {
         profile: &ProfileName,
     ) -> Result<Vec<LocatedDumpArtifact>, ArtifactStoreError> {
         let profile_path = self.root.join(PROFILES_DIRECTORY).join(profile.as_str());
-        let tenants = match fs::read_dir(&profile_path) {
+        let databases = match fs::read_dir(&profile_path) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(source) => {
                 return Err(ArtifactStoreError::Io {
-                    operation: "list artifact tenants for a profile",
+                    operation: "list artifact databases for a profile",
                     source,
                 });
             }
         };
         let mut artifacts = Vec::new();
-        for tenant_entry in tenants {
-            let tenant_entry = tenant_entry.map_err(|source| ArtifactStoreError::Io {
-                operation: "read an artifact tenant entry",
+        for database_entry in databases {
+            let database_entry = database_entry.map_err(|source| ArtifactStoreError::Io {
+                operation: "read an artifact database entry",
                 source,
             })?;
-            if !tenant_entry
+            if !database_entry
                 .file_type()
                 .map_err(|source| ArtifactStoreError::Io {
-                    operation: "inspect an artifact tenant entry",
+                    operation: "inspect an artifact database entry",
                     source,
                 })?
                 .is_dir()
             {
                 continue;
             }
-            let Some(tenant_name) = tenant_entry.file_name().to_str().map(str::to_owned) else {
+            let Some(database_name) = database_entry.file_name().to_str().map(str::to_owned) else {
                 continue;
             };
-            let Ok(tenant_id) = TenantId::try_from(tenant_name) else {
+            let Ok(database) = DatabaseName::try_from(database_name) else {
                 continue;
             };
-            artifacts.extend(self.list_complete(profile, &tenant_id)?.into_iter().map(
-                |artifact| LocatedDumpArtifact {
-                    profile: profile.clone(),
-                    tenant_id: tenant_id.clone(),
-                    artifact,
-                },
-            ));
+            artifacts.extend(
+                self.list_complete(profile, &database)?
+                    .into_iter()
+                    .map(|artifact| LocatedDumpArtifact {
+                        profile: profile.clone(),
+                        database: database.clone(),
+                        artifact,
+                    }),
+            );
         }
         Ok(artifacts)
     }
@@ -311,37 +314,39 @@ impl LocalArtifactStore {
             let Ok(profile) = ProfileName::try_from(profile_name) else {
                 continue;
             };
-            let tenants =
+            let databases =
                 fs::read_dir(profile_entry.path()).map_err(|source| ArtifactStoreError::Io {
-                    operation: "list artifact tenants",
+                    operation: "list artifact databases",
                     source,
                 })?;
-            for tenant_entry in tenants {
-                let tenant_entry = tenant_entry.map_err(|source| ArtifactStoreError::Io {
-                    operation: "read an artifact tenant entry",
+            for database_entry in databases {
+                let database_entry = database_entry.map_err(|source| ArtifactStoreError::Io {
+                    operation: "read an artifact database entry",
                     source,
                 })?;
-                if !tenant_entry
+                if !database_entry
                     .file_type()
                     .map_err(|source| ArtifactStoreError::Io {
-                        operation: "inspect an artifact tenant entry",
+                        operation: "inspect an artifact database entry",
                         source,
                     })?
                     .is_dir()
                 {
                     continue;
                 }
-                let Some(tenant_name) = tenant_entry.file_name().to_str().map(str::to_owned) else {
+                let Some(database_name) = database_entry.file_name().to_str().map(str::to_owned)
+                else {
                     continue;
                 };
-                let Ok(tenant_id) = TenantId::try_from(tenant_name) else {
+                let Ok(database) = DatabaseName::try_from(database_name) else {
                     continue;
                 };
-                let candidates =
-                    fs::read_dir(tenant_entry.path()).map_err(|source| ArtifactStoreError::Io {
+                let candidates = fs::read_dir(database_entry.path()).map_err(|source| {
+                    ArtifactStoreError::Io {
                         operation: "list artifact candidates",
                         source,
-                    })?;
+                    }
+                })?;
                 for candidate in candidates {
                     let candidate = candidate.map_err(|source| ArtifactStoreError::Io {
                         operation: "read an artifact candidate entry",
@@ -367,7 +372,7 @@ impl LocalArtifactStore {
                     let path = candidate.path();
                     artifacts.push(LocatedDumpArtifact {
                         profile: profile.clone(),
-                        tenant_id: tenant_id.clone(),
+                        database: database.clone(),
                         artifact: PublishedDumpArtifact {
                             dump_id,
                             dump_path: path.join(DUMP_FILE_NAME),
@@ -381,7 +386,7 @@ impl LocalArtifactStore {
         artifacts.sort_by_key(|located| {
             (
                 located.profile.as_str().to_owned(),
-                located.tenant_id.as_str().to_owned(),
+                located.database.as_str().to_owned(),
                 located.artifact.dump_id.to_string(),
             )
         });
@@ -441,7 +446,7 @@ fn is_regular_file(path: &Path) -> Result<bool, ArtifactStoreError> {
 pub struct StagedDumpArtifact {
     dump_id: DumpId,
     profile: ProfileName,
-    tenant_id: TenantId,
+    database: DatabaseName,
     parent: PathBuf,
     stage_path: PathBuf,
     published_path: PathBuf,
@@ -470,7 +475,7 @@ impl StagedDumpArtifact {
     ) -> Result<PublishedDumpArtifact, ArtifactStoreError> {
         if metadata.dump_id != self.dump_id
             || metadata.profile != self.profile
-            || metadata.tenant_id != self.tenant_id
+            || metadata.database != self.database
         {
             return Err(ArtifactStoreError::MetadataIdentityMismatch);
         }
@@ -553,7 +558,7 @@ pub struct PublishedDumpArtifact {
 #[derive(Debug, Eq, PartialEq)]
 pub struct LocatedDumpArtifact {
     profile: ProfileName,
-    tenant_id: TenantId,
+    database: DatabaseName,
     artifact: PublishedDumpArtifact,
 }
 
@@ -562,16 +567,16 @@ impl LocatedDumpArtifact {
         &self.profile
     }
 
-    pub fn tenant_id(&self) -> &TenantId {
-        &self.tenant_id
+    pub fn database(&self) -> &DatabaseName {
+        &self.database
     }
 
     pub fn artifact(&self) -> &PublishedDumpArtifact {
         &self.artifact
     }
 
-    pub(crate) fn into_parts(self) -> (ProfileName, TenantId, PublishedDumpArtifact) {
-        (self.profile, self.tenant_id, self.artifact)
+    pub(crate) fn into_parts(self) -> (ProfileName, DatabaseName, PublishedDumpArtifact) {
+        (self.profile, self.database, self.artifact)
     }
 }
 
@@ -788,7 +793,7 @@ mod tests {
 
     use crate::domain::{
         DatabaseEncoding, DatabaseName, DumpArtifactCompletion, DumpArtifactContext, MysqlVersion,
-        Sha256Digest, TenantLookup,
+        Sha256Digest,
     };
     use crate::infrastructure::compression::{NoCompressionProgress, ZstdCompressor};
 
@@ -798,17 +803,15 @@ mod tests {
         ProfileName::try_from("local-source").unwrap()
     }
 
-    fn tenant_id() -> TenantId {
-        TenantId::try_from("salt_sagatec").unwrap()
+    fn database() -> DatabaseName {
+        DatabaseName::try_from("acme_production").unwrap()
     }
 
     fn metadata(dump_id: DumpId, compression: &CompressionMetrics) -> DumpArtifactMetadata {
         DumpArtifactMetadata::try_new(
             dump_id,
             DumpArtifactContext {
-                tenant_lookup: TenantLookup::try_from("sagatec").unwrap(),
-                tenant_id: tenant_id(),
-                database: DatabaseName::try_from("salt_sagatec").unwrap(),
+                database: database(),
                 profile: profile(),
                 source_fingerprint: Sha256Digest::from_bytes([1; 32]),
                 source_server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
@@ -819,7 +822,6 @@ mod tests {
                     "utf8mb4_0900_ai_ci".to_owned(),
                 )
                 .unwrap(),
-                local_tenant_features: Default::default(),
                 policy_version: 1,
             },
             DumpArtifactCompletion {
@@ -838,7 +840,7 @@ mod tests {
     async fn publishes_the_exact_artifact_produced_by_the_streaming_compressor() {
         let directory = tempdir().unwrap();
         let store = LocalArtifactStore::new(directory.path().join("cache"));
-        let stage = store.begin(&profile(), &tenant_id()).unwrap();
+        let stage = store.begin(&profile(), &database()).unwrap();
         let dump_id = stage.dump_id();
         let input = b"CREATE TABLE example (id BIGINT);\n".repeat(1024);
         let metrics = ZstdCompressor::default()
@@ -852,9 +854,7 @@ mod tests {
         let metadata = DumpArtifactMetadata::try_new(
             dump_id,
             DumpArtifactContext {
-                tenant_lookup: TenantLookup::try_from("sagatec").unwrap(),
-                tenant_id: tenant_id(),
-                database: DatabaseName::try_from("salt_sagatec").unwrap(),
+                database: database(),
                 profile: profile(),
                 source_fingerprint: Sha256Digest::from_bytes([1; 32]),
                 source_server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
@@ -865,7 +865,6 @@ mod tests {
                     "utf8mb4_0900_ai_ci".to_owned(),
                 )
                 .unwrap(),
-                local_tenant_features: Default::default(),
                 policy_version: 1,
             },
             DumpArtifactCompletion {
@@ -881,7 +880,7 @@ mod tests {
 
         assert!(
             store
-                .list_complete(&profile(), &tenant_id())
+                .list_complete(&profile(), &database())
                 .unwrap()
                 .is_empty()
         );
@@ -893,9 +892,9 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_slice(&fs::read(&published.metadata_path).unwrap()).unwrap();
         assert_eq!(json["dump_id"], dump_id.to_string());
-        assert_eq!(json["tenant_id"], "salt_sagatec");
+        assert_eq!(json["database"], "acme_production");
         assert_eq!(
-            store.list_complete(&profile(), &tenant_id()).unwrap().len(),
+            store.list_complete(&profile(), &database()).unwrap().len(),
             1
         );
         assert!(!published.path.to_string_lossy().ends_with(PART_SUFFIX));
@@ -905,7 +904,7 @@ mod tests {
     async fn failed_or_dropped_stages_are_not_visible_as_complete_artifacts() {
         let directory = tempdir().unwrap();
         let store = LocalArtifactStore::new(directory.path().join("cache"));
-        let stage = store.begin(&profile(), &tenant_id()).unwrap();
+        let stage = store.begin(&profile(), &database()).unwrap();
         let stage_path = stage.stage_path().to_owned();
         let dump_id = stage.dump_id();
         let metrics = ZstdCompressor::default()
@@ -933,7 +932,7 @@ mod tests {
         assert!(!stage_path.exists());
         assert!(
             store
-                .list_complete(&profile(), &tenant_id())
+                .list_complete(&profile(), &database())
                 .unwrap()
                 .is_empty()
         );
@@ -943,7 +942,7 @@ mod tests {
     fn a_process_crash_can_leave_only_an_ignored_part_directory() {
         let directory = tempdir().unwrap();
         let store = LocalArtifactStore::new(directory.path().join("cache"));
-        let stage = store.begin(&profile(), &tenant_id()).unwrap();
+        let stage = store.begin(&profile(), &database()).unwrap();
         let stage_path = stage.stage_path().to_owned();
         stage
             .create_dump_writer()
@@ -957,7 +956,7 @@ mod tests {
         assert!(stage_path.to_string_lossy().ends_with(PART_SUFFIX));
         assert!(
             store
-                .list_complete(&profile(), &tenant_id())
+                .list_complete(&profile(), &database())
                 .unwrap()
                 .is_empty()
         );
@@ -967,7 +966,7 @@ mod tests {
     async fn metadata_checksum_mismatch_cannot_publish_an_artifact() {
         let directory = tempdir().unwrap();
         let store = LocalArtifactStore::new(directory.path().join("cache"));
-        let stage = store.begin(&profile(), &tenant_id()).unwrap();
+        let stage = store.begin(&profile(), &database()).unwrap();
         let dump_id = stage.dump_id();
         let metrics = ZstdCompressor::default()
             .compress(
@@ -984,7 +983,7 @@ mod tests {
         assert!(matches!(error, ArtifactStoreError::MetadataContentMismatch));
         assert!(
             store
-                .list_complete(&profile(), &tenant_id())
+                .list_complete(&profile(), &database())
                 .unwrap()
                 .is_empty()
         );
@@ -994,7 +993,7 @@ mod tests {
     async fn failed_publish_rename_cleans_the_stage_and_never_exposes_a_complete_dump() {
         let directory = tempdir().unwrap();
         let store = LocalArtifactStore::new(directory.path().join("cache"));
-        let stage = store.begin(&profile(), &tenant_id()).unwrap();
+        let stage = store.begin(&profile(), &database()).unwrap();
         let dump_id = stage.dump_id();
         let stage_path = stage.stage_path.clone();
         let collision = stage.published_path.clone();
@@ -1023,7 +1022,7 @@ mod tests {
         assert!(!stage_path.exists());
         assert!(
             store
-                .list_complete(&profile(), &tenant_id())
+                .list_complete(&profile(), &database())
                 .unwrap()
                 .is_empty()
         );
@@ -1037,7 +1036,7 @@ mod tests {
         let directory = tempdir().unwrap();
         let root = directory.path().join("cache");
         let store = LocalArtifactStore::new(&root);
-        let stage = store.begin(&profile(), &tenant_id()).unwrap();
+        let stage = store.begin(&profile(), &database()).unwrap();
         let dump = stage.create_dump_writer().unwrap();
 
         assert_eq!(

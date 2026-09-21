@@ -19,7 +19,7 @@ const ETA_SAMPLE_WINDOW: Duration = Duration::from_secs(2);
 
 pub fn render_start(style: &OutputStyle) -> String {
     format!(
-        "{} dump\n{} Resolving tenant and validating MySQL source...\n{} Avoid schema migrations on the source until the dump finishes.\n",
+        "{} dump\n{} Validating the MySQL source...\n{} Avoid schema migrations on the source until the dump finishes.\n",
         style.brand("reprodb"),
         style.attention("○"),
         style.attention("!"),
@@ -57,10 +57,9 @@ pub fn render_source_selected(style: &OutputStyle, status: &DumpStatus) -> Strin
 
 pub fn render_complete(style: &OutputStyle, dump: &DumpCreated) -> String {
     let mut output = format!(
-        "\n{} Dump ready\n\n  Profile:   {}\n  Tenant:    {}\n  Database:  {}\n  Dump ID:   {}\n  MySQL:     {} (client {})\n  Data:      {} → {}\n  Duration:  {}\n  Cache:     {}\n",
+        "\n{} Dump ready\n\n  Profile:   {}\n  Database:  {}\n  Dump ID:   {}\n  MySQL:     {} (client {})\n  Data:      {} → {}\n  Duration:  {}\n  Cache:     {}\n",
         style.success("✓"),
         style.value(dump.profile.as_str()),
-        style.value(dump.tenant_id.as_str()),
         style.value(dump.database.as_str()),
         style.value(&dump.dump_id.to_string()),
         dump.source_version,
@@ -192,7 +191,7 @@ pub(crate) fn format_duration(duration: Duration) -> String {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::domain::{DumpId, MysqlVersion, ProfileName, TenantId, TenantLookup};
+    use crate::domain::{DumpId, MysqlVersion, ProfileName};
 
     use super::*;
 
@@ -200,16 +199,13 @@ mod tests {
     fn start_and_result_are_readable_without_color_or_secrets() {
         assert_eq!(
             render_start(&OutputStyle::plain()),
-            "reprodb dump\n○ Resolving tenant and validating MySQL source...\n! Avoid schema migrations on the source until the dump finishes.\n"
+            "reprodb dump\n○ Validating the MySQL source...\n! Avoid schema migrations on the source until the dump finishes.\n"
         );
-        let tenant = TenantLookup::try_from("sagatec").unwrap();
         let result = DumpCreated {
             dump_id: DumpId::new(),
-            artifact_path: PathBuf::from("/cache/profiles/local-source/salt_sagatec/dump"),
+            artifact_path: PathBuf::from("/cache/profiles/local-source/acme_production/dump"),
             profile: ProfileName::try_from("local-source").unwrap(),
-            tenant_lookup: tenant,
-            tenant_id: TenantId::try_from("salt_sagatec").unwrap(),
-            database: crate::domain::DatabaseName::try_from("salt_sagatec").unwrap(),
+            database: crate::domain::DatabaseName::try_from("acme_production").unwrap(),
             source_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
             client_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
             uncompressed_bytes: 1_572_864,
@@ -220,7 +216,6 @@ mod tests {
         let output = render_complete(&OutputStyle::plain(), &result);
 
         assert!(output.contains("✓ Dump ready"));
-        assert!(output.contains("Tenant:    salt_sagatec"));
         assert!(output.contains("Data:      1.5 MiB → 512.0 KiB"));
         assert!(output.contains("Duration:  00:44"));
         assert!(!output.to_ascii_lowercase().contains("password"));
@@ -229,13 +224,13 @@ mod tests {
     #[test]
     fn production_source_warning_is_explicit_and_red_when_colors_are_enabled() {
         let status = DumpStatus::SourceSelected {
-            profile: ProfileName::try_from("salt-production").unwrap(),
+            profile: ProfileName::try_from("prod-sourceuction").unwrap(),
             production: true,
         };
         let plain = render_source_selected(&OutputStyle::plain(), &status);
         let colored = render_source_selected(&OutputStyle::colored(), &status);
 
-        assert!(plain.contains("! PRODUCTION SOURCE · salt-production"));
+        assert!(plain.contains("! PRODUCTION SOURCE · prod-sourceuction"));
         assert!(plain.contains("published in the local cache"));
         assert!(colored.contains("\u{1b}[1;31m"));
     }

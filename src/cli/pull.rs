@@ -272,10 +272,7 @@ mod tests {
 
     use crate::{
         application::{PullCacheUse, PullDumpMetrics, PullMetrics, RestorePlan, RestoreReady},
-        domain::{
-            ContainerName, DatabaseName, DomainAlias, DumpId, MysqlVersion, ProfileName, TenantId,
-            TenantLookup,
-        },
+        domain::{ContainerName, DatabaseName, DumpId, MysqlVersion, ProfileName},
     };
 
     use super::*;
@@ -285,16 +282,13 @@ mod tests {
             cache,
             restored: RestoreReady {
                 plan: RestorePlan {
-                    profile: ProfileName::try_from("salt-local").unwrap(),
-                    tenant_lookup: TenantLookup::try_from("sagatec").unwrap(),
-                    tenant_id: TenantId::try_from("salt_sagatec").unwrap(),
-                    source_database: DatabaseName::try_from("salt_sagatec").unwrap(),
-                    database: DatabaseName::try_from("salt_sagatec").unwrap(),
+                    profile: ProfileName::try_from("local-source").unwrap(),
+                    source_database: DatabaseName::try_from("acme_production").unwrap(),
+                    database: DatabaseName::try_from("acme_production").unwrap(),
                     dump_id: DumpId::new(),
                     source_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
                     client_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
                     container: ContainerName::try_from("mysql-8").unwrap(),
-                    local_domain: DomainAlias::try_from("sagatec").unwrap(),
                 },
                 imported_bytes: 1024,
             },
@@ -344,32 +338,32 @@ mod tests {
     #[test]
     fn production_source_warning_states_cache_and_local_restore_guards() {
         let progress = PullProgress::SourceSelected {
-            profile: ProfileName::try_from("salt-production").unwrap(),
+            profile: ProfileName::try_from("prod-sourceuction").unwrap(),
             production: true,
         };
         let output = render_source_selected(&OutputStyle::plain(), &progress);
 
-        assert!(output.contains("PRODUCTION SOURCE · salt-production"));
+        assert!(output.contains("PRODUCTION SOURCE · prod-sourceuction"));
         assert!(output.contains("Cache is mandatory"));
         assert!(output.contains("attested local target"));
     }
 
     #[test]
     fn database_selection_uses_an_explicit_name_or_the_source_default_non_interactively() {
-        let source = DatabaseName::try_from("salt_sagatec").unwrap();
+        let source = DatabaseName::try_from("acme_production").unwrap();
         let default = CliPullDatabaseSelector {
             requested: None,
             interactive: false,
         };
         let custom = CliPullDatabaseSelector {
-            requested: Some(DatabaseName::try_from("salt_sagatec_debug").unwrap()),
+            requested: Some(DatabaseName::try_from("acme_production_debug").unwrap()),
             interactive: false,
         };
 
         assert_eq!(default.select(&source).unwrap(), source);
         assert_eq!(
             custom.select(&source).unwrap().as_str(),
-            "salt_sagatec_debug"
+            "acme_production_debug"
         );
     }
 

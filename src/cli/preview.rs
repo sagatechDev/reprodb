@@ -1,6 +1,6 @@
 use crate::{
     cli::output::OutputStyle,
-    domain::{ProfileName, TenantLookup},
+    domain::{DatabaseName, ProfileName},
 };
 
 pub fn setup(style: &OutputStyle) -> String {
@@ -36,7 +36,7 @@ pub fn setup(style: &OutputStyle) -> String {
   Container   mysql-8
   Server      MySQL 8.4.4
   Address     localhost:3306
-  Database    salt_sagatec (example resolved from tenant)
+  Database    acme_production
 
 {pending} Validate target connection
 {pending} Save local target configuration
@@ -82,7 +82,7 @@ pub fn profile_add(style: &OutputStyle, profile: &ProfileName) -> String {
 
 {database_selection}
   Input       Exact source database name
-  Example     demo_sagatec
+  Example     demo_acme
 
 {review}
   Source      readonly_user@mysql.salt.internal:3306
@@ -153,12 +153,12 @@ pub fn doctor(style: &OutputStyle) -> String {
 
 pub fn pull(
     style: &OutputStyle,
-    tenant: &TenantLookup,
+    database: &DatabaseName,
     fresh: bool,
     target_container: Option<&crate::domain::ContainerName>,
     target_database: Option<&crate::domain::DatabaseName>,
 ) -> String {
-    let database = tenant.as_str();
+    let database = database.as_str();
     let target_database = target_database.map_or(database, |database| database.as_str());
     let target_container = target_container.map_or("mysql-8", |container| container.as_str());
     let cache_message = if fresh {
@@ -215,27 +215,27 @@ mod tests {
 
         assert!(output.contains("Profile\n  Name        salt-source"));
         assert!(output.contains("Exact source database name"));
-        assert!(output.contains("demo_sagatec"));
+        assert!(output.contains("demo_acme"));
         assert!(output.contains("MySQL password          ********"));
         assert!(output.contains("nothing was saved"));
         assert!(!output.contains("readonly_password"));
     }
 
     #[test]
-    fn fresh_pull_preview_resolves_the_observed_sagatec_database() {
-        let tenant = TenantLookup::try_from("sagatec").unwrap();
-        let output = pull(&OutputStyle::plain(), &tenant, true, None, None);
+    fn fresh_pull_preview_resolves_the_observed_acme_database() {
+        let database = DatabaseName::try_from("acme_production").unwrap();
+        let output = pull(&OutputStyle::plain(), &database, true, None, None);
 
         assert!(output.contains("Fresh dump requested"));
-        assert!(output.contains("Source DB  sagatec"));
-        assert!(output.contains("Target DB  mysql-8/sagatec"));
+        assert!(output.contains("Source DB  acme"));
+        assert!(output.contains("Target DB  mysql-8/acme"));
         assert!(output.contains("were not accessed"));
     }
 
     #[test]
     fn preview_uses_the_supplied_database_name_without_inventing_a_prefix() {
-        let tenant = TenantLookup::try_from("unknown").unwrap();
-        let output = pull(&OutputStyle::plain(), &tenant, false, None, None);
+        let database = DatabaseName::try_from("unknown_database").unwrap();
+        let output = pull(&OutputStyle::plain(), &database, false, None, None);
 
         assert!(output.contains("Source DB  unknown"));
         assert!(!output.contains("salt_unknown"));

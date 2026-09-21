@@ -65,25 +65,19 @@ impl RestoreProgressObserver for CliRestoreProgress {
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::{
-        ContainerName, DatabaseName, DomainAlias, DumpId, MysqlVersion, ProfileName, TenantId,
-        TenantLookup,
-    };
+    use crate::domain::{ContainerName, DatabaseName, DumpId, MysqlVersion, ProfileName};
 
     use super::*;
 
     fn plan() -> RestorePlan {
         RestorePlan {
-            profile: ProfileName::try_from("salt-local").unwrap(),
-            tenant_lookup: TenantLookup::try_from("sagatec").unwrap(),
-            tenant_id: TenantId::try_from("salt_sagatec").unwrap(),
-            source_database: DatabaseName::try_from("salt_sagatec").unwrap(),
-            database: DatabaseName::try_from("salt_sagatec").unwrap(),
+            profile: ProfileName::try_from("local-source").unwrap(),
+            source_database: DatabaseName::try_from("acme_production").unwrap(),
+            database: DatabaseName::try_from("acme_production").unwrap(),
             dump_id: DumpId::new(),
             source_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
             client_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
             container: ContainerName::try_from("mysql-8").unwrap(),
-            local_domain: DomainAlias::try_from("sagatec").unwrap(),
         }
     }
 
@@ -91,8 +85,8 @@ mod tests {
     fn plan_makes_the_destructive_local_scope_visible() {
         let output = render_plan(&OutputStyle::plain(), &plan());
 
-        assert!(output.contains("Source:     salt-local / salt_sagatec"));
-        assert!(output.contains("Target:     mysql-8/salt_sagatec"));
+        assert!(output.contains("Source:     local-source / acme_production"));
+        assert!(output.contains("Target:     mysql-8/acme_production"));
         assert!(output.contains("selected local target database will be replaced"));
         assert!(!output.to_ascii_lowercase().contains("password"));
     }

@@ -4,13 +4,10 @@ use thiserror::Error;
 
 use crate::{
     application::{
-        LocalTargetAttestor, LocalTargetGate, LocalTargetGateError,
-        LocalTenantRegistrationServiceError, LocalTenantWriter, RestoreEngine, RestoreEngineError,
+        LocalTargetAttestor, LocalTargetGate, LocalTargetGateError, RestoreEngine,
+        RestoreEngineError,
     },
-    domain::{
-        ContainerName, DatabaseName, DomainAlias, DumpId, LocalTenantRegistration,
-        LocalTenantRegistrationError, MysqlVersion, ProfileName, TenantId, TenantLookup,
-    },
+    domain::{ContainerName, DatabaseName, DumpId, MysqlVersion, ProfileName},
     infrastructure::{
         config::ConfigRepository,
         credentials::CredentialStore,
@@ -24,15 +21,12 @@ use crate::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RestorePlan {
     pub profile: ProfileName,
-    pub tenant_lookup: TenantLookup,
-    pub tenant_id: TenantId,
     pub source_database: DatabaseName,
     pub database: DatabaseName,
     pub dump_id: DumpId,
     pub source_version: MysqlVersion,
     pub client_version: MysqlVersion,
     pub container: crate::domain::ContainerName,
-    pub local_domain: DomainAlias,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -58,7 +52,7 @@ pub struct RestoreService {
 }
 
 pub struct RestoreRequest {
-    pub tenant: TenantLookup,
+    pub database: DatabaseName,
     pub dump_id: DumpId,
     pub target_container: Option<ContainerName>,
     pub target_database: Option<DatabaseName>,
@@ -77,26 +71,23 @@ impl RestoreService {
         self
     }
 
-    pub async fn restore<E, W>(
+    pub async fn restore<E>(
         &self,
         credentials: &dyn CredentialStore,
         attestor: &dyn LocalTargetAttestor,
         executor: E,
-        writer: W,
-        tenant: TenantLookup,
+        database: DatabaseName,
         dump_id: DumpId,
     ) -> Result<RestoreReady, RestoreServiceError>
     where
         E: RestoreExecutor,
-        W: LocalTenantWriter,
     {
         self.restore_to(
             credentials,
             attestor,
             executor,
-            writer,
             RestoreRequest {
-                tenant,
+                database,
                 dump_id,
                 target_container: None,
                 target_database: None,
@@ -105,21 +96,19 @@ impl RestoreService {
         .await
     }
 
-    pub async fn restore_to<E, W>(
+    pub async fn restore_to<E>(
         &self,
         credentials: &dyn CredentialStore,
         attestor: &dyn LocalTargetAttestor,
         executor: E,
-        _writer: W,
         request: RestoreRequest,
     ) -> Result<RestoreReady, RestoreServiceError>
     where
         E: RestoreExecutor,
-        W: LocalTenantWriter,
     {
         let artifact = LocalRestoreArtifactValidator::new(self.repository.paths().cache_dir())
             .validate_by_id(RestoreArtifactLookup {
-                tenant: &request.tenant,
+                database: &request.database,
                 dump_id: request.dump_id,
             })
             .await?;
@@ -127,26 +116,18 @@ impl RestoreService {
         let target_database = request
             .target_database
             .unwrap_or_else(|| source_database.clone());
-        let registration = LocalTenantRegistration::from_artifact_for_database(
-            artifact.metadata(),
-            target_database.clone(),
-        )?;
-
         let guarded = LocalTargetGate::new(self.repository.clone())
             .verify_named(credentials, attestor, request.target_container.as_ref())
             .await?;
-        let target = guarded.authorize_tenant_database(target_database.clone())?;
+        let target = guarded.authorize_database(target_database.clone())?;
         let plan = RestorePlan {
             profile: artifact.metadata().profile.clone(),
-            tenant_lookup: artifact.metadata().tenant_lookup.clone(),
-            tenant_id: artifact.metadata().tenant_id.clone(),
             source_database,
             database: target_database,
             dump_id: artifact.metadata().dump_id,
             source_version: artifact.metadata().source_version,
             client_version: artifact.metadata().client_version,
             container: target.container_name().clone(),
-            local_domain: registration.local_domain().clone(),
         };
         self.progress
             .update(&RestoreProgress::PlanReady(plan.clone()));
@@ -178,19 +159,11 @@ pub enum RestoreServiceError {
     #[error(transparent)]
     Artifact(#[from] RestoreArtifactError),
 
-    #[error("the managed dump cannot produce a safe local tenant registration: {0}")]
-    RegistrationData(#[from] LocalTenantRegistrationError),
-
     #[error(transparent)]
     Target(#[from] LocalTargetGateError),
 
     #[error(transparent)]
     Engine(#[from] RestoreEngineError),
-
-    #[error(
-        "database restore completed, but local tenant registration failed: {0}; retry the same restore command"
-    )]
-    Registration(#[source] LocalTenantRegistrationServiceError),
 }
 
 #[cfg(test)]
@@ -209,12 +182,11 @@ mod tests {
     use crate::{
         application::{
             AuthorizedLocalTarget, LocalTargetAttestation, LocalTargetAttestationError,
-            LocalTargetAttestationRequest, LocalTenantWriteError,
+            LocalTargetAttestationRequest,
         },
         domain::{
             ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseEncoding,
-            DumpArtifactCompletion, DumpArtifactContext, LocalTenantFeatures, MysqlVersion,
-            Sha256Digest,
+            DumpArtifactCompletion, DumpArtifactContext, MysqlVersion, Sha256Digest,
         },
         infrastructure::{
             artifact_store::LocalArtifactStore,
@@ -281,26 +253,6 @@ mod tests {
         }
     }
 
-    struct FakeWriter {
-        calls: Arc<Mutex<Vec<String>>>,
-    }
-
-    #[async_trait]
-    impl LocalTenantWriter for FakeWriter {
-        async fn register(
-            &self,
-            _target: &AuthorizedLocalTarget,
-            registration: &LocalTenantRegistration,
-        ) -> Result<(), LocalTenantWriteError> {
-            self.calls.lock().unwrap().push(format!(
-                "{}:{}",
-                registration.tenant_id(),
-                registration.target_database()
-            ));
-            Ok(())
-        }
-    }
-
     struct RecordingProgress(Arc<Mutex<Vec<RestoreProgress>>>);
 
     impl RestoreProgressObserver for RecordingProgress {
@@ -325,9 +277,7 @@ mod tests {
                     container_id: ContainerId::try_from("a".repeat(64)).unwrap(),
                     username: "root".to_owned(),
                     credential_key,
-                    central_database: DatabaseName::try_from("salt_central").unwrap(),
                     trust: LocalTargetTrust::UserConfirmed,
-                    legacy_tenant_database_prefix: None,
                 }),
                 profiles: BTreeMap::new(),
                 ..AppConfig::default()
@@ -339,10 +289,10 @@ mod tests {
             .await
             .unwrap();
 
-        let profile = ProfileName::try_from("salt-local").unwrap();
-        let tenant_id = TenantId::try_from("salt_sagatec").unwrap();
+        let profile = ProfileName::try_from("local-source").unwrap();
+        let database = DatabaseName::try_from("acme_production").unwrap();
         let store = LocalArtifactStore::new(paths.cache_dir());
-        let stage = store.begin(&profile, &tenant_id).unwrap();
+        let stage = store.begin(&profile, &database).unwrap();
         let dump_id = stage.dump_id();
         let metrics = ZstdCompressor::default()
             .compress(
@@ -355,9 +305,7 @@ mod tests {
         let metadata = crate::domain::DumpArtifactMetadata::try_new(
             dump_id,
             DumpArtifactContext {
-                tenant_lookup: TenantLookup::try_from("sagatec").unwrap(),
-                tenant_id,
-                database: DatabaseName::try_from("salt_sagatec").unwrap(),
+                database: DatabaseName::try_from("acme_production").unwrap(),
                 profile,
                 source_fingerprint: Sha256Digest::from_bytes([1; 32]),
                 source_server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
@@ -368,7 +316,6 @@ mod tests {
                     "utf8mb4_0900_ai_ci".to_owned(),
                 )
                 .unwrap(),
-                local_tenant_features: LocalTenantFeatures::default(),
                 policy_version: 1,
             },
             DumpArtifactCompletion {
@@ -391,7 +338,6 @@ mod tests {
         let (repository, credentials, dump_id) = configured_fixture(directory.path()).await;
         let attestor_calls = Arc::new(Mutex::new(0));
         let executor_calls = Arc::new(Mutex::new(Vec::new()));
-        let writer_calls = Arc::new(Mutex::new(Vec::new()));
         let progress = Arc::new(Mutex::new(Vec::new()));
         let service = RestoreService::new(repository)
             .with_progress(Arc::new(RecordingProgress(Arc::clone(&progress))));
@@ -405,21 +351,16 @@ mod tests {
                 FakeExecutor {
                     calls: Arc::clone(&executor_calls),
                 },
-                FakeWriter {
-                    calls: Arc::clone(&writer_calls),
-                },
-                TenantLookup::try_from("sagatec").unwrap(),
+                DatabaseName::try_from("acme_production").unwrap(),
                 dump_id,
             )
             .await
             .unwrap();
 
-        assert_eq!(ready.plan.database.as_str(), "salt_sagatec");
-        assert_eq!(ready.plan.source_database.as_str(), "salt_sagatec");
-        assert_eq!(ready.plan.local_domain.as_str(), "sagatec");
+        assert_eq!(ready.plan.database.as_str(), "acme_production");
+        assert_eq!(ready.plan.source_database.as_str(), "acme_production");
         assert_eq!(*attestor_calls.lock().unwrap(), 1);
         assert_eq!(*executor_calls.lock().unwrap(), ["recreate", "import"]);
-        assert!(writer_calls.lock().unwrap().is_empty());
         assert!(matches!(
             progress.lock().unwrap().as_slice(),
             [
@@ -433,7 +374,6 @@ mod tests {
     async fn custom_target_database_is_authorized_and_restored_without_a_central_write() {
         let directory = tempdir().unwrap();
         let (repository, credentials, dump_id) = configured_fixture(directory.path()).await;
-        let writer_calls = Arc::new(Mutex::new(Vec::new()));
 
         let ready = RestoreService::new(repository)
             .restore_to(
@@ -444,26 +384,22 @@ mod tests {
                 FakeExecutor {
                     calls: Arc::new(Mutex::new(Vec::new())),
                 },
-                FakeWriter {
-                    calls: Arc::clone(&writer_calls),
-                },
                 RestoreRequest {
-                    tenant: TenantLookup::try_from("sagatec").unwrap(),
+                    database: DatabaseName::try_from("acme_production").unwrap(),
                     dump_id,
                     target_container: None,
-                    target_database: Some(DatabaseName::try_from("salt_sagatec_debug").unwrap()),
+                    target_database: Some(DatabaseName::try_from("acme_production_debug").unwrap()),
                 },
             )
             .await
             .unwrap();
 
-        assert_eq!(ready.plan.source_database.as_str(), "salt_sagatec");
-        assert_eq!(ready.plan.database.as_str(), "salt_sagatec_debug");
-        assert!(writer_calls.lock().unwrap().is_empty());
+        assert_eq!(ready.plan.source_database.as_str(), "acme_production");
+        assert_eq!(ready.plan.database.as_str(), "acme_production_debug");
     }
 
     #[tokio::test]
-    async fn tenant_mismatch_is_rejected_before_credentials_or_target_attestation() {
+    async fn database_mismatch_is_rejected_before_credentials_or_target_attestation() {
         let directory = tempdir().unwrap();
         let (repository, _, dump_id) = configured_fixture(directory.path()).await;
         let attestor_calls = Arc::new(Mutex::new(0));
@@ -477,10 +413,7 @@ mod tests {
                 FakeExecutor {
                     calls: Arc::new(Mutex::new(Vec::new())),
                 },
-                FakeWriter {
-                    calls: Arc::new(Mutex::new(Vec::new())),
-                },
-                TenantLookup::try_from("polymer").unwrap(),
+                DatabaseName::try_from("globex").unwrap(),
                 dump_id,
             )
             .await
@@ -488,7 +421,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            RestoreServiceError::Artifact(RestoreArtifactError::TenantMismatch)
+            RestoreServiceError::Artifact(RestoreArtifactError::DatabaseMismatch)
         ));
         assert_eq!(*attestor_calls.lock().unwrap(), 0);
     }

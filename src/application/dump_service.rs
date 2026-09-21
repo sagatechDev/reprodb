@@ -7,8 +7,7 @@ use thiserror::Error;
 use crate::{
     domain::{
         DatabaseName, DumpArtifactCompletion, DumpArtifactContext, DumpArtifactMetadata, DumpId,
-        DumpMetadataError, DumpPolicyNotice, MysqlVersion, ProfileName, ResolvedTenant,
-        TenantLookup, TenantResolutionError,
+        DumpMetadataError, DumpPolicyNotice, MysqlVersion, ProfileName,
     },
     infrastructure::{
         artifact_store::{ArtifactStoreError, LocalArtifactStore},
@@ -49,15 +48,6 @@ pub struct NoDumpStatus;
 
 impl DumpStatusObserver for NoDumpStatus {
     fn update(&self, _status: &DumpStatus) {}
-}
-
-#[async_trait]
-pub trait DumpTenantResolver: Send + Sync {
-    async fn resolve(
-        &self,
-        source: &DumpSource<'_>,
-        lookup: &TenantLookup,
-    ) -> Result<ResolvedTenant, TenantResolutionError>;
 }
 
 #[async_trait]
@@ -133,10 +123,9 @@ where
     pub async fn create(
         &self,
         credentials: &dyn CredentialStore,
-        resolver: &dyn DumpTenantResolver,
         preflight: &dyn DumpPreflightGateway,
         executor: &dyn DumpExecutor,
-        lookup: TenantLookup,
+        database: DatabaseName,
     ) -> Result<DumpCreated, DumpServiceError> {
         let cleanup_now = self.clock.now_unix_seconds()?;
         LocalCacheCleaner::new(self.repository.paths().cache_dir())
@@ -169,11 +158,9 @@ where
             password: &password,
             client,
         };
-        let resolved = resolver.resolve(&source, &lookup).await?;
         let lock_manager = OperationLockManager::new(self.repository.paths().cache_dir());
-        let _lock =
-            lock_manager.try_acquire(OperationLockKey::source(profile_name, &resolved.database))?;
-        let approved = preflight.assess(&source, &resolved.database).await?;
+        let _lock = lock_manager.try_acquire(OperationLockKey::source(profile_name, &database))?;
+        let approved = preflight.assess(&source, &database).await?;
         if profile.tls_mode.requires_encrypted_transport() && approved.server.tls_cipher.is_none() {
             return Err(DumpPreflightError::TlsRequiredButNotNegotiated.into());
         }
@@ -182,7 +169,7 @@ where
 
         let created_at = self.clock.now_unix_seconds()?;
         let store = LocalArtifactStore::new(self.repository.paths().cache_dir());
-        let stage = store.begin(profile_name, &resolved.tenant_id)?;
+        let stage = store.begin(profile_name, &database)?;
         let dump_id = stage.dump_id();
         let output = stage.create_dump_writer()?;
         let metrics = executor
@@ -203,16 +190,13 @@ where
         let metadata = DumpArtifactMetadata::try_new(
             dump_id,
             DumpArtifactContext {
-                tenant_lookup: lookup.clone(),
-                tenant_id: resolved.tenant_id.clone(),
-                database: resolved.database.clone(),
+                database: database.clone(),
                 profile: profile_name.clone(),
                 source_fingerprint: source_profile_fingerprint(profile_name, profile),
                 source_server_uuid: approved.server.server_uuid.clone(),
                 source_version: approved.server.version,
                 client_version: client.version(),
                 database_encoding: approved.preflight.encoding.clone(),
-                local_tenant_features: resolved.features.clone(),
                 policy_version: approved.plan.policy_version(),
             },
             DumpArtifactCompletion {
@@ -230,9 +214,7 @@ where
             dump_id,
             artifact_path: artifact.path().to_owned(),
             profile: profile_name.clone(),
-            tenant_lookup: lookup,
-            tenant_id: resolved.tenant_id,
-            database: resolved.database,
+            database,
             source_version: approved.server.version,
             client_version: client.version(),
             uncompressed_bytes: metrics.input_bytes(),
@@ -248,8 +230,6 @@ pub struct DumpCreated {
     pub dump_id: DumpId,
     pub artifact_path: PathBuf,
     pub profile: ProfileName,
-    pub tenant_lookup: TenantLookup,
-    pub tenant_id: crate::domain::TenantId,
     pub database: DatabaseName,
     pub source_version: MysqlVersion,
     pub client_version: MysqlVersion,
@@ -277,9 +257,6 @@ pub enum DumpServiceError {
 
     #[error(transparent)]
     Credential(#[from] CredentialError),
-
-    #[error(transparent)]
-    Tenant(#[from] TenantResolutionError),
 
     #[error(transparent)]
     Lock(#[from] OperationLockError),
@@ -316,15 +293,14 @@ mod tests {
 
     use crate::{
         domain::{
-            AppColor, DatabaseEncoding, DatabaseObjectCounts, DefinerObjectCounts, DumpPreflight,
-            GtidMode, LocalTenantFeatures, Mysql8DumpPolicy, MysqlTlsMode, StorageEngineUsage,
-            TenantId, TenantMatch,
+            DatabaseEncoding, DatabaseObjectCounts, DefinerObjectCounts, DumpPreflight, GtidMode,
+            Mysql8DumpPolicy, MysqlTlsMode, StorageEngineUsage,
         },
         infrastructure::{
             compression::ZstdCompressor,
             config::{
                 AppConfig, AppPaths, ClientRuntimeConfig, ClientRuntimeKind, MysqlClientConfig,
-                MysqlFamily, TenantResolverConfig,
+                MysqlFamily,
             },
             credentials::MemoryCredentialStore,
             mysql::MysqlServerInfo,
@@ -348,29 +324,6 @@ mod tests {
     impl Clock for TestClock {
         fn now_unix_seconds(&self) -> Result<u64, ClockError> {
             self.values.lock().unwrap().pop_front().ok_or(ClockError)
-        }
-    }
-
-    struct FakeResolver;
-
-    #[async_trait]
-    impl DumpTenantResolver for FakeResolver {
-        async fn resolve(
-            &self,
-            _source: &DumpSource<'_>,
-            lookup: &TenantLookup,
-        ) -> Result<ResolvedTenant, TenantResolutionError> {
-            assert_eq!(lookup.as_str(), "sagatec");
-            Ok(ResolvedTenant {
-                tenant_id: TenantId::try_from("salt_sagatec").unwrap(),
-                database: DatabaseName::try_from("salt_sagatec").unwrap(),
-                matched_by: TenantMatch::TenantId,
-                features: LocalTenantFeatures {
-                    app_color: Some(AppColor::try_from("green".to_owned()).unwrap()),
-                    enable_beta: Some(true),
-                    ..LocalTenantFeatures::default()
-                },
-            })
         }
     }
 
@@ -443,7 +396,7 @@ mod tests {
                 return Err(DumpExecutorError::Interrupted);
             }
             assert_eq!(request.profile_name.as_str(), "local-source");
-            assert_eq!(request.plan.arguments().last().unwrap(), "salt_sagatec");
+            assert_eq!(request.plan.arguments().last().unwrap(), "acme_production");
             ZstdCompressor::default()
                 .compress(
                     Cursor::new(b"CREATE TABLE example (id BIGINT);\n"),
@@ -507,9 +460,6 @@ mod tests {
                 client: MysqlClientConfig {
                     image: client.image().to_owned(),
                 },
-                tenant_resolver: TenantResolverConfig::Pattern {
-                    pattern: "salt_{tenant}".to_owned(),
-                },
             },
         );
         repository
@@ -543,22 +493,21 @@ mod tests {
         let created = service
             .create(
                 &credentials,
-                &FakeResolver,
                 &FakePreflight,
                 &FakeExecutor { fail: false },
-                TenantLookup::try_from("sagatec").unwrap(),
+                DatabaseName::try_from("acme_production").unwrap(),
             )
             .await
             .unwrap();
 
         assert_eq!(created.profile.as_str(), "local-source");
-        assert_eq!(created.tenant_id.as_str(), "salt_sagatec");
-        assert_eq!(created.database.as_str(), "salt_sagatec");
+        assert_eq!(created.database.as_str(), "acme_production");
+        assert_eq!(created.database.as_str(), "acme_production");
         assert_eq!(progress.0.load(std::sync::atomic::Ordering::Relaxed), 1024);
         assert!(created.artifact_path.is_dir());
         assert!(created.compressed_bytes > 0);
         let artifacts = LocalArtifactStore::new(&cache_root)
-            .list_complete(&created.profile, &created.tenant_id)
+            .list_complete(&created.profile, &created.database)
             .unwrap();
         assert_eq!(artifacts.len(), 1);
         let sql = zstd::stream::decode_all(std::fs::File::open(artifacts[0].dump_path()).unwrap())
@@ -567,11 +516,7 @@ mod tests {
         let metadata: crate::domain::DumpArtifactMetadata =
             serde_json::from_reader(std::fs::File::open(artifacts[0].metadata_path()).unwrap())
                 .unwrap();
-        assert_eq!(metadata.local_tenant_features.enable_beta, Some(true));
-        assert_eq!(
-            metadata.local_tenant_features.app_color.unwrap().as_str(),
-            "green"
-        );
+        assert_eq!(metadata.database.as_str(), "acme_production");
 
         let lock = OperationLockManager::new(cache_root).try_acquire(OperationLockKey::source(
             &created.profile,
@@ -593,10 +538,9 @@ mod tests {
         let first = DumpService::with_clock(repository.clone(), TestClock::new([800, 900, 901]))
             .create(
                 &credentials,
-                &FakeResolver,
                 &FakePreflight,
                 &FakeExecutor { fail: false },
-                TenantLookup::try_from("sagatec").unwrap(),
+                DatabaseName::try_from("acme_production").unwrap(),
             )
             .await
             .unwrap();
@@ -605,10 +549,9 @@ mod tests {
         let error = service
             .create(
                 &credentials,
-                &FakeResolver,
                 &FakePreflight,
                 &FakeExecutor { fail: true },
-                TenantLookup::try_from("sagatec").unwrap(),
+                DatabaseName::try_from("acme_production").unwrap(),
             )
             .await
             .unwrap_err();
@@ -620,14 +563,14 @@ mod tests {
         let complete = LocalArtifactStore::new(cache_root)
             .list_complete(
                 &ProfileName::try_from("local-source").unwrap(),
-                &TenantId::try_from("salt_sagatec").unwrap(),
+                &DatabaseName::try_from("acme_production").unwrap(),
             )
             .unwrap();
         assert_eq!(complete.len(), 1);
         assert_eq!(complete[0].dump_id(), first.dump_id);
         let tenant_cache = directory
             .path()
-            .join("cache/profiles/local-source/salt_sagatec");
+            .join("cache/profiles/local-source/acme_production");
         let remaining_entries = std::fs::read_dir(&tenant_cache)
             .map(|entries| {
                 entries
@@ -645,7 +588,7 @@ mod tests {
         let lock = OperationLockManager::new(directory.path().join("cache")).try_acquire(
             OperationLockKey::source(
                 &ProfileName::try_from("local-source").unwrap(),
-                &DatabaseName::try_from("salt_sagatec").unwrap(),
+                &DatabaseName::try_from("acme_production").unwrap(),
             ),
         );
         assert!(lock.is_ok(), "interruption must release the dump lock");
@@ -667,10 +610,9 @@ mod tests {
         let created = service
             .create(
                 &credentials,
-                &FakeResolver,
                 &FakePreflight,
                 &FakeExecutor { fail: false },
-                TenantLookup::try_from("sagatec").unwrap(),
+                DatabaseName::try_from("acme_production").unwrap(),
             )
             .await
             .unwrap();

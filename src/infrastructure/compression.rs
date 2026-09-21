@@ -312,7 +312,9 @@ mod tests {
 
     #[tokio::test]
     async fn compresses_and_decompresses_a_stream_with_exact_metrics() {
-        let mut pattern = "salt_sagatec\nUTF-8: olá 🧂\n\0binary".as_bytes().to_vec();
+        let mut pattern = "acme_production\nUTF-8: olá 🧂\n\0binary"
+            .as_bytes()
+            .to_vec();
         pattern.push(0xff);
         let input = pattern.repeat(1024);
         let directory = tempdir().unwrap();
@@ -366,7 +368,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "manual local comparison of candidate Zstd levels"]
     async fn benchmarks_candidate_zstd_levels_on_sql_like_input() {
-        let row = b"INSERT INTO `work_orders` VALUES (123,'salt_sagatec','2026-09-05 12:34:56',NULL,1234.56);\n";
+        let row = b"INSERT INTO `work_orders` VALUES (123,'acme_production','2026-09-05 12:34:56',NULL,1234.56);\n";
         let repetitions = (64 * 1024 * 1024) / row.len();
         let input = row.repeat(repetitions);
 

@@ -5,8 +5,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::domain::{
-    DatabaseEncoding, DatabaseName, LocalTenantFeatures, MysqlServerUuid, MysqlVersion,
-    ProfileName, Sha256Digest, TenantId, TenantLookup,
+    DatabaseEncoding, DatabaseName, MysqlServerUuid, MysqlVersion, ProfileName, Sha256Digest,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -72,8 +71,6 @@ pub enum DumpArtifactFormat {
 pub struct DumpArtifactMetadata {
     pub format: DumpArtifactFormat,
     pub dump_id: DumpId,
-    pub tenant_lookup: TenantLookup,
-    pub tenant_id: TenantId,
     pub database: DatabaseName,
     pub profile: ProfileName,
     pub source_fingerprint: Sha256Digest,
@@ -82,7 +79,6 @@ pub struct DumpArtifactMetadata {
     pub client_version: MysqlVersion,
     pub database_charset: String,
     pub database_collation: String,
-    pub local_tenant_features: LocalTenantFeatures,
     pub policy_version: u32,
     pub created_at_unix_seconds: u64,
     pub completed_at_unix_seconds: u64,
@@ -97,8 +93,6 @@ pub struct DumpArtifactMetadata {
 struct DumpArtifactMetadataWire {
     format: DumpArtifactFormat,
     dump_id: DumpId,
-    tenant_lookup: TenantLookup,
-    tenant_id: TenantId,
     database: DatabaseName,
     profile: ProfileName,
     source_fingerprint: Sha256Digest,
@@ -107,8 +101,6 @@ struct DumpArtifactMetadataWire {
     client_version: MysqlVersion,
     database_charset: String,
     database_collation: String,
-    #[serde(default)]
-    local_tenant_features: LocalTenantFeatures,
     policy_version: u32,
     created_at_unix_seconds: u64,
     completed_at_unix_seconds: u64,
@@ -132,8 +124,6 @@ impl<'de> Deserialize<'de> for DumpArtifactMetadata {
         Self::try_new(
             wire.dump_id,
             DumpArtifactContext {
-                tenant_lookup: wire.tenant_lookup,
-                tenant_id: wire.tenant_id,
                 database: wire.database,
                 profile: wire.profile,
                 source_fingerprint: wire.source_fingerprint,
@@ -141,7 +131,6 @@ impl<'de> Deserialize<'de> for DumpArtifactMetadata {
                 source_version: wire.source_version,
                 client_version: wire.client_version,
                 database_encoding: encoding,
-                local_tenant_features: wire.local_tenant_features,
                 policy_version: wire.policy_version,
             },
             DumpArtifactCompletion {
@@ -159,8 +148,6 @@ impl<'de> Deserialize<'de> for DumpArtifactMetadata {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DumpArtifactContext {
-    pub tenant_lookup: TenantLookup,
-    pub tenant_id: TenantId,
     pub database: DatabaseName,
     pub profile: ProfileName,
     pub source_fingerprint: Sha256Digest,
@@ -168,7 +155,6 @@ pub struct DumpArtifactContext {
     pub source_version: MysqlVersion,
     pub client_version: MysqlVersion,
     pub database_encoding: DatabaseEncoding,
-    pub local_tenant_features: LocalTenantFeatures,
     pub policy_version: u32,
 }
 
@@ -201,8 +187,6 @@ impl DumpArtifactMetadata {
         Ok(Self {
             format: DumpArtifactFormat::MysqlSqlZstdV1,
             dump_id,
-            tenant_lookup: context.tenant_lookup,
-            tenant_id: context.tenant_id,
             database: context.database,
             profile: context.profile,
             source_fingerprint: context.source_fingerprint,
@@ -211,7 +195,6 @@ impl DumpArtifactMetadata {
             client_version: context.client_version,
             database_charset: context.database_encoding.charset().to_owned(),
             database_collation: context.database_encoding.collation().to_owned(),
-            local_tenant_features: context.local_tenant_features,
             policy_version: context.policy_version,
             created_at_unix_seconds: completion.created_at_unix_seconds,
             completed_at_unix_seconds: completion.completed_at_unix_seconds,
@@ -253,9 +236,7 @@ mod tests {
         DumpArtifactMetadata::try_new(
             DumpId::new(),
             DumpArtifactContext {
-                tenant_lookup: TenantLookup::try_from("sagatec").unwrap(),
-                tenant_id: TenantId::try_from("salt_sagatec").unwrap(),
-                database: DatabaseName::try_from("salt_sagatec").unwrap(),
+                database: DatabaseName::try_from("acme_production").unwrap(),
                 profile: ProfileName::try_from("local-source").unwrap(),
                 source_fingerprint: digest(1),
                 source_server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
@@ -266,7 +247,6 @@ mod tests {
                     "utf8mb4_0900_ai_ci".to_owned(),
                 )
                 .unwrap(),
-                local_tenant_features: LocalTenantFeatures::default(),
                 policy_version: 1,
             },
             DumpArtifactCompletion {
@@ -282,25 +262,16 @@ mod tests {
 
     #[test]
     fn metadata_serializes_only_canonical_typed_values() {
-        let mut metadata = metadata(101, 512).unwrap();
-        metadata.local_tenant_features.enable_beta = Some(true);
+        let metadata = metadata(101, 512).unwrap();
         let json = serde_json::to_value(&metadata).unwrap();
 
         assert_eq!(json["format"], "mysql-sql-zstd-v1");
-        assert_eq!(json["tenant_lookup"], "sagatec");
-        assert_eq!(json["tenant_id"], "salt_sagatec");
-        assert_eq!(json["database"], "salt_sagatec");
+        assert_eq!(json["database"], "acme_production");
         assert_eq!(
             json["source_server_uuid"],
             "11111111-1111-4111-8111-111111111111"
         );
         assert_eq!(json["database_charset"], "utf8mb4");
-        assert_eq!(json["local_tenant_features"]["enable_beta"], true);
-        assert!(
-            json["local_tenant_features"]
-                .get("tenancy_api_token")
-                .is_none()
-        );
         assert_eq!(json["artifact_sha256"].as_str().unwrap().len(), 64);
         assert!(json.get("password").is_none());
         assert_eq!(
@@ -339,17 +310,5 @@ mod tests {
         let mut json = serde_json::to_value(metadata(101, 512).unwrap()).unwrap();
         json["database_collation"] = serde_json::json!("latin1_bin");
         assert!(serde_json::from_value::<DumpArtifactMetadata>(json).is_err());
-
-        let mut older = serde_json::to_value(metadata(101, 512).unwrap()).unwrap();
-        older
-            .as_object_mut()
-            .unwrap()
-            .remove("local_tenant_features");
-        assert_eq!(
-            serde_json::from_value::<DumpArtifactMetadata>(older)
-                .unwrap()
-                .local_tenant_features,
-            LocalTenantFeatures::default()
-        );
     }
 }

@@ -5,7 +5,7 @@ A smoke suite cobre os limites que mais variam entre Linux e macOS:
 - paths e permissões dentro de `.reprodb`;
 - lock entre processos e liberação após encerramento;
 - cancelamento cooperativo e exit code `130`;
-- Keychain nativo com uma credencial aleatória e temporária;
+- credential store local nativo com uma credencial aleatória e temporária;
 - Docker Desktop e descoberta do context local;
 - descoberta do container `mysql-8`;
 - client MySQL 8.4 em Docker conectando ao host;
@@ -31,7 +31,7 @@ No ambiente padrão:
 ./scripts/smoke-macos.sh
 ```
 
-O teste do Keychain cria uma chave com UUID novo e tenta removê-la mesmo após a leitura. Os testes Docker de descoberta e conexão são somente-leitura sobre o fixture existente. O E2E cria containers com nomes UUID e `--rm`, usa um `REPRODB_HOME` temporário e não lê nem escreve `~/.reprodb`.
+O teste do credential store local cria uma chave com UUID novo e tenta removê-la mesmo após a leitura. Os testes Docker de descoberta e conexão são somente-leitura sobre o fixture existente. O E2E cria containers com nomes UUID e `--rm`, usa um `REPRODB_HOME` temporário e não lê nem escreve `~/.reprodb`.
 
 ## Evidência atual
 

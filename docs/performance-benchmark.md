@@ -1,6 +1,6 @@
 # Benchmark local de dump, restore e cache
 
-A RDB-064 usa o mesmo pipeline real do E2E: dois MySQL 8.4 efêmeros, resolução pelo `salt_central`, `mysqldump`, Zstd, publicação no cache, restore em outro servidor e um segundo restore por cache hit sem credencial source.
+A RDB-064 usa o mesmo pipeline real do E2E: dois MySQL 8.4 efêmeros, `mysqldump`, Zstd, publicação no cache, restore em outro servidor e um segundo restore por cache hit sem credencial source.
 
 O benchmark é opt-in e roda em `--release`:
 
@@ -53,4 +53,4 @@ Medição em 7 de setembro de 2026, macOS arm64, Docker Desktop 27.5.1 e MySQL/c
 | 450 mil linhas / 219,7 MiB lógicos | 1 | 232,8 MiB | 115,3 MiB | 49,52% | 6,924 s | 10,629 s | 19,498 s | 11,223 s | 59,0 MiB |
 | 450 mil linhas / 219,7 MiB lógicos | 3 | 232,8 MiB | 119,5 MiB | 51,31% | 9,171 s | 13,409 s | 24,601 s | 11,337 s | 58,5 MiB |
 
-O RSS permaneceu praticamente constante entre 2 KiB e 244 MB de dump SQL. Nesta fixture, Zstd 3 foi mais lento e produziu um artefato maior. Zstd 1 continua sendo o default. Isso não substitui uma medição futura com um tenant Salt real e autorizado antes de produção.
+O RSS permaneceu praticamente constante entre 2 KiB e 244 MB de dump SQL. Nesta fixture, Zstd 3 foi mais lento e produziu um artefato maior. Zstd 1 continua sendo o default. Isso não substitui uma medição futura com um database real e autorizado antes de produção.

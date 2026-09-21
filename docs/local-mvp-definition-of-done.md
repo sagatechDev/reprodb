@@ -9,11 +9,9 @@ O núcleo do MVP está implementado e funciona no macOS usado no desenvolvimento
 ```text
 setup de target existente
   -> profile source interativo
-  -> resolução pelo salt_central
   -> mysqldump MySQL 8.4
   -> Zstd/cache atômico
   -> restore em outro MySQL Docker
-  -> registro local mínimo do tenant
   -> novo pull usando cache com o source desligado
 ```
 
@@ -33,7 +31,6 @@ Criar, atualizar ou administrar automaticamente um container MySQL não é neces
 | Configuração | Tudo sob `~/.reprodb`, schema estrito, locks, escrita atômica e permissões privadas |
 | Source | Profile testado antes de persistir; versão/vendor e TLS observados por conexão real |
 | Client | MySQL 8.4 aprovado por catálogo e digest, executado em container sem senha no argv |
-| Tenant | Alias/ID e `tenancy_db_name` resolvidos no `salt_central`; overrides perigosos bloqueados |
 | Dump | Preflight conservador, policy v2, flags estruturadas, streaming e ETA aproximado |
 | Cache | Zstd, SHA-256, TTL, fingerprint do source/policy, staging `.part`, rename atômico e locks |
 | Restore | Artefato validado antes do `DROP`, target local atestado e source/target com UUID diferentes |
@@ -57,9 +54,9 @@ O aceite exige descoberta do context Unix local, acesso do client container ao s
 
 VPN e acesso a qualquer source externo não fazem parte deste aceite. Eles pertencem à habilitação posterior daquele source profile e não devem atrasar nem contaminar a prova local.
 
-### 2. Secret Service Linux
+### 2. credential store local Linux
 
-Executar numa sessão de usuário Linux com backend Secret Service disponível:
+Executar numa sessão de usuário Linux com backend credential store local disponível:
 
 ```bash
 cargo test native_store_roundtrips_a_temporary_credential -- --ignored --nocapture
@@ -85,7 +82,7 @@ O aceite exige primeiro `pull` por dump, restore no target, source desligado, se
 
 1. disponibilizar o repositório para um runner Linux ou executar os comandos numa máquina Linux de desenvolvimento;
 2. fechar o gate Docker/networking;
-3. fechar o gate Secret Service na sessão real do usuário;
+3. fechar o gate credential store local na sessão real do usuário;
 4. executar o E2E Linux;
 5. registrar SO, arquitetura, Docker, MySQL e resultado sem incluir hosts ou credenciais;
 6. somente então marcar os três checkboxes restantes e declarar o MVP local concluído.

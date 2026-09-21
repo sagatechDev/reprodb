@@ -4,7 +4,6 @@ use std::process::{Command, Stdio};
 
 use reprodb::{
     application::{NewLocalTargetInput, SetupService},
-    domain::DatabaseName,
     infrastructure::{
         config::{AppPaths, ConfigRepository},
         credentials::{CredentialStore, MemoryCredentialStore},
@@ -42,7 +41,6 @@ async fn configures_the_real_local_mysql_target() {
         container_id: candidate.id,
         username: "root".to_owned(),
         password,
-        central_database: DatabaseName::try_from("salt_central").unwrap(),
         managed_by_reprodb: candidate.managed_by_reprodb,
     };
 

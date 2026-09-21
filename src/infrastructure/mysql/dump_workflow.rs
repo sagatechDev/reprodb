@@ -1,16 +1,11 @@
 use async_trait::async_trait;
 
 use crate::{
-    application::{DumpPreflightGateway, DumpSource, DumpTenantResolver},
-    domain::{
-        DatabaseName, PatternTenantResolver, ResolvedTenant, TenantLookup, TenantResolutionError,
-        TenantResolver,
-    },
+    application::{DumpPreflightGateway, DumpSource},
+    domain::DatabaseName,
     infrastructure::{
-        config::TenantResolverConfig,
         mysql::{
-            ApprovedMysqlDump, DockerMysqlDumpPreflight, DockerSaltCentralTenantResolver,
-            DumpPreflightError, DumpPreflightSource, SaltCentralSource,
+            ApprovedMysqlDump, DockerMysqlDumpPreflight, DumpPreflightError, DumpPreflightSource,
         },
         process::ProcessRunner,
     },
@@ -24,48 +19,6 @@ pub struct DockerDumpWorkflow<R> {
 impl<R> DockerDumpWorkflow<R> {
     pub fn new(runner: R) -> Self {
         Self { runner }
-    }
-}
-
-#[async_trait]
-impl<R> DumpTenantResolver for DockerDumpWorkflow<R>
-where
-    R: ProcessRunner + Clone,
-{
-    async fn resolve(
-        &self,
-        source: &DumpSource<'_>,
-        lookup: &TenantLookup,
-    ) -> Result<ResolvedTenant, TenantResolutionError> {
-        match &source.profile.tenant_resolver {
-            TenantResolverConfig::Pattern { pattern } => {
-                PatternTenantResolver::new(pattern)?.resolve(lookup).await
-            }
-            TenantResolverConfig::SaltCentral {
-                central_database,
-                allow_domain_lookup,
-            } => {
-                let resolver = DockerSaltCentralTenantResolver::new(
-                    self.runner.clone(),
-                    SaltCentralSource {
-                        docker_context: source.docker_context.to_owned(),
-                        host: source.profile.host.clone(),
-                        port: source.profile.port,
-                        username: source.profile.username.clone(),
-                        password: source.password.clone(),
-                        tls_mode: source.profile.tls_mode,
-                        tls_material: source.profile.tls_material.clone(),
-                        central_database: central_database.clone(),
-                        client: source.client,
-                    },
-                    *allow_domain_lookup,
-                );
-                if let Some(resolved) = resolver.resolve_existing_database(lookup).await? {
-                    return Ok(resolved);
-                }
-                Err(TenantResolutionError::NotFound)
-            }
-        }
     }
 }
 

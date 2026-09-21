@@ -2,8 +2,8 @@ use async_trait::async_trait;
 
 use crate::{
     application::{
-        TenantCatalogEntry, TenantCatalogPage, TenantCatalogReadError, TenantCatalogReader,
-        TenantCatalogSource,
+        DatabaseCatalogEntry, DatabaseCatalogPage, DatabaseCatalogReadError, DatabaseCatalogReader,
+        DatabaseCatalogSource,
     },
     infrastructure::{mysql::DockerClientError, process::ProcessRunner},
 };
@@ -12,11 +12,11 @@ use super::DockerMysqlClientRuntime;
 
 const MAX_CATALOG_OUTPUT_BYTES: usize = 1024 * 1024;
 
-pub struct DockerTenantCatalogReader<R> {
+pub struct DockerDatabaseCatalogReader<R> {
     runtime: DockerMysqlClientRuntime<R>,
 }
 
-impl<R> DockerTenantCatalogReader<R>
+impl<R> DockerDatabaseCatalogReader<R>
 where
     R: ProcessRunner,
 {
@@ -28,15 +28,15 @@ where
 }
 
 #[async_trait]
-impl<R> TenantCatalogReader for DockerTenantCatalogReader<R>
+impl<R> DatabaseCatalogReader for DockerDatabaseCatalogReader<R>
 where
     R: ProcessRunner,
 {
     async fn list(
         &self,
-        source: &TenantCatalogSource,
+        source: &DatabaseCatalogSource,
         limit: u16,
-    ) -> Result<TenantCatalogPage, TenantCatalogReadError> {
+    ) -> Result<DatabaseCatalogPage, DatabaseCatalogReadError> {
         let prepared = self
             .runtime
             .prepare_existing(
@@ -65,7 +65,7 @@ where
             .map_err(map_client_error)?;
         let (entries, truncated) = parse_catalog(&output, usize::from(limit))?;
 
-        Ok(TenantCatalogPage {
+        Ok(DatabaseCatalogPage {
             profile_name: source.profile_name.clone(),
             entries,
             truncated,
@@ -85,21 +85,21 @@ fn catalog_query(limit: u32) -> String {
 fn parse_catalog(
     output: &[u8],
     limit: usize,
-) -> Result<(Vec<TenantCatalogEntry>, bool), TenantCatalogReadError> {
+) -> Result<(Vec<DatabaseCatalogEntry>, bool), DatabaseCatalogReadError> {
     if output.len() > MAX_CATALOG_OUTPUT_BYTES {
-        return Err(TenantCatalogReadError::InvalidMetadata);
+        return Err(DatabaseCatalogReadError::InvalidMetadata);
     }
     let output =
-        std::str::from_utf8(output).map_err(|_| TenantCatalogReadError::InvalidMetadata)?;
+        std::str::from_utf8(output).map_err(|_| DatabaseCatalogReadError::InvalidMetadata)?;
     let mut entries = Vec::new();
     for row in output.lines().take(limit + 1) {
         if row.contains('\t') {
-            return Err(TenantCatalogReadError::InvalidMetadata);
+            return Err(DatabaseCatalogReadError::InvalidMetadata);
         }
         let database = decode_hex(row, 64)
             .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
-            .ok_or(TenantCatalogReadError::InvalidMetadata)?;
-        entries.push(TenantCatalogEntry { database });
+            .ok_or(DatabaseCatalogReadError::InvalidMetadata)?;
+        entries.push(DatabaseCatalogEntry { database });
     }
     let truncated = entries.len() > limit;
     entries.truncate(limit);
@@ -128,9 +128,9 @@ fn hex_digit(value: u8) -> Option<u8> {
     }
 }
 
-fn map_client_error(error: DockerClientError) -> TenantCatalogReadError {
+fn map_client_error(error: DockerClientError) -> DatabaseCatalogReadError {
     match error {
-        DockerClientError::AuthenticationFailed => TenantCatalogReadError::AuthenticationFailed,
+        DockerClientError::AuthenticationFailed => DatabaseCatalogReadError::AuthenticationFailed,
         DockerClientError::Catalog(_)
         | DockerClientError::ImageUnavailable
         | DockerClientError::ImagePullFailed
@@ -138,17 +138,19 @@ fn map_client_error(error: DockerClientError) -> TenantCatalogReadError {
         | DockerClientError::InvalidImageMetadata
         | DockerClientError::ImageDigestMismatch
         | DockerClientError::VersionProbeFailed
-        | DockerClientError::IncompatibleClientVersion => TenantCatalogReadError::ClientUnavailable,
+        | DockerClientError::IncompatibleClientVersion => {
+            DatabaseCatalogReadError::ClientUnavailable
+        }
         DockerClientError::DockerUnavailable
         | DockerClientError::InvalidDockerContext
         | DockerClientError::Process(_)
         | DockerClientError::SourceNetworkUnavailable
         | DockerClientError::TlsValidationFailed
-        | DockerClientError::ConnectionProbeFailed => TenantCatalogReadError::SourceUnavailable,
-        DockerClientError::QueryFailed => TenantCatalogReadError::SchemaUnavailable,
+        | DockerClientError::ConnectionProbeFailed => DatabaseCatalogReadError::SourceUnavailable,
+        DockerClientError::QueryFailed => DatabaseCatalogReadError::SchemaUnavailable,
         DockerClientError::OptionFile(_)
         | DockerClientError::OptionFilePathNotAbsolute
-        | DockerClientError::InvalidServerMetadata => TenantCatalogReadError::InvalidMetadata,
+        | DockerClientError::InvalidServerMetadata => DatabaseCatalogReadError::InvalidMetadata,
     }
 }
 
@@ -158,13 +160,13 @@ mod tests {
 
     #[test]
     fn parses_only_allowlisted_catalog_fields_and_honors_the_limit() {
-        let output = concat!("64656D6F5F73616761746563\n", "64656D6F5F706F6C796D6572\n");
+        let output = concat!("64656D6F5F61636D65\n", "64656D6F5F676C6F626578\n");
 
         let (entries, truncated) = parse_catalog(output.as_bytes(), 1).unwrap();
 
         assert!(truncated);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].database.as_str(), "demo_sagatec");
+        assert_eq!(entries[0].database.as_str(), "demo_acme");
         let query = catalog_query(101);
         assert!(query.starts_with("SELECT "));
         assert!(query.contains("information_schema.SCHEMATA"));
@@ -198,7 +200,7 @@ mod tests {
         ] {
             assert_eq!(
                 parse_catalog(output, 100).unwrap_err(),
-                TenantCatalogReadError::InvalidMetadata
+                DatabaseCatalogReadError::InvalidMetadata
             );
         }
     }

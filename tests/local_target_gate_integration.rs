@@ -51,13 +51,11 @@ async fn attests_the_exact_local_container_before_authorizing_a_tenant_database(
                 container_id: candidate.id,
                 username: "root".to_owned(),
                 credential_key: key,
-                central_database: DatabaseName::try_from("salt_central").unwrap(),
                 trust: if candidate.managed_by_reprodb {
                     LocalTargetTrust::ReprodbManaged
                 } else {
                     LocalTargetTrust::UserConfirmed
                 },
-                legacy_tenant_database_prefix: None,
             }),
             ..AppConfig::default()
         })
@@ -76,11 +74,11 @@ async fn attests_the_exact_local_container_before_authorizing_a_tenant_database(
         .await
         .unwrap();
     let authorized = guarded
-        .authorize_tenant_database(DatabaseName::try_from("salt_polymer").unwrap())
+        .authorize_database(DatabaseName::try_from("globex_production").unwrap())
         .unwrap();
 
     assert_eq!(authorized.container_name().as_str(), expected);
-    assert_eq!(authorized.database().as_str(), "salt_polymer");
+    assert_eq!(authorized.database().as_str(), "globex_production");
     assert_eq!(authorized.server_version().to_string(), "8.4.4");
 }
 

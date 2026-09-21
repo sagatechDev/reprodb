@@ -16,7 +16,7 @@ O reprodb precisa usar a mesma credencial em `mysql` e `mysqldump`, executados e
 
 O stdin também não pode transportar a senha porque ele carrega o SQL durante o restore.
 
-Option files MySQL são texto puro. Eles não são criptografia at-rest; servem aqui como um transporte temporário de vida curta entre o keyring e o client container.
+Option files MySQL são texto puro. Eles não são criptografia at-rest; servem aqui como um transporte temporário de vida curta entre o credential store e o client container.
 
 ## Decisão
 
@@ -28,7 +28,7 @@ prompt sem echo
   -> OS credential store
 
 execução
-  -> keyring get
+  -> credential store get
   -> SecretString
   -> option file temporário 0600
   -> bind mount read-only
@@ -40,7 +40,7 @@ execução
 
 ### Identidade persistente
 
-O keyring usa:
+O credential store usa:
 
 ```text
 service = com.sagatech.reprodb
@@ -59,7 +59,7 @@ Source e target sempre possuem entradas diferentes, mesmo que hoje usem a mesma 
 
 ### Contrato Rust
 
-Na aplicação, o contrato continua assíncrono para não bloquear o runtime enquanto macOS Keychain ou Linux Secret Service interagem com o sistema:
+Na aplicação, o contrato continua assíncrono para não bloquear o runtime enquanto macOS credential store local ou Linux credential store local interagem com o sistema:
 
 ```rust
 #[async_trait]
@@ -70,7 +70,7 @@ trait CredentialStore: Send + Sync {
 }
 ```
 
-`OsCredentialStore` encapsula a API síncrona do crate `keyring` em `spawn_blocking`. `MemoryCredentialStore` é determinístico e não acessa o SO nos testes.
+`OsCredentialStore` encapsula a API síncrona do crate `credential store` em `spawn_blocking`. `MemoryCredentialStore` é determinístico e não acessa o SO nos testes.
 
 Nenhum dos tipos de erro possui campo com `SecretString` ou texto retornado pelo usuário.
 
@@ -111,10 +111,10 @@ Em `profile add`:
 2. gerar um UUID novo;
 3. salvar a credencial;
 4. persistir o TOML por arquivo parcial + rename;
-5. se a persistência falhar, apagar a nova entrada do keyring;
+5. se a persistência falhar, apagar a nova entrada do credential store;
 6. se o rollback também falhar, reportar a chave órfã sem exibir a senha.
 
-Em `profile remove`, a configuração deixa de referenciar a chave antes da tentativa de apagar o keyring. Falha no delete gera aviso de credencial órfã e instrução de limpeza, sem restaurar um profile parcialmente removido.
+Em `profile remove`, a configuração deixa de referenciar a chave antes da tentativa de apagar o credential store. Falha no delete gera aviso de credencial órfã e instrução de limpeza, sem restaurar um profile parcialmente removido.
 
 ## Evidência experimental
 
@@ -146,14 +146,14 @@ Os testes Rust também verificam `create_new`, modo `0600`, escaping, rejeição
 
 A implementação incorporada ao crate principal adiciona ainda:
 
-- `OsCredentialStore` sobre `keyring` 4, executado via `spawn_blocking`;
+- `OsCredentialStore` sobre `credential store` 4, executado via `spawn_blocking`;
 - `MemoryCredentialStore` sem acesso ao sistema operacional;
 - preflight que impede sobrescrever uma credencial existente;
 - rollback quando a persistência transacional do TOML falha;
 - erro com a chave órfã quando config e rollback falham;
 - guard que remove o diretório privado e o option file no `Drop`.
 
-Em 5 de setembro de 2026, o teste ignorado `native_store_roundtrips_a_temporary_credential` passou localmente no Keychain do macOS, salvando, lendo e apagando uma entrada UUID temporária. O crate também passou em `cargo check` para `x86_64-unknown-linux-gnu` no MSRV; a execução real do mesmo teste permanece pendente em um desktop Linux com Secret Service disponível. Testes comuns usam somente o backend em memória.
+Em 5 de setembro de 2026, o teste ignorado `native_store_roundtrips_a_temporary_credential` passou localmente no credential store local do macOS, salvando, lendo e apagando uma entrada UUID temporária. O crate também passou em `cargo check` para `x86_64-unknown-linux-gnu` no MSRV; a execução real do mesmo teste permanece pendente em um desktop Linux com credential store local disponível. Testes comuns usam somente o backend em memória.
 
 ## Alternativas rejeitadas
 
@@ -171,7 +171,7 @@ Rejeitada porque transforma uma configuração durável e copiável em secret st
 
 ### `mysql_config_editor`
 
-Rejeitada no MVP porque exige outro processo e um login path persistente, adiciona estado implícito e não elimina a necessidade de lifecycle seguro. A ofuscação do login file não substitui o keyring do SO.
+Rejeitada no MVP porque exige outro processo e um login path persistente, adiciona estado implícito e não elimina a necessidade de lifecycle seguro. A ofuscação do login file não substitui o credential store do SO.
 
 ### Prompt do próprio client
 
@@ -186,7 +186,7 @@ Rejeitado porque o MVP usa containers standalone locais e não deve introduzir S
 - a senha existe brevemente em memória e em texto puro num arquivo `0600`; isso é compatível com o threat model local, mas precisa de cleanup rigoroso;
 - controle total da máquina continua permitindo captura do secret;
 - crash recuperável é limpo pelo guard; `SIGKILL` e queda da máquina exigem limpeza oportunista de temporários antigos no startup;
-- testes de macOS Keychain e Linux Secret Service continuam pertencendo à RDB-022;
+- testes de macOS credential store local e Linux credential store local continuam pertencendo à RDB-022;
 - o backend Linux ausente ou bloqueado precisa produzir erro acionável no `doctor`, nunca fallback silencioso para arquivo.
 
 ## Referências
@@ -194,4 +194,4 @@ Rejeitado porque o MVP usa containers standalone locais e não deve introduzir S
 - [MySQL 8.4 — Using Option Files](https://dev.mysql.com/doc/refman/8.4/en/option-files.html)
 - [MySQL 8.4 — Options that affect option-file handling](https://dev.mysql.com/doc/refman/8.4/en/option-file-options.html)
 - [secrecy 0.10 — SecretString](https://docs.rs/secrecy/0.10.3/secrecy/type.SecretString.html)
-- [keyring](https://docs.rs/keyring/latest/keyring/)
+- [credential store](https://docs.rs/credential store/latest/credential store/)

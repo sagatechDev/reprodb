@@ -3,6 +3,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use crate::domain::MysqlTlsMode;
 
 pub mod cache;
+pub mod database;
 pub mod doctor;
 pub mod dump;
 pub mod output;
@@ -12,7 +13,6 @@ pub mod prompt;
 pub mod pull;
 pub mod restore;
 pub mod setup;
-pub mod tenant;
 
 pub use output::ColorChoice;
 
@@ -40,7 +40,7 @@ pub enum Commands {
     Doctor(PreviewArgs),
 
     /// Create a managed cached database dump without restoring it.
-    Dump(TenantArgs),
+    Dump(DatabaseArgs),
 
     /// Restore a managed dump into the configured local target.
     Restore(RestoreArgs),
@@ -52,8 +52,8 @@ pub enum Commands {
     Cache(CacheArgs),
 
     /// Inspect databases available in the active source profile.
-    #[command(visible_alias = "tenant")]
-    Database(TenantCommandArgs),
+    #[command(visible_alias = "db")]
+    Database(DatabaseCommandArgs),
 }
 
 impl Commands {
@@ -223,17 +223,17 @@ pub struct ProfileRemoveArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct TenantArgs {
-    /// Source database name, tenant ID or domain alias.
-    #[arg(value_name = "TENANT")]
-    pub tenant: String,
+pub struct DatabaseArgs {
+    /// Database name on the active source profile.
+    #[arg(value_name = "DATABASE")]
+    pub database: String,
 }
 
 #[derive(Debug, Args)]
 pub struct RestoreArgs {
-    /// Database identity stored in the managed dump.
-    #[arg(value_name = "TENANT")]
-    pub tenant: String,
+    /// Source database name stored in the managed dump.
+    #[arg(value_name = "DATABASE")]
+    pub database: String,
 
     /// ID of a dump managed by reprodb.
     #[arg(long, value_name = "ID")]
@@ -244,23 +244,23 @@ pub struct RestoreArgs {
     pub target: Option<String>,
 
     /// Restore into this local database instead of the source database name.
-    #[arg(long, value_name = "DATABASE")]
-    pub database: Option<String>,
+    #[arg(long = "database", value_name = "DATABASE")]
+    pub target_database: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct PullArgs {
-    /// Source database name, tenant ID or domain alias.
-    #[arg(value_name = "TENANT")]
-    pub tenant: String,
+    /// Database name on the active source profile.
+    #[arg(value_name = "DATABASE")]
+    pub database: String,
 
     /// Restore into this configured local MySQL container.
     #[arg(long, value_name = "CONTAINER")]
     pub target: Option<String>,
 
     /// Restore into this local database instead of the source database name.
-    #[arg(long, value_name = "DATABASE")]
-    pub database: Option<String>,
+    #[arg(long = "database", value_name = "DATABASE")]
+    pub target_database: Option<String>,
 
     /// Ignore a valid cache entry and create a fresh dump.
     #[arg(long)]
@@ -278,21 +278,21 @@ pub struct CacheArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct TenantCommandArgs {
+pub struct DatabaseCommandArgs {
     #[command(subcommand)]
-    pub command: TenantCommands,
+    pub command: DatabaseCommands,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum TenantCommands {
+pub enum DatabaseCommands {
     /// List non-administrative databases without changing the source.
-    List(TenantListArgs),
+    List(DatabaseListArgs),
 }
 
 #[derive(Debug, Args)]
-pub struct TenantListArgs {
+pub struct DatabaseListArgs {
     /// Maximum number of databases to return.
-    #[arg(long, default_value_t = crate::application::DEFAULT_TENANT_LIST_LIMIT)]
+    #[arg(long, default_value_t = crate::application::DEFAULT_DATABASE_LIST_LIMIT)]
     pub limit: u16,
 }
 
@@ -305,7 +305,7 @@ pub enum CacheCommands {
     Clean,
 
     /// Remove cached dumps for one tenant.
-    Purge(TenantArgs),
+    Purge(DatabaseArgs),
 }
 
 #[cfg(test)]
@@ -316,15 +316,15 @@ mod tests {
 
     #[test]
     fn parses_pull_with_fresh() {
-        let cli = Cli::try_parse_from(["reprodb", "pull", "sagatec", "--fresh"]).unwrap();
+        let cli = Cli::try_parse_from(["reprodb", "pull", "acme", "--fresh"]).unwrap();
 
         let Commands::Pull(arguments) = cli.command else {
             panic!("expected pull command");
         };
-        assert_eq!(arguments.tenant, "sagatec");
+        assert_eq!(arguments.database, "acme");
         assert!(arguments.fresh);
         assert!(arguments.target.is_none());
-        assert!(arguments.database.is_none());
+        assert!(arguments.target_database.is_none());
         assert!(!arguments.preview);
         assert_eq!(cli.color, ColorChoice::Auto);
     }
@@ -338,8 +338,8 @@ mod tests {
 
     #[test]
     fn parses_profile_add_preview() {
-        let cli =
-            Cli::try_parse_from(["reprodb", "profile", "add", "salt-local", "--preview"]).unwrap();
+        let cli = Cli::try_parse_from(["reprodb", "profile", "add", "local-source", "--preview"])
+            .unwrap();
 
         let Commands::Profile(arguments) = cli.command else {
             panic!("expected profile command");
@@ -347,7 +347,7 @@ mod tests {
         let ProfileCommands::Add(arguments) = arguments.command else {
             panic!("expected profile add command");
         };
-        assert_eq!(arguments.name, "salt-local");
+        assert_eq!(arguments.name, "local-source");
         assert!(arguments.preview);
         assert!(!arguments.non_interactive);
     }
@@ -416,15 +416,15 @@ mod tests {
     }
 
     #[test]
-    fn parses_database_list_and_its_tenant_alias_with_a_bounded_limit() {
+    fn parses_database_list_and_its_alias_with_a_bounded_limit() {
         let canonical =
             Cli::try_parse_from(["reprodb", "database", "list", "--limit", "25"]).unwrap();
         assert!(matches!(canonical.command, Commands::Database(_)));
-        let cli = Cli::try_parse_from(["reprodb", "tenant", "list", "--limit", "25"]).unwrap();
+        let cli = Cli::try_parse_from(["reprodb", "db", "list", "--limit", "25"]).unwrap();
         let Commands::Database(arguments) = cli.command else {
             panic!("expected database command");
         };
-        let TenantCommands::List(arguments) = arguments.command;
+        let DatabaseCommands::List(arguments) = arguments.command;
         assert_eq!(arguments.limit, 25);
     }
 
@@ -495,16 +495,16 @@ mod tests {
 
     #[test]
     fn parses_restore_with_managed_dump_id() {
-        let cli = Cli::try_parse_from(["reprodb", "restore", "sagatec", "--dump-id", "dump-123"])
-            .unwrap();
+        let cli =
+            Cli::try_parse_from(["reprodb", "restore", "acme", "--dump-id", "dump-123"]).unwrap();
 
         let Commands::Restore(arguments) = cli.command else {
             panic!("expected restore command");
         };
-        assert_eq!(arguments.tenant, "sagatec");
+        assert_eq!(arguments.database, "acme");
         assert_eq!(arguments.dump_id, "dump-123");
         assert!(arguments.target.is_none());
-        assert!(arguments.database.is_none());
+        assert!(arguments.target_database.is_none());
     }
 
     #[test]
@@ -512,36 +512,42 @@ mod tests {
         let pull = Cli::try_parse_from([
             "reprodb",
             "pull",
-            "sagatec",
+            "acme",
             "--database",
-            "salt_sagatec_debug",
+            "acme_production_debug",
         ])
         .unwrap();
         let Commands::Pull(pull) = pull.command else {
             panic!("expected pull command")
         };
-        assert_eq!(pull.database.as_deref(), Some("salt_sagatec_debug"));
+        assert_eq!(
+            pull.target_database.as_deref(),
+            Some("acme_production_debug")
+        );
 
         let restore = Cli::try_parse_from([
             "reprodb",
             "restore",
-            "sagatec",
+            "acme",
             "--dump-id",
             "550e8400-e29b-41d4-a716-446655440000",
             "--database",
-            "salt_sagatec_debug",
+            "acme_production_debug",
         ])
         .unwrap();
         let Commands::Restore(restore) = restore.command else {
             panic!("expected restore command")
         };
-        assert_eq!(restore.database.as_deref(), Some("salt_sagatec_debug"));
+        assert_eq!(
+            restore.target_database.as_deref(),
+            Some("acme_production_debug")
+        );
     }
 
     #[test]
     fn parses_a_configured_target_for_pull_and_restore() {
-        let pull = Cli::try_parse_from(["reprodb", "pull", "sagatec", "--target", "mysql-target"])
-            .unwrap();
+        let pull =
+            Cli::try_parse_from(["reprodb", "pull", "acme", "--target", "mysql-target"]).unwrap();
         let Commands::Pull(pull) = pull.command else {
             panic!("expected pull command")
         };
@@ -550,7 +556,7 @@ mod tests {
         let restore = Cli::try_parse_from([
             "reprodb",
             "restore",
-            "sagatec",
+            "acme",
             "--dump-id",
             "550e8400-e29b-41d4-a716-446655440000",
             "--target",

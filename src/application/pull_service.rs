@@ -4,15 +4,15 @@ use thiserror::Error;
 
 use crate::{
     application::{
-        Clock, ClockError, DumpPreflightGateway, DumpService, DumpServiceError, DumpTenantResolver,
-        LocalTargetAttestor, LocalTenantWriter, RestoreProgressObserver, RestoreReady,
-        RestoreRequest, RestoreService, RestoreServiceError, SystemClock,
+        Clock, ClockError, DumpPreflightGateway, DumpService, DumpServiceError,
+        LocalTargetAttestor, RestoreProgressObserver, RestoreReady, RestoreRequest, RestoreService,
+        RestoreServiceError, SystemClock,
     },
-    domain::{ContainerName, DumpId, MYSQL_8_DUMP_POLICY_VERSION, TenantLookup},
+    domain::{ContainerName, DatabaseName, DumpId, MYSQL_8_DUMP_POLICY_VERSION},
     infrastructure::{
         artifact_store::LocalArtifactStore,
         cache::{
-            CacheError, CacheLookupResult, CacheMissReason, CacheTenantLookup,
+            CacheDatabaseLookup, CacheError, CacheLookupResult, CacheMissReason,
             DEFAULT_CACHE_TTL_SECONDS, LocalCacheValidator,
         },
         compression::{CompressionProgressObserver, NoCompressionProgress},
@@ -86,15 +86,13 @@ pub struct PullService<C = SystemClock> {
 }
 
 pub struct PullDumpDependencies<'a> {
-    pub tenant_resolver: &'a dyn DumpTenantResolver,
     pub preflight: &'a dyn DumpPreflightGateway,
     pub executor: &'a dyn DumpExecutor,
 }
 
-pub struct PullRestoreDependencies<'a, RE, W> {
+pub struct PullRestoreDependencies<'a, RE> {
     pub target_attestor: &'a dyn LocalTargetAttestor,
     pub executor: RE,
-    pub tenant_writer: W,
     pub target_selector: &'a dyn PullTargetSelector,
     pub database_selector: &'a dyn PullDatabaseSelector,
 }
@@ -144,17 +142,16 @@ where
         self
     }
 
-    pub async fn pull<RE, W>(
+    pub async fn pull<RE>(
         &self,
         credentials: &dyn CredentialStore,
         dump: PullDumpDependencies<'_>,
-        restore: PullRestoreDependencies<'_, RE, W>,
-        tenant: TenantLookup,
+        restore: PullRestoreDependencies<'_, RE>,
+        database: DatabaseName,
         fresh: bool,
     ) -> Result<PullReady, PullServiceError>
     where
         RE: RestoreExecutor,
-        W: LocalTenantWriter,
     {
         let total_started = std::time::Instant::now();
         let config = self.repository.load()?;
@@ -183,9 +180,9 @@ where
         self.progress.update(PullProgress::CheckingCache);
         let cache =
             LocalCacheValidator::new(LocalArtifactStore::new(self.repository.paths().cache_dir()))
-                .lookup_by_tenant(&CacheTenantLookup {
+                .lookup_by_database(&CacheDatabaseLookup {
                     profile: profile_name,
-                    tenant: &tenant,
+                    database: &database,
                     source_fingerprint: source_profile_fingerprint(profile_name, profile),
                     policy_version: MYSQL_8_DUMP_POLICY_VERSION,
                     now_unix_seconds: now,
@@ -214,13 +211,7 @@ where
                 self.progress.update(PullProgress::CreatingDump);
                 let created = DumpService::with_clock(self.repository.clone(), self.clock.clone())
                     .with_progress(Arc::clone(&self.compression_progress))
-                    .create(
-                        credentials,
-                        dump.tenant_resolver,
-                        dump.preflight,
-                        dump.executor,
-                        tenant.clone(),
-                    )
+                    .create(credentials, dump.preflight, dump.executor, database.clone())
                     .await?;
                 self.progress
                     .update(PullProgress::DumpReady(created.dump_id));
@@ -247,9 +238,8 @@ where
                 credentials,
                 restore.target_attestor,
                 restore.executor,
-                restore.tenant_writer,
                 RestoreRequest {
-                    tenant,
+                    database,
                     dump_id,
                     target_container: Some(target_container),
                     target_database: Some(target_database),
@@ -342,21 +332,20 @@ mod tests {
     use crate::{
         application::{
             AuthorizedLocalTarget, DumpSource, LocalTargetAttestation, LocalTargetAttestationError,
-            LocalTargetAttestationRequest, LocalTenantWriteError,
+            LocalTargetAttestationRequest,
         },
         domain::{
             ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseEncoding,
             DatabaseName, DatabaseObjectCounts, DefinerObjectCounts, DumpArtifactCompletion,
-            DumpArtifactContext, DumpPreflight, GtidMode, LocalTenantFeatures, Mysql8DumpPolicy,
-            MysqlTlsMode, MysqlVersion, ProfileName, ResolvedTenant, StorageEngineUsage, TenantId,
-            TenantMatch, TenantResolutionError,
+            DumpArtifactContext, DumpPreflight, GtidMode, Mysql8DumpPolicy, MysqlTlsMode,
+            MysqlVersion, ProfileName, StorageEngineUsage,
         },
         infrastructure::{
             artifact_store::LocalArtifactStore,
             compression::{NoCompressionProgress, ZstdCompressor},
             config::{
                 AppConfig, AppPaths, ClientRuntimeConfig, LocalTargetConfig, LocalTargetTrust,
-                MysqlClientConfig, MysqlFamily, SourceProfileConfig, TenantResolverConfig,
+                MysqlClientConfig, MysqlFamily, SourceProfileConfig,
             },
             credentials::{CredentialStore, MemoryCredentialStore},
             mysql::{
@@ -380,18 +369,6 @@ mod tests {
 
     struct UnusedDump {
         calls: Arc<AtomicUsize>,
-    }
-
-    #[async_trait]
-    impl DumpTenantResolver for UnusedDump {
-        async fn resolve(
-            &self,
-            _source: &DumpSource<'_>,
-            _lookup: &TenantLookup,
-        ) -> Result<ResolvedTenant, TenantResolutionError> {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            panic!("a cache hit must not resolve the tenant on the source")
-        }
     }
 
     #[async_trait]
@@ -421,24 +398,6 @@ mod tests {
 
     struct SuccessfulDump {
         calls: Arc<AtomicUsize>,
-    }
-
-    #[async_trait]
-    impl DumpTenantResolver for SuccessfulDump {
-        async fn resolve(
-            &self,
-            _source: &DumpSource<'_>,
-            lookup: &TenantLookup,
-        ) -> Result<ResolvedTenant, TenantResolutionError> {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            assert_eq!(lookup.as_str(), "sagatec");
-            Ok(ResolvedTenant {
-                tenant_id: TenantId::try_from("salt_sagatec").unwrap(),
-                database: DatabaseName::try_from("salt_sagatec").unwrap(),
-                matched_by: TenantMatch::Domain,
-                features: LocalTenantFeatures::default(),
-            })
-        }
     }
 
     #[async_trait]
@@ -547,19 +506,6 @@ mod tests {
         }
     }
 
-    struct FakeWriter;
-
-    #[async_trait]
-    impl LocalTenantWriter for FakeWriter {
-        async fn register(
-            &self,
-            _target: &AuthorizedLocalTarget,
-            _registration: &crate::domain::LocalTenantRegistration,
-        ) -> Result<(), LocalTenantWriteError> {
-            Ok(())
-        }
-    }
-
     struct RecordingProgress(Arc<Mutex<Vec<PullProgress>>>);
 
     impl PullProgressObserver for RecordingProgress {
@@ -600,7 +546,7 @@ mod tests {
     ) -> (ConfigRepository, MemoryCredentialStore, DumpId) {
         let paths = AppPaths::new(root.join("config"), root.join("cache"), root.join("data"));
         let repository = ConfigRepository::new(paths.clone());
-        let profile_name = ProfileName::try_from("salt-local").unwrap();
+        let profile_name = ProfileName::try_from("local-source").unwrap();
         let source_key = CredentialKey::new(CredentialScope::Source);
         let target_key = CredentialKey::new(CredentialScope::Target);
         let client = ClientCatalog::resolve("8.4").unwrap();
@@ -628,10 +574,6 @@ mod tests {
             client: MysqlClientConfig {
                 image: client.image().to_owned(),
             },
-            tenant_resolver: TenantResolverConfig::SaltCentral {
-                central_database: DatabaseName::try_from("salt_central").unwrap(),
-                allow_domain_lookup: true,
-            },
         };
         let fingerprint = source_profile_fingerprint(&profile_name, &profile);
         repository
@@ -647,9 +589,7 @@ mod tests {
                     container_id: ContainerId::try_from("a".repeat(64)).unwrap(),
                     username: "root".to_owned(),
                     credential_key: target_key,
-                    central_database: DatabaseName::try_from("salt_central").unwrap(),
                     trust: LocalTargetTrust::UserConfirmed,
-                    legacy_tenant_database_prefix: None,
                 }),
                 profiles: BTreeMap::from([(profile_name.clone(), profile)]),
                 ..AppConfig::default()
@@ -661,9 +601,9 @@ mod tests {
             .await
             .unwrap();
 
-        let tenant_id = TenantId::try_from("salt_sagatec").unwrap();
+        let database = DatabaseName::try_from("acme_production").unwrap();
         let stage = LocalArtifactStore::new(paths.cache_dir())
-            .begin(&profile_name, &tenant_id)
+            .begin(&profile_name, &database)
             .unwrap();
         let dump_id = stage.dump_id();
         let metrics = ZstdCompressor::default()
@@ -677,9 +617,7 @@ mod tests {
         let metadata = crate::domain::DumpArtifactMetadata::try_new(
             dump_id,
             DumpArtifactContext {
-                tenant_lookup: TenantLookup::try_from("sagatec").unwrap(),
-                tenant_id,
-                database: DatabaseName::try_from("salt_sagatec").unwrap(),
+                database: DatabaseName::try_from("acme_production").unwrap(),
                 profile: profile_name,
                 source_fingerprint: fingerprint,
                 source_server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
@@ -690,7 +628,6 @@ mod tests {
                     "utf8mb4_0900_ai_ci".to_owned(),
                 )
                 .unwrap(),
-                local_tenant_features: LocalTenantFeatures::default(),
                 policy_version: MYSQL_8_DUMP_POLICY_VERSION,
             },
             DumpArtifactCompletion {
@@ -726,18 +663,16 @@ mod tests {
             .pull(
                 &credentials,
                 PullDumpDependencies {
-                    tenant_resolver: &source,
                     preflight: &source,
                     executor: &source,
                 },
                 PullRestoreDependencies {
                     target_attestor: &FakeAttestor,
                     executor: FakeRestore,
-                    tenant_writer: FakeWriter,
                     target_selector: &DefaultTargetSelector,
                     database_selector: &TestDatabaseSelector(None),
                 },
-                TenantLookup::try_from("sagatec").unwrap(),
+                DatabaseName::try_from("acme_production").unwrap(),
                 false,
             )
             .await
@@ -758,7 +693,7 @@ mod tests {
                     dump_id: cached,
                     age_seconds: 99
                 }
-            ] if profile.as_str() == "salt-local" && *cached == dump_id
+            ] if profile.as_str() == "local-source" && *cached == dump_id
         ));
     }
 
@@ -794,20 +729,18 @@ mod tests {
             .pull(
                 &credentials,
                 PullDumpDependencies {
-                    tenant_resolver: &source,
                     preflight: &source,
                     executor: &source,
                 },
                 PullRestoreDependencies {
                     target_attestor: &FakeAttestor,
                     executor: FakeRestore,
-                    tenant_writer: FakeWriter,
                     target_selector: &DefaultTargetSelector,
                     database_selector: &TestDatabaseSelector(Some(
-                        DatabaseName::try_from("salt_sagatec_debug").unwrap(),
+                        DatabaseName::try_from("acme_production_debug").unwrap(),
                     )),
                 },
-                TenantLookup::try_from("sagatec").unwrap(),
+                DatabaseName::try_from("acme_production").unwrap(),
                 true,
             )
             .await
@@ -815,7 +748,10 @@ mod tests {
 
         assert_eq!(ready.cache, PullCacheUse::Created);
         assert_ne!(ready.restored.plan.dump_id, cached_dump_id);
-        assert_eq!(ready.restored.plan.database.as_str(), "salt_sagatec_debug");
-        assert_eq!(source_calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+        assert_eq!(
+            ready.restored.plan.database.as_str(),
+            "acme_production_debug"
+        );
+        assert_eq!(source_calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 }

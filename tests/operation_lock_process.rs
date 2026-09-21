@@ -22,7 +22,7 @@ const READY_FILE: &str = "child-ready";
 fn key() -> OperationLockKey {
     OperationLockKey::source(
         &ProfileName::try_from("local-source").unwrap(),
-        &DatabaseName::try_from("salt_sagatec").unwrap(),
+        &DatabaseName::try_from("acme_production").unwrap(),
     )
 }
 

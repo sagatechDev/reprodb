@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use directories::{BaseDirs, ProjectDirs};
+use directories::BaseDirs;
 use fs4::TryLockError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -13,8 +13,8 @@ use tempfile::NamedTempFile;
 use thiserror::Error;
 
 use crate::domain::{
-    ContainerId, ContainerName, CredentialKey, CredentialScope, DatabaseName,
-    MysqlTlsMaterialPaths, MysqlTlsMode, PatternTenantResolver, ProfileName, Sha256Digest,
+    ContainerId, ContainerName, CredentialKey, CredentialScope, MysqlTlsMaterialPaths,
+    MysqlTlsMode, ProfileName, Sha256Digest,
 };
 use crate::infrastructure::mysql::{ClientCatalog, ClientCatalogError};
 
@@ -30,7 +30,6 @@ pub struct AppPaths {
     config_dir: PathBuf,
     cache_dir: PathBuf,
     data_dir: PathBuf,
-    legacy_config_file: Option<PathBuf>,
 }
 
 impl AppPaths {
@@ -44,10 +43,9 @@ impl AppPaths {
         }
 
         let base = BaseDirs::new().ok_or(ConfigError::HomeDirectoryUnavailable)?;
-        let mut paths = Self::from_root(base.home_dir().join(REPRODB_HOME_DIRECTORY));
-        paths.legacy_config_file = ProjectDirs::from("com", "Sagatech", "reprodb")
-            .map(|directories| directories.config_dir().join(CONFIG_FILE_NAME));
-        Ok(paths)
+        Ok(Self::from_root(
+            base.home_dir().join(REPRODB_HOME_DIRECTORY),
+        ))
     }
 
     pub fn from_root(root: impl Into<PathBuf>) -> Self {
@@ -56,7 +54,6 @@ impl AppPaths {
             config_dir: root.clone(),
             cache_dir: root.join("cache"),
             data_dir: root.join("data"),
-            legacy_config_file: None,
         }
     }
 
@@ -69,7 +66,6 @@ impl AppPaths {
             config_dir: config_dir.into(),
             cache_dir: cache_dir.into(),
             data_dir: data_dir.into(),
-            legacy_config_file: None,
         }
     }
 
@@ -91,18 +87,6 @@ impl AppPaths {
 
     pub fn config_lock_file(&self) -> PathBuf {
         self.config_dir.join(LOCK_FILE_NAME)
-    }
-
-    fn config_file_for_read(&self) -> PathBuf {
-        let current = self.config_file();
-        if current.exists() {
-            return current;
-        }
-        self.legacy_config_file
-            .as_ref()
-            .filter(|path| path.is_file())
-            .cloned()
-            .unwrap_or(current)
     }
 }
 
@@ -250,11 +234,8 @@ pub struct LocalTargetConfig {
     pub container_id: ContainerId,
     pub username: String,
     pub credential_key: CredentialKey,
-    pub central_database: DatabaseName,
     #[serde(default)]
     pub trust: LocalTargetTrust,
-    #[serde(default, rename = "tenant_database_prefix", skip_serializing)]
-    pub legacy_tenant_database_prefix: Option<String>,
 }
 
 impl LocalTargetConfig {
@@ -298,7 +279,6 @@ pub struct SourceProfileConfig {
     #[serde(default, skip_serializing_if = "MysqlTlsMaterialPaths::is_empty")]
     pub tls_material: MysqlTlsMaterialPaths,
     pub client: MysqlClientConfig,
-    pub tenant_resolver: TenantResolverConfig,
 }
 
 impl SourceProfileConfig {
@@ -340,7 +320,7 @@ impl SourceProfileConfig {
                 });
             }
         }
-        self.tenant_resolver.validate()
+        Ok(())
     }
 }
 
@@ -397,20 +377,6 @@ pub fn source_profile_fingerprint(
     hash_field(&mut hasher, profile.tls_mode.option_value().as_bytes());
     hash_field(&mut hasher, profile.client.image.as_bytes());
     hash_field(&mut hasher, &[u8::from(profile.production)]);
-    match &profile.tenant_resolver {
-        TenantResolverConfig::SaltCentral {
-            central_database,
-            allow_domain_lookup,
-        } => {
-            hash_field(&mut hasher, b"salt-central");
-            hash_field(&mut hasher, central_database.as_str().as_bytes());
-            hash_field(&mut hasher, &[u8::from(*allow_domain_lookup)]);
-        }
-        TenantResolverConfig::Pattern { pattern } => {
-            hash_field(&mut hasher, b"pattern");
-            hash_field(&mut hasher, pattern.as_bytes());
-        }
-    }
     Sha256Digest::from_bytes(hasher.finalize().into())
 }
 
@@ -428,35 +394,6 @@ pub struct MysqlClientConfig {
 impl MysqlClientConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         validate_plain_text("profile.client.image", &self.image, 512)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum TenantResolverConfig {
-    SaltCentral {
-        central_database: DatabaseName,
-        #[serde(default)]
-        allow_domain_lookup: bool,
-    },
-    Pattern {
-        pattern: String,
-    },
-}
-
-impl TenantResolverConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        match self {
-            Self::SaltCentral { .. } => Ok(()),
-            Self::Pattern { pattern } => {
-                validate_plain_text("profile.tenant_resolver.pattern", pattern, 128)?;
-                PatternTenantResolver::new(pattern).map_err(|_| ConfigError::InvalidField {
-                    field: "profile.tenant_resolver.pattern",
-                    reason: "must contain exactly one `{tenant}` and only database-safe literals",
-                })?;
-                Ok(())
-            }
-        }
     }
 }
 
@@ -520,7 +457,7 @@ impl ConfigRepository {
     }
 
     pub fn load(&self) -> Result<AppConfig, ConfigError> {
-        let path = self.paths.config_file_for_read();
+        let path = self.paths.config_file();
         let file = match File::open(&path) {
             Ok(file) => file,
             Err(source) if source.kind() == io::ErrorKind::NotFound => {
@@ -793,7 +730,7 @@ mod tests {
     }
 
     fn valid_config() -> AppConfig {
-        let profile_name = ProfileName::try_from("salt-local").unwrap();
+        let profile_name = ProfileName::try_from("local-source").unwrap();
         let mut profiles = BTreeMap::new();
         profiles.insert(
             profile_name.clone(),
@@ -816,10 +753,6 @@ mod tests {
                     )
                     .to_owned(),
                 },
-                tenant_resolver: TenantResolverConfig::SaltCentral {
-                    central_database: DatabaseName::try_from("salt_central").unwrap(),
-                    allow_domain_lookup: true,
-                },
             },
         );
 
@@ -833,9 +766,7 @@ mod tests {
                 credential_key: "target:550e8400-e29b-41d4-a716-446655440001"
                     .parse()
                     .unwrap(),
-                central_database: DatabaseName::try_from("salt_central").unwrap(),
                 trust: LocalTargetTrust::UserConfirmed,
-                legacy_tenant_database_prefix: None,
             }),
             profiles,
             ..AppConfig::default()
@@ -859,15 +790,6 @@ mod tests {
         let mut host_changed = profile.clone();
         host_changed.host = "db.internal".to_owned();
         assert_ne!(source_profile_fingerprint(name, &host_changed), original);
-
-        let mut resolver_changed = profile.clone();
-        resolver_changed.tenant_resolver = TenantResolverConfig::Pattern {
-            pattern: "{tenant}_data".to_owned(),
-        };
-        assert_ne!(
-            source_profile_fingerprint(name, &resolver_changed),
-            original
-        );
     }
 
     #[test]
@@ -1117,28 +1039,6 @@ mod tests {
     }
 
     #[test]
-    fn validates_pattern_resolvers_before_persisting_configuration() {
-        let temp = TempDir::new().unwrap();
-        let repository = test_repository(&temp);
-        let mut config = valid_config();
-        config.profiles.values_mut().next().unwrap().tenant_resolver =
-            TenantResolverConfig::Pattern {
-                pattern: "salt_{tenant}_{tenant}".to_owned(),
-            };
-
-        let error = repository.save(&config).unwrap_err();
-
-        assert!(matches!(
-            error,
-            ConfigError::InvalidField {
-                field: "profile.tenant_resolver.pattern",
-                ..
-            }
-        ));
-        assert!(!repository.paths().config_file().exists());
-    }
-
-    #[test]
     fn local_target_and_client_runtime_must_share_a_docker_context() {
         let temp = TempDir::new().unwrap();
         let repository = test_repository(&temp);
@@ -1241,27 +1141,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn legacy_native_configuration_is_read_until_the_new_home_is_written() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path().join(".reprodb");
-        let legacy = temp.path().join("legacy/reprodb.toml");
-        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-        fs::write(&legacy, "schema_version = 1\n").unwrap();
-        let mut paths = AppPaths::from_root(&root);
-        paths.legacy_config_file = Some(legacy);
-        let repository = ConfigRepository::new(paths);
-
-        assert_eq!(repository.load().unwrap(), AppConfig::default());
-        assert!(!repository.paths().config_file().exists());
-
-        let config = valid_config();
-        repository.save(&config).unwrap();
-        assert_eq!(repository.load().unwrap(), config);
-        assert!(repository.paths().config_file().exists());
-    }
-
-    #[cfg(unix)]
     #[test]
     fn stores_configuration_with_private_unix_permissions() {
         use std::os::unix::fs::PermissionsExt;

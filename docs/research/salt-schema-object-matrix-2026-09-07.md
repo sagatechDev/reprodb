@@ -1,5 +1,7 @@
 # Matriz de objetos e privilégios do Salt — 2026-09-07
 
+> **Histórico.** Pesquisa datada, anterior à remoção do conceito de tenant. Mantida como registro.
+
 > Levantamento local para a RDB-072. Nenhuma conexão com produção foi feita e nenhum dado de negócio foi lido ou persistido.
 
 ## Evidência observada
@@ -8,8 +10,8 @@ O container local `mysql-8` usa MySQL `8.4.4`, `GTID_MODE=OFF` e binary log ativ
 
 | Schema | Tabelas | Engines | Views | Triggers | Routines | Events |
 |---|---:|---|---:|---:|---:|---:|
-| `salt_sagatec` | 519 | InnoDB | 0 | 0 | 0 | 0 |
-| `salt_polymer` | 504 | InnoDB | 0 | 0 | 0 | 0 |
+| `acme_production` | 519 | InnoDB | 0 | 0 | 0 | 0 |
+| `globex_production` | 504 | InnoDB | 0 | 0 | 0 | 0 |
 | Demais 10 schemas locais | 4.327 | InnoDB | 0 | 0 | 0 | 0 |
 | **Total** | **5.350** | **100% InnoDB** | **0** | **0** | **0** | **0** |
 
@@ -41,7 +43,7 @@ Exemplo para um tenant piloto, executado por um DBA e não pelo reprodb:
 
 ```sql
 GRANT SELECT, SHOW VIEW, TRIGGER ON `salt_central`.* TO 'reprodb_reader'@'%';
-GRANT SELECT, SHOW VIEW, TRIGGER ON `salt_sagatec`.* TO 'reprodb_reader'@'%';
+GRANT SELECT, SHOW VIEW, TRIGGER ON `acme_production`.* TO 'reprodb_reader'@'%';
 ```
 
 Não são necessários para a combinação atual:
