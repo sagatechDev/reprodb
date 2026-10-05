@@ -40,6 +40,9 @@ pub struct PushPlan {
     pub destination_user: String,
     pub database: DatabaseName,
     pub destination_version: MysqlVersion,
+    /// The destination runs an older series than the dump (accepted with
+    /// `--allow-downgrade`).
+    pub downgrade: bool,
 }
 
 /// Every choice `push` needs from the user.
@@ -48,6 +51,17 @@ pub struct PushPlan {
 /// answer decides what is written to a server other than the local target.
 pub trait PushSelector: Send + Sync {
     fn profile(&self, choices: &[RemoteProfileChoice]) -> Result<ProfileName, PushSelectionError>;
+
+    /// Asked when the chosen profile was never allowed to receive pushes.
+    /// The answer is remembered only if the push is confirmed at the end.
+    fn allow_push(&self, choice: &RemoteProfileChoice) -> Result<bool, PushSelectionError>;
+
+    /// Asked when the destination runs an older series than the dump.
+    fn accept_downgrade(
+        &self,
+        dump: MysqlVersion,
+        destination: MysqlVersion,
+    ) -> Result<bool, PushSelectionError>;
 
     fn dump(
         &self,
@@ -152,9 +166,19 @@ impl PushService {
             return Err(PushServiceError::NoEligibleProfile);
         }
         let profile = selector.profile(&profiles)?;
+        let needs_consent = profiles
+            .iter()
+            .find(|choice| choice.profile == profile && !choice.accepts_push);
+        if let Some(choice) = needs_consent
+            && !selector.allow_push(choice)?
+        {
+            return Ok(PushOutcome::Cancelled);
+        }
         // The destination is attested before any dump work: a wrong password
         // or an unreachable sandbox should not cost a production export.
-        let guarded = gate.verify(credentials, probe, &profile).await?;
+        let guarded = gate
+            .verify(credentials, probe, &profile, needs_consent.is_some())
+            .await?;
 
         let choices = RestoreService::new(self.repository.clone()).dump_choices(&database)?;
         let dump_id = match selector.dump(&database, &choices)? {
@@ -180,7 +204,17 @@ impl PushService {
         let metadata = artifact.metadata();
         let target_database = selector.database(&metadata.database)?;
         let source_accepts_push = gate.source_accepts_push(metadata)?;
-        let target = guarded.authorize(target_database, metadata, source_accepts_push)?;
+        let allow_downgrade = guarded.is_downgrade_for(metadata)
+            && selector.accept_downgrade(metadata.source_version, guarded.server_version())?;
+        if guarded.is_downgrade_for(metadata) && !allow_downgrade {
+            return Ok(PushOutcome::Cancelled);
+        }
+        let target = guarded.authorize(
+            target_database,
+            metadata,
+            source_accepts_push,
+            allow_downgrade,
+        )?;
         let plan = PushPlan {
             source_profile: metadata.profile.clone(),
             source_database: metadata.database.clone(),
@@ -192,9 +226,13 @@ impl PushService {
             destination_user: target.username().to_owned(),
             database: target.database().clone(),
             destination_version: target.server_version(),
+            downgrade: target.downgrade(),
         };
         if !selector.confirm(&plan)? {
             return Ok(PushOutcome::Cancelled);
+        }
+        if needs_consent.is_some() {
+            gate.allow_push(target.profile())?;
         }
 
         let _lock = OperationLockManager::new(self.repository.paths().cache_dir()).try_acquire(
@@ -217,7 +255,7 @@ impl PushService {
 #[derive(Debug, Error)]
 pub enum PushServiceError {
     #[error(
-        "no profile accepts pushes; allow a non-production one with `reprodb profile allow-push NAME`"
+        "no non-production profile can receive a push; add one with `reprodb profile add NAME`"
     )]
     NoEligibleProfile,
 
@@ -367,6 +405,20 @@ mod tests {
             Ok(choices[0].profile.clone())
         }
 
+        fn allow_push(&self, _choice: &RemoteProfileChoice) -> Result<bool, PushSelectionError> {
+            self.calls.lock().unwrap().push("allow");
+            Ok(true)
+        }
+
+        fn accept_downgrade(
+            &self,
+            _dump: MysqlVersion,
+            _destination: MysqlVersion,
+        ) -> Result<bool, PushSelectionError> {
+            self.calls.lock().unwrap().push("downgrade");
+            Ok(false)
+        }
+
         fn dump(
             &self,
             _database: &DatabaseName,
@@ -392,13 +444,13 @@ mod tests {
 
     async fn fixture(
         root: &std::path::Path,
-        with_sandbox: bool,
+        sandbox_allowed: Option<bool>,
     ) -> (ConfigRepository, MemoryCredentialStore, DumpId) {
         let paths = AppPaths::new(root.join("config"), root.join("cache"), root.join("data"));
         let repository = ConfigRepository::new(paths.clone());
         let key = CredentialKey::new(CredentialScope::Source);
         let mut profiles = BTreeMap::new();
-        if with_sandbox {
+        if let Some(allowed) = sandbox_allowed {
             profiles.insert(
                 ProfileName::try_from("sandbox").unwrap(),
                 SourceProfileConfig {
@@ -409,7 +461,7 @@ mod tests {
                     mysql_family: MysqlFamily::Mysql,
                     mysql_series: "8.4".to_owned(),
                     production: false,
-                    push_destination: true,
+                    push_destination: allowed,
                     tls_mode: MysqlTlsMode::Required,
                     tls_material: Default::default(),
                     client: MysqlClientConfig {
@@ -447,7 +499,7 @@ mod tests {
     #[tokio::test]
     async fn a_confirmed_push_attests_the_destination_then_creates_and_imports() {
         let directory = tempdir().unwrap();
-        let (repository, credentials, dump_id) = fixture(directory.path(), true).await;
+        let (repository, credentials, dump_id) = fixture(directory.path(), Some(true)).await;
         let calls = Arc::new(Mutex::new(Vec::new()));
 
         let outcome = PushService::new(repository)
@@ -489,7 +541,7 @@ mod tests {
     #[tokio::test]
     async fn a_declined_confirmation_never_reaches_the_executor() {
         let directory = tempdir().unwrap();
-        let (repository, credentials, dump_id) = fixture(directory.path(), true).await;
+        let (repository, credentials, dump_id) = fixture(directory.path(), Some(true)).await;
         let calls = Arc::new(Mutex::new(Vec::new()));
 
         let outcome = PushService::new(repository)
@@ -523,7 +575,7 @@ mod tests {
     #[tokio::test]
     async fn without_a_non_production_profile_nothing_is_asked() {
         let directory = tempdir().unwrap();
-        let (repository, credentials, dump_id) = fixture(directory.path(), false).await;
+        let (repository, credentials, dump_id) = fixture(directory.path(), None).await;
         let calls = Arc::new(Mutex::new(Vec::new()));
 
         let error = PushService::new(repository)
@@ -556,7 +608,7 @@ mod tests {
     #[tokio::test]
     async fn a_short_import_is_reported_as_a_failure() {
         let directory = tempdir().unwrap();
-        let (repository, credentials, dump_id) = fixture(directory.path(), true).await;
+        let (repository, credentials, dump_id) = fixture(directory.path(), Some(true)).await;
         let calls = Arc::new(Mutex::new(Vec::new()));
 
         let error = PushService::new(repository)
@@ -583,5 +635,51 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, PushServiceError::ImportedSizeMismatch));
+    }
+
+    async fn push_to_unallowed_sandbox(confirm: bool) -> (ConfigRepository, Vec<&'static str>) {
+        let directory = tempdir().unwrap();
+        let (repository, credentials, dump_id) = fixture(directory.path(), Some(false)).await;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        PushService::new(repository.clone())
+            .push(
+                &credentials,
+                &FakeProbe,
+                PullDumpDependencies {
+                    preflight: &UnusedDump,
+                    executor: &UnusedDump,
+                },
+                FakeExecutor {
+                    calls: Arc::clone(&calls),
+                    imported_bytes_delta: 0,
+                },
+                &FakeSelector {
+                    dump: PushDumpChoice::Existing(dump_id),
+                    database: "acme_qa",
+                    confirm,
+                    calls: Arc::clone(&calls),
+                },
+                acme(),
+            )
+            .await
+            .unwrap();
+        // Keep the directory alive while the caller inspects the config.
+        let repository = ConfigRepository::new(repository.paths().clone());
+        std::mem::forget(directory);
+        let calls = calls.lock().unwrap().clone();
+        (repository, calls)
+    }
+
+    #[tokio::test]
+    async fn consent_to_a_new_destination_is_asked_and_kept_only_after_confirmation() {
+        let sandbox = ProfileName::try_from("sandbox").unwrap();
+
+        let (confirmed, calls) = push_to_unallowed_sandbox(true).await;
+        let (declined, _) = push_to_unallowed_sandbox(false).await;
+
+        assert_eq!(calls[..2], ["profile", "allow"]);
+        assert!(calls.contains(&"import"));
+        assert!(confirmed.load().unwrap().profiles[&sandbox].push_destination);
+        assert!(!declined.load().unwrap().profiles[&sandbox].push_destination);
     }
 }

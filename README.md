@@ -114,7 +114,7 @@ O `pull` recebe o nome do database na origem e pergunta com que nome ele será c
 | `reprodb doctor` | Diagnostica config, credenciais, Docker, disco e conexões — sem alterar nada |
 | `reprodb db list` | Lista os databases disponíveis na origem ativa |
 | `reprodb pull <database>` | **Fluxo principal**: dump (ou cache) + restore |
-| `reprodb push <database>` | Importa um dump em um database de outro profile liberado (ex.: produção → sandbox) |
+| `reprodb push <database>` | Importa um dump em um database de outro profile (ex.: produção → sandbox); lista e pergunta tudo |
 | `reprodb profile allow-push` / `deny-push` | Libera/revoga um profile como destino de `push` (nunca produção) |
 | `reprodb dump <database>` | Só gera o dump em cache |
 | `reprodb restore <database> --dump-id <id>` | Só restaura um dump já existente |

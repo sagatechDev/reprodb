@@ -368,6 +368,18 @@ struct ScriptedPush {
 }
 
 impl PushSelector for ScriptedPush {
+    fn allow_push(&self, _choice: &RemoteProfileChoice) -> Result<bool, PushSelectionError> {
+        unreachable!("the destination was allowed up front")
+    }
+
+    fn accept_downgrade(
+        &self,
+        _dump: reprodb::domain::MysqlVersion,
+        _destination: reprodb::domain::MysqlVersion,
+    ) -> Result<bool, PushSelectionError> {
+        unreachable!("source and destination run the same series")
+    }
+
     fn profile(&self, choices: &[RemoteProfileChoice]) -> Result<ProfileName, PushSelectionError> {
         // Only the explicitly allowed profile is offered; the source never is.
         assert_eq!(choices.len(), 1);
@@ -596,6 +608,16 @@ async fn pushes_a_fresh_then_a_cached_dump_into_another_profile_without_dropping
 
     struct ToSource;
     impl PushSelector for ToSource {
+        fn allow_push(&self, _: &RemoteProfileChoice) -> Result<bool, PushSelectionError> {
+            unreachable!("the active source profile is never offered for consent")
+        }
+        fn accept_downgrade(
+            &self,
+            _: reprodb::domain::MysqlVersion,
+            _: reprodb::domain::MysqlVersion,
+        ) -> Result<bool, PushSelectionError> {
+            unreachable!("the gate must refuse before comparing versions")
+        }
         fn profile(&self, _: &[RemoteProfileChoice]) -> Result<ProfileName, PushSelectionError> {
             Ok(ProfileName::try_from("push-source").unwrap())
         }

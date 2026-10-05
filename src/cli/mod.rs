@@ -312,6 +312,10 @@ pub struct PushArgs {
     /// Skip the typed confirmation.
     #[arg(long, short = 'y')]
     pub yes: bool,
+
+    /// Accept an older destination series of the same major version (e.g. 8.4 into 8.0).
+    #[arg(long)]
+    pub allow_downgrade: bool,
 }
 
 #[derive(Debug, Args)]

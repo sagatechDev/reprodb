@@ -11,7 +11,7 @@ use crate::{
         output::OutputStyle,
         prompt,
     },
-    domain::{DatabaseName, DumpId, ProfileName},
+    domain::{DatabaseName, DumpId, MysqlVersion, ProfileName},
     infrastructure::compression::{CompressionProgress, CompressionProgressObserver},
 };
 
@@ -22,6 +22,7 @@ pub struct CliPushSelector {
     fresh: bool,
     database: Option<DatabaseName>,
     yes: bool,
+    allow_downgrade: bool,
     interactive: bool,
     now_unix_seconds: u64,
 }
@@ -34,6 +35,7 @@ impl CliPushSelector {
         fresh: bool,
         database: Option<DatabaseName>,
         yes: bool,
+        allow_downgrade: bool,
     ) -> Self {
         Self {
             style,
@@ -42,6 +44,7 @@ impl CliPushSelector {
             fresh,
             database,
             yes,
+            allow_downgrade,
             interactive: prompt::is_interactive(),
             now_unix_seconds: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -76,11 +79,42 @@ impl PushSelector for CliPushSelector {
         }
         let labels = choices
             .iter()
-            .map(|choice| format!("{}  {}:{}", choice.profile, choice.host, choice.port))
+            .map(render_profile_choice)
             .collect::<Vec<_>>();
         let index = prompt::select_push_profile(&labels)
             .map_err(|error| PushSelectionError::Unavailable(error.to_string()))?;
         Ok(choices[index].profile.clone())
+    }
+
+    fn allow_push(&self, choice: &RemoteProfileChoice) -> Result<bool, PushSelectionError> {
+        if !self.interactive {
+            return Err(PushSelectionError::Unavailable(format!(
+                "profile `{0}` has never received a push and there is no terminal to allow it on; run `reprodb profile allow-push {0}`",
+                choice.profile
+            )));
+        }
+        prompt::confirm_allow_push(
+            choice.profile.as_str(),
+            &format!("{}:{}", choice.host, choice.port),
+        )
+        .map_err(|error| PushSelectionError::Unavailable(error.to_string()))
+    }
+
+    fn accept_downgrade(
+        &self,
+        dump: MysqlVersion,
+        destination: MysqlVersion,
+    ) -> Result<bool, PushSelectionError> {
+        if self.allow_downgrade {
+            return Ok(true);
+        }
+        if !self.interactive {
+            return Err(PushSelectionError::Unavailable(format!(
+                "the dump comes from MySQL {dump} and the destination runs {destination}; there is no terminal to confirm the downgrade on, rerun with --allow-downgrade"
+            )));
+        }
+        prompt::confirm_downgrade(&dump.to_string(), &destination.to_string())
+            .map_err(|error| PushSelectionError::Unavailable(error.to_string()))
     }
 
     fn dump(
@@ -146,6 +180,20 @@ impl PushSelector for CliPushSelector {
     }
 }
 
+fn render_profile_choice(choice: &RemoteProfileChoice) -> String {
+    format!(
+        "{}  {}:{}{}",
+        choice.profile,
+        choice.host,
+        choice.port,
+        if choice.accepts_push {
+            ""
+        } else {
+            "  (never received a push; you will be asked to allow it)"
+        }
+    )
+}
+
 /// The user must retype both halves: a right database on the wrong profile
 /// is exactly the mistake this command must not allow.
 fn confirmation_phrase(plan: &PushPlan) -> String {
@@ -194,7 +242,21 @@ pub fn render_plan(style: &OutputStyle, plan: &PushPlan) -> String {
         plan.source_version,
         plan.destination_version,
         style.attention("!"),
-    )
+    ) + &downgrade_warning(style, plan)
+}
+
+fn downgrade_warning(style: &OutputStyle, plan: &PushPlan) -> String {
+    if plan.downgrade {
+        format!(
+            "{} Downgrade: importing a MySQL {} dump into {}. Features newer than {} may fail to import.\n",
+            style.danger("!"),
+            plan.source_version,
+            plan.destination_version,
+            plan.destination_version,
+        )
+    } else {
+        String::new()
+    }
 }
 
 pub fn render_complete(style: &OutputStyle, ready: &PushReady) -> String {
@@ -210,7 +272,7 @@ pub fn render_complete(style: &OutputStyle, ready: &PushReady) -> String {
 
 pub fn render_cancelled(style: &OutputStyle) -> String {
     format!(
-        "\n{} Confirmation did not match; nothing was written.\n",
+        "\n{} Push cancelled; nothing was written.\n",
         style.attention("!")
     )
 }
@@ -281,6 +343,7 @@ mod tests {
             fresh: false,
             database: None,
             yes: false,
+            allow_downgrade: false,
             interactive: false,
             now_unix_seconds: 1_000,
         }
@@ -291,6 +354,7 @@ mod tests {
             profile: ProfileName::try_from("sandbox").unwrap(),
             host: "sandbox.db.internal".to_owned(),
             port: 3306,
+            accepts_push: true,
         }]
     }
 
@@ -306,6 +370,7 @@ mod tests {
             destination_user: "sandbox_writer".to_owned(),
             database: DatabaseName::try_from("salt_sagatec_qa").unwrap(),
             destination_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
+            downgrade: false,
         }
     }
 
@@ -388,5 +453,60 @@ mod tests {
         assert!(output.contains("MySQL:        8.0.45 -> 8.4.4"));
         assert!(output.contains("Tables present in the dump will be replaced"));
         assert!(!output.to_ascii_lowercase().contains("password"));
+    }
+
+    #[test]
+    fn a_downgrade_is_spelled_out_in_the_plan() {
+        let plain = render_plan(&OutputStyle::plain(), &plan());
+        let downgraded = render_plan(
+            &OutputStyle::plain(),
+            &PushPlan {
+                source_version: "8.4.8".parse::<MysqlVersion>().unwrap(),
+                destination_version: "8.0.43".parse::<MysqlVersion>().unwrap(),
+                downgrade: true,
+                ..plan()
+            },
+        );
+
+        assert!(!plain.contains("Downgrade"));
+        assert!(downgraded.contains("Downgrade: importing a MySQL 8.4.8 dump into 8.0.43"));
+    }
+
+    #[test]
+    fn without_a_terminal_consent_and_downgrade_point_to_the_matching_escape_hatch() {
+        let choice = RemoteProfileChoice {
+            accepts_push: false,
+            ..sandbox().remove(0)
+        };
+        let allow = selector().allow_push(&choice).unwrap_err();
+        let downgrade = selector()
+            .accept_downgrade("8.4.8".parse().unwrap(), "8.0.43".parse().unwrap())
+            .unwrap_err();
+        let flagged = CliPushSelector {
+            allow_downgrade: true,
+            ..selector()
+        }
+        .accept_downgrade("8.4.8".parse().unwrap(), "8.0.43".parse().unwrap())
+        .unwrap();
+
+        assert!(
+            allow
+                .to_string()
+                .contains("reprodb profile allow-push sandbox")
+        );
+        assert!(downgrade.to_string().contains("--allow-downgrade"));
+        assert!(flagged);
+    }
+
+    #[test]
+    fn the_menu_marks_profiles_that_were_never_allowed() {
+        let allowed = render_profile_choice(&sandbox()[0]);
+        let pending = render_profile_choice(&RemoteProfileChoice {
+            accepts_push: false,
+            ..sandbox().remove(0)
+        });
+
+        assert_eq!(allowed, "sandbox  sandbox.db.internal:3306");
+        assert!(pending.contains("you will be asked to allow it"));
     }
 }

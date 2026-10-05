@@ -296,7 +296,9 @@ const fn remote_target_error_category(error: &RemoteTargetGateError) -> ErrorCat
         | RemoteTargetGateError::UnsupportedServerSeries => ErrorCategory::Dependency,
         RemoteTargetGateError::Probe(error) => docker_client_error_category(error),
         RemoteTargetGateError::TlsRequiredButNotNegotiated => ErrorCategory::SourceConnection,
-        RemoteTargetGateError::VersionMismatch => ErrorCategory::Restore,
+        RemoteTargetGateError::Downgrade { .. } | RemoteTargetGateError::VersionMismatch => {
+            ErrorCategory::Restore
+        }
     }
 }
 

@@ -428,6 +428,7 @@ pub async fn execute_with_cancellation(
                 arguments.fresh,
                 target_database,
                 arguments.yes,
+                arguments.allow_downgrade,
             );
             print!("{}", cli::push::render_start(&style));
             std::io::stdout().flush().map_err(AppError::Output)?;

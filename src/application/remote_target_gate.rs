@@ -19,12 +19,14 @@ use crate::{
     },
 };
 
-/// A profile `push` may write to: explicitly allowed and never production.
+/// A non-production profile `push` can offer. `accepts_push` is false until
+/// the user allows it, once, from the menu or `profile allow-push`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteProfileChoice {
     pub profile: ProfileName,
     pub host: String,
     pub port: u16,
+    pub accepts_push: bool,
 }
 
 pub struct RemoteTargetProbeRequest<'a> {
@@ -55,20 +57,46 @@ impl RemoteTargetGate {
         Self { repository }
     }
 
+    /// Non-production profiles that do not share an endpoint with a
+    /// protected one, allowed profiles first.
     pub fn eligible_profiles(&self) -> Result<Vec<RemoteProfileChoice>, RemoteTargetGateError> {
         let config = self.repository.load()?;
-        Ok(config
+        let mut choices = config
             .profiles
             .iter()
             .filter(|(name, profile)| {
-                accepts_push(profile) && protected_endpoint(&config, name, profile).is_none()
+                // The active profile is where fresh dumps come from; it is
+                // offered only if it was allowed on purpose.
+                let active_source = config.active_profile.as_ref() == Some(*name);
+                !profile.production
+                    && (accepts_push(profile) || !active_source)
+                    && protected_endpoint(&config, name, profile).is_none()
             })
             .map(|(name, profile)| RemoteProfileChoice {
                 profile: name.clone(),
                 host: profile.host.clone(),
                 port: profile.port,
+                accepts_push: accepts_push(profile),
             })
-            .collect())
+            .collect::<Vec<_>>();
+        choices.sort_by_key(|choice| !choice.accepts_push);
+        Ok(choices)
+    }
+
+    /// Records the user's consent to push into `profile`. Production
+    /// profiles are refused here as well as at load time.
+    pub fn allow_push(&self, profile_name: &ProfileName) -> Result<(), RemoteTargetGateError> {
+        let mut config = self.repository.load()?;
+        let profile = config
+            .profiles
+            .get_mut(profile_name)
+            .ok_or(RemoteTargetGateError::ProfileNotFound)?;
+        if profile.production {
+            return Err(RemoteTargetGateError::ProductionDestination);
+        }
+        profile.push_destination = true;
+        self.repository.save(&config)?;
+        Ok(())
     }
 
     pub async fn verify(
@@ -76,6 +104,7 @@ impl RemoteTargetGate {
         credentials: &dyn CredentialStore,
         probe: &dyn RemoteTargetProbe,
         profile_name: &ProfileName,
+        consented: bool,
     ) -> Result<GuardedRemoteTarget, RemoteTargetGateError> {
         let config = self.repository.load()?;
         let profile = config
@@ -85,7 +114,9 @@ impl RemoteTargetGate {
         if profile.production {
             return Err(RemoteTargetGateError::ProductionDestination);
         }
-        if !profile.push_destination {
+        // `consented` is the user allowing this profile in the current run;
+        // it is persisted only after the final confirmation.
+        if !profile.push_destination && !consented {
             return Err(RemoteTargetGateError::PushNotAllowed {
                 profile: profile_name.clone(),
             });
@@ -253,6 +284,29 @@ impl GuardedRemoteTarget {
         self.server_version
     }
 
+    /// Whether importing `metadata` here means an older series of the same
+    /// major version, which needs the user's explicit consent.
+    pub fn is_downgrade_for(&self, metadata: &DumpArtifactMetadata) -> bool {
+        is_same_major_downgrade(metadata.source_version, self.server_version)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(server_version: &str, series: &str) -> Self {
+        Self {
+            profile: ProfileName::try_from("sandbox").unwrap(),
+            host: "sandbox.db.internal".to_owned(),
+            port: 3306,
+            username: "sandbox_writer".to_owned(),
+            password: SecretString::from("remote-test-password"),
+            tls_mode: MysqlTlsMode::Required,
+            tls_material: MysqlTlsMaterialPaths::default(),
+            docker_context: "desktop-linux".to_owned(),
+            client: ClientCatalog::resolve(series).unwrap(),
+            server_version: server_version.parse().unwrap(),
+            server_uuid: "33333333-3333-4333-8333-333333333333".parse().unwrap(),
+        }
+    }
+
     /// Binds the destination database once the dump is known.
     ///
     /// The server a dump came from is refused outright unless its source
@@ -263,6 +317,7 @@ impl GuardedRemoteTarget {
         database: DatabaseName,
         metadata: &DumpArtifactMetadata,
         source_accepts_push: bool,
+        allow_downgrade: bool,
     ) -> Result<AuthorizedRemoteTarget, RemoteTargetGateError> {
         if self.server_uuid == metadata.source_server_uuid {
             if !source_accepts_push {
@@ -274,7 +329,15 @@ impl GuardedRemoteTarget {
                 return Err(RemoteTargetGateError::SourceCollision);
             }
         }
-        if !versions_are_restore_compatible(
+        let downgrade = is_same_major_downgrade(metadata.source_version, self.server_version);
+        if downgrade {
+            if !allow_downgrade {
+                return Err(RemoteTargetGateError::Downgrade {
+                    dump: metadata.source_version,
+                    destination: self.server_version,
+                });
+            }
+        } else if !versions_are_restore_compatible(
             metadata.source_version,
             metadata.client_version,
             self.server_version,
@@ -285,6 +348,7 @@ impl GuardedRemoteTarget {
         Ok(AuthorizedRemoteTarget {
             target: self,
             database,
+            downgrade,
         })
     }
 }
@@ -293,6 +357,7 @@ impl GuardedRemoteTarget {
 pub struct AuthorizedRemoteTarget {
     target: GuardedRemoteTarget,
     database: DatabaseName,
+    downgrade: bool,
 }
 
 impl AuthorizedRemoteTarget {
@@ -345,6 +410,12 @@ impl AuthorizedRemoteTarget {
         &self.database
     }
 
+    /// Whether the user accepted importing into an older series of the
+    /// same major version (for example a MySQL 8.4 dump into 8.0).
+    pub const fn downgrade(&self) -> bool {
+        self.downgrade
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(database: DatabaseName) -> Self {
         Self {
@@ -362,8 +433,15 @@ impl AuthorizedRemoteTarget {
                 server_uuid: "33333333-3333-4333-8333-333333333333".parse().unwrap(),
             },
             database,
+            downgrade: false,
         }
     }
+}
+
+/// An older destination series of the same major version, such as 8.4 into
+/// 8.0. Only `push --allow-downgrade` accepts it; a different major never.
+fn is_same_major_downgrade(source: MysqlVersion, destination: MysqlVersion) -> bool {
+    source.major == destination.major && destination.minor < source.minor
 }
 
 #[derive(Debug, Error)]
@@ -426,7 +504,15 @@ pub enum RemoteTargetGateError {
     )]
     SourceCollision,
 
-    #[error("the destination MySQL version cannot import this dump (downgrades are refused)")]
+    #[error(
+        "the dump comes from MySQL {dump} and the destination runs {destination}; confirm the downgrade or pass --allow-downgrade"
+    )]
+    Downgrade {
+        dump: MysqlVersion,
+        destination: MysqlVersion,
+    },
+
+    #[error("the destination MySQL version cannot import this dump")]
     VersionMismatch,
 }
 
@@ -618,12 +704,12 @@ mod tests {
         let directory = tempdir().unwrap();
         let (repository, credentials) = fixture(directory.path()).await;
         RemoteTargetGate::new(repository)
-            .verify(&credentials, probe, &name(profile))
+            .verify(&credentials, probe, &name(profile), false)
             .await
     }
 
     #[tokio::test]
-    async fn only_explicitly_allowed_profiles_on_unprotected_endpoints_are_offered() {
+    async fn non_production_profiles_on_unprotected_endpoints_are_offered_allowed_first() {
         let directory = tempdir().unwrap();
         let (repository, _credentials) = fixture(directory.path()).await;
 
@@ -631,13 +717,20 @@ mod tests {
             .eligible_profiles()
             .unwrap();
 
+        let offered = choices
+            .iter()
+            .map(|choice| (choice.profile.as_str(), choice.accepts_push))
+            .collect::<Vec<_>>();
+        // `disguised` and `local-alias` share an endpoint with a protected
+        // profile; `prod-source` is production. Allowed profiles come first.
         assert_eq!(
-            choices,
-            vec![RemoteProfileChoice {
-                profile: name("sandbox"),
-                host: "sandbox.db.internal".to_owned(),
-                port: 3306,
-            }]
+            offered,
+            vec![
+                ("sandbox", true),
+                ("dev", false),
+                ("local-prod", false),
+                ("rds-main", false)
+            ]
         );
     }
 
@@ -699,6 +792,7 @@ mod tests {
                 database("salt_sagatec"),
                 &metadata("rds-main", "8.4.4"),
                 false,
+                false,
             )
             .unwrap();
 
@@ -742,6 +836,7 @@ mod tests {
                 database("salt_sagatec_qa"),
                 &metadata("rds-main", "8.4.4"),
                 false,
+                false,
             )
             .unwrap_err();
 
@@ -762,6 +857,7 @@ mod tests {
                 database("salt_sagatec"),
                 &metadata("sandbox", "8.4.4"),
                 true,
+                false,
             )
             .unwrap_err();
         let other = verify("sandbox", &probe)
@@ -771,6 +867,7 @@ mod tests {
                 database("salt_sagatec_qa"),
                 &metadata("sandbox", "8.4.4"),
                 true,
+                false,
             )
             .unwrap();
 
@@ -800,14 +897,38 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn a_downgrade_is_refused() {
-        let error = verify("sandbox", &FakeProbe::returning("8.4.4", OTHER_UUID, true))
-            .await
-            .unwrap()
+    #[test]
+    fn an_8_4_dump_into_8_0_needs_the_explicit_downgrade_flag() {
+        let dump = metadata("rds-main", "8.4.8");
+
+        let refused = GuardedRemoteTarget::for_test("8.0.43", "8.0")
+            .authorize(database("salt_sagatec"), &dump, false, false)
+            .unwrap_err();
+        let accepted = GuardedRemoteTarget::for_test("8.0.43", "8.0")
+            .authorize(database("salt_sagatec"), &dump, false, true)
+            .unwrap();
+        let same_series = GuardedRemoteTarget::for_test("8.4.4", "8.4")
             .authorize(
                 database("salt_sagatec"),
-                &metadata("sandbox", "9.1.0"),
+                &metadata("rds-main", "8.4.4"),
+                false,
+                true,
+            )
+            .unwrap();
+
+        assert!(matches!(refused, RemoteTargetGateError::Downgrade { .. }));
+        assert!(refused.to_string().contains("--allow-downgrade"));
+        assert!(accepted.downgrade());
+        assert!(!same_series.downgrade());
+    }
+
+    #[test]
+    fn a_different_major_is_refused_even_with_the_downgrade_flag() {
+        let error = GuardedRemoteTarget::for_test("8.4.4", "8.4")
+            .authorize(
+                database("salt_sagatec"),
+                &metadata("rds-main", "9.1.0"),
+                false,
                 true,
             )
             .unwrap_err();
@@ -845,7 +966,7 @@ mod tests {
         let probe = FakeProbe::returning("8.4.4", SOURCE_UUID, true);
 
         let error = RemoteTargetGate::new(repository)
-            .verify(&credentials, &probe, &name("sandbox"))
+            .verify(&credentials, &probe, &name("sandbox"), false)
             .await
             .unwrap_err();
 
@@ -853,5 +974,59 @@ mod tests {
             error,
             RemoteTargetGateError::ProtectedServer { ref profile } if profile.as_str() == "local-source"
         ));
+    }
+
+    #[tokio::test]
+    async fn allowing_a_push_is_persisted_but_never_for_production() {
+        let directory = tempdir().unwrap();
+        let (repository, credentials) = fixture(directory.path()).await;
+        let gate = RemoteTargetGate::new(repository);
+
+        gate.allow_push(&name("dev")).unwrap();
+        let production = gate.allow_push(&name("prod-source")).unwrap_err();
+        let dev = gate
+            .verify(
+                &credentials,
+                &FakeProbe::returning("8.4.4", OTHER_UUID, true),
+                &name("dev"),
+                false,
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            production,
+            RemoteTargetGateError::ProductionDestination
+        ));
+        assert_eq!(dev.server_version().to_string(), "8.4.4");
+    }
+
+    #[tokio::test]
+    async fn consent_in_the_current_run_admits_a_profile_but_not_production() {
+        let probe = FakeProbe::returning("8.4.4", OTHER_UUID, true);
+        let directory = tempdir().unwrap();
+        let (repository, credentials) = fixture(directory.path()).await;
+        let gate = RemoteTargetGate::new(repository);
+
+        let dev = gate
+            .verify(&credentials, &probe, &name("dev"), true)
+            .await
+            .unwrap();
+        let production = gate
+            .verify(&credentials, &probe, &name("prod-source"), true)
+            .await
+            .unwrap_err();
+        let still_not_allowed = gate.eligible_profiles().unwrap();
+
+        assert_eq!(dev.server_version().to_string(), "8.4.4");
+        assert!(matches!(
+            production,
+            RemoteTargetGateError::ProductionDestination
+        ));
+        assert!(
+            still_not_allowed
+                .iter()
+                .any(|choice| choice.profile.as_str() == "dev" && !choice.accepts_push)
+        );
     }
 }

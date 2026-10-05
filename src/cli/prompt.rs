@@ -479,6 +479,26 @@ pub fn confirm_push_destination(expected: &str) -> Result<bool, PromptError> {
     Ok(typed.trim() == expected)
 }
 
+pub fn confirm_allow_push(profile: &str, endpoint: &str) -> Result<bool, PromptError> {
+    Confirm::with_theme(&SimpleTheme)
+        .with_prompt(format!(
+            "`{profile}` ({endpoint}) has never received a push. Allow pushes to it from now on?"
+        ))
+        .default(false)
+        .interact()
+        .map_err(unavailable)
+}
+
+pub fn confirm_downgrade(dump: &str, destination: &str) -> Result<bool, PromptError> {
+    Confirm::with_theme(&SimpleTheme)
+        .with_prompt(format!(
+            "The dump comes from MySQL {dump} but the destination runs {destination}. Import into the older version anyway?"
+        ))
+        .default(false)
+        .interact()
+        .map_err(unavailable)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
