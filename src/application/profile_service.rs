@@ -96,6 +96,7 @@ pub struct ProfileSummary {
     pub mysql_series: String,
     pub tls_mode: MysqlTlsMode,
     pub production: bool,
+    pub push_destination: bool,
 }
 
 #[derive(Debug, Error)]
@@ -108,6 +109,9 @@ pub enum ProfileServiceError {
 
     #[error("a source profile with this name already exists")]
     AlreadyExists,
+
+    #[error("production profiles can never accept pushes")]
+    ProductionPushDestination,
 
     #[error("invalid source profile field `{field}`: {reason}")]
     InvalidField {
@@ -159,6 +163,7 @@ impl ProfileService {
                 mysql_series: profile.mysql_series,
                 tls_mode: profile.tls_mode,
                 production: profile.production,
+                push_destination: profile.push_destination,
             })
             .collect())
     }
@@ -215,6 +220,7 @@ impl ProfileService {
                 mysql_family: MysqlFamily::Mysql,
                 mysql_series: detected_series,
                 production: input.production,
+                push_destination: false,
                 tls_mode: input.tls_mode,
                 tls_material: input.tls_material,
                 client: MysqlClientConfig {
@@ -250,6 +256,25 @@ impl ProfileService {
             return Err(ProfileServiceError::NotFound);
         }
         config.active_profile = Some(name.clone());
+        self.repository.save(&config)?;
+        Ok(())
+    }
+
+    /// Allows or forbids `reprodb push` from writing to this profile.
+    pub fn set_push_destination(
+        &self,
+        name: &ProfileName,
+        allowed: bool,
+    ) -> Result<(), ProfileServiceError> {
+        let mut config = self.repository.load()?;
+        let profile = config
+            .profiles
+            .get_mut(name)
+            .ok_or(ProfileServiceError::NotFound)?;
+        if allowed && profile.production {
+            return Err(ProfileServiceError::ProductionPushDestination);
+        }
+        profile.push_destination = allowed;
         self.repository.save(&config)?;
         Ok(())
     }
@@ -408,6 +433,7 @@ mod tests {
             mysql_family: MysqlFamily::Mysql,
             mysql_series: "8.4".to_owned(),
             production,
+            push_destination: false,
             tls_mode: if production {
                 MysqlTlsMode::VerifyIdentity
             } else {

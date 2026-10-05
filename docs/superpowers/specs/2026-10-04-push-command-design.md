@@ -1,6 +1,15 @@
 # `reprodb push` — design
 
-Data: 2026-10-04 · Status: aprovado em conversa, aguardando revisão do spec
+Data: 2026-10-04 · Status: implementado
+
+> **Revisão durante a implementação.** O config real tinha o profile de produção com `production = false`, então a flag sozinha não protege. Mudanças em relação ao desenho abaixo:
+> - destino exige opt-in explícito (`reprodb profile allow-push NAME`, campo `push_destination`); produção nunca pode ser liberada;
+> - recusa destino que compartilha host:porta com profile não liberado (loopbacks normalizados);
+> - recusa destino cujo `@@server_uuid` aparece em dump em cache de profile não liberado ou removido;
+> - o servidor de origem do dump só é aceito se o profile de origem também estiver liberado;
+> - cada sessão de escrita revalida `@@server_uuid` antes do primeiro comando;
+> - confirmação digitada é `profile/database`; sem terminal e sem `--yes`, falha antes do dump.
+> Contrato atual: [`docs/push-command.md`](../../push-command.md).
 
 ## Objetivo
 

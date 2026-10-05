@@ -6,6 +6,8 @@ mod dump_service;
 mod local_target_gate;
 mod profile_service;
 mod pull_service;
+mod push_service;
+mod remote_target_gate;
 mod restore_engine;
 mod restore_service;
 mod setup_service;
@@ -41,6 +43,14 @@ pub use pull_service::{
     PullDumpDependencies, PullDumpMetrics, PullMetrics, PullProgress, PullProgressObserver,
     PullReady, PullRestoreDependencies, PullService, PullServiceError, PullTargetChoice,
     PullTargetSelectionError, PullTargetSelector,
+};
+pub use push_service::{
+    NoPushProgress, PushDumpChoice, PushOutcome, PushPlan, PushProgress, PushProgressObserver,
+    PushReady, PushSelectionError, PushSelector, PushService, PushServiceError,
+};
+pub use remote_target_gate::{
+    AuthorizedRemoteTarget, GuardedRemoteTarget, RemoteProfileChoice, RemoteTargetGate,
+    RemoteTargetGateError, RemoteTargetProbe, RemoteTargetProbeRequest,
 };
 pub use restore_engine::{RestoreCompleted, RestoreEngine, RestoreEngineError};
 pub use restore_service::{

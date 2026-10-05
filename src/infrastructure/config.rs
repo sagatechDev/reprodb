@@ -278,6 +278,9 @@ pub struct SourceProfileConfig {
     pub mysql_family: MysqlFamily,
     pub mysql_series: String,
     pub production: bool,
+    /// Explicit opt-in for `reprodb push`. Never true for a production profile.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub push_destination: bool,
     #[serde(default)]
     pub tls_mode: MysqlTlsMode,
     #[serde(default, skip_serializing_if = "MysqlTlsMaterialPaths::is_empty")]
@@ -302,6 +305,12 @@ impl SourceProfileConfig {
         )?;
         validate_mysql_series(&self.mysql_series)?;
         validate_tls_material(self.tls_mode, &self.tls_material)?;
+        if self.production && self.push_destination {
+            return Err(ConfigError::InvalidField {
+                field: "profile.push_destination",
+                reason: "cannot be enabled for a production source",
+            });
+        }
         if self.production && self.tls_mode != MysqlTlsMode::VerifyIdentity {
             return Err(ConfigError::InvalidField {
                 field: "profile.tls_mode",
@@ -884,6 +893,7 @@ mod tests {
                 mysql_family: MysqlFamily::Mysql,
                 mysql_series: "8.4".to_owned(),
                 production: false,
+                push_destination: false,
                 tls_mode: MysqlTlsMode::Preferred,
                 tls_material: Default::default(),
                 client: MysqlClientConfig {

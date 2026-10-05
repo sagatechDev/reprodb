@@ -79,7 +79,7 @@ fn mysql_series(version: crate::domain::MysqlVersion) -> (u16, u16) {
     (version.major, version.minor)
 }
 
-fn versions_are_restore_compatible(
+pub(crate) fn versions_are_restore_compatible(
     source_server: crate::domain::MysqlVersion,
     source_client: crate::domain::MysqlVersion,
     target_server: crate::domain::MysqlVersion,

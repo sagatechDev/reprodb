@@ -6,7 +6,8 @@ use reprodb::{
     application::{
         PullCacheUse, PullDatabaseSelectionError, PullDatabaseSelector, PullDumpDependencies,
         PullRestoreDependencies, PullService, PullTargetChoice, PullTargetSelectionError,
-        PullTargetSelector,
+        PullTargetSelector, PushDumpChoice, PushOutcome, PushPlan, PushSelectionError,
+        PushSelector, PushService, RemoteProfileChoice, RestoreDumpChoice,
     },
     domain::{CredentialKey, CredentialScope, DatabaseName, MysqlTlsMode, ProfileName},
     infrastructure::{
@@ -21,7 +22,7 @@ use reprodb::{
         docker::DockerTargetDiscovery,
         mysql::{
             ClientCatalog, DockerDumpWorkflow, DockerLocalTargetAttestor, DockerMysqlDumpExecutor,
-            DockerMysqlRestoreExecutor,
+            DockerMysqlRemoteImportExecutor, DockerMysqlRestoreExecutor, DockerRemoteTargetProbe,
         },
         process::TokioProcessRunner,
     },
@@ -134,6 +135,7 @@ async fn pulls_a_real_database_then_reuses_cache_without_the_source_credential()
                     mysql_family: MysqlFamily::Mysql,
                     mysql_series: "8.4".to_owned(),
                     production: false,
+                    push_destination: false,
                     tls_mode: MysqlTlsMode::Required,
                     tls_material: Default::default(),
                     client: MysqlClientConfig {
@@ -358,6 +360,274 @@ async fn pulls_a_real_database_then_reuses_cache_without_the_source_credential()
         String::from_utf8(type_and_fk_verification.unwrap().unwrap()).unwrap(),
         "1234567890.12\t2026-09-07 12:34:56\t0001FEFF\tNULL\n1\n"
     );
+}
+
+struct ScriptedPush {
+    destination: ProfileName,
+    dump: std::sync::Mutex<PushDumpChoice>,
+}
+
+impl PushSelector for ScriptedPush {
+    fn profile(&self, choices: &[RemoteProfileChoice]) -> Result<ProfileName, PushSelectionError> {
+        // Only the explicitly allowed profile is offered; the source never is.
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].profile, self.destination);
+        Ok(self.destination.clone())
+    }
+
+    fn dump(
+        &self,
+        _database: &DatabaseName,
+        _choices: &[RestoreDumpChoice],
+    ) -> Result<PushDumpChoice, PushSelectionError> {
+        Ok(*self.dump.lock().unwrap())
+    }
+
+    fn database(&self, source_database: &DatabaseName) -> Result<DatabaseName, PushSelectionError> {
+        Ok(source_database.clone())
+    }
+
+    fn confirm(&self, _plan: &PushPlan) -> Result<bool, PushSelectionError> {
+        Ok(true)
+    }
+}
+
+#[tokio::test]
+#[ignore = "creates isolated MySQL source/destination containers and pushes between them"]
+async fn pushes_a_fresh_then_a_cached_dump_into_another_profile_without_dropping_extra_tables() {
+    let (context, _) = DockerTargetDiscovery::new(TokioProcessRunner)
+        .discover()
+        .await
+        .unwrap();
+    let suffix = Uuid::new_v4().simple().to_string();
+    let source_name = format!("reprodb-push-source-{}", &suffix[..12]);
+    let destination_name = format!("reprodb-push-dest-{}", &suffix[..12]);
+    let source_password = SecretString::from("reprodb-push-source-only");
+    let destination_password = SecretString::from("reprodb-push-destination-only");
+    let client = ClientCatalog::resolve("8.4").unwrap();
+    let _source_guard = start_mysql_container(
+        &context,
+        &source_name,
+        client.image(),
+        &source_password,
+        true,
+        false,
+    );
+    let _destination_guard = start_mysql_container(
+        &context,
+        &destination_name,
+        client.image(),
+        &destination_password,
+        true,
+        false,
+    );
+    let (_, candidates) = DockerTargetDiscovery::new(TokioProcessRunner)
+        .discover()
+        .await
+        .unwrap();
+    let find = |name: &str| {
+        candidates
+            .iter()
+            .find(|candidate| candidate.name.as_str() == name)
+            .cloned()
+            .expect("temporary MySQL container was not discovered")
+    };
+    let source = find(&source_name);
+    let destination = find(&destination_name);
+    let port = |candidate: &reprodb::infrastructure::docker::DockerContainerCandidate| {
+        candidate
+            .published_ports
+            .first()
+            .expect("MySQL port was not published")
+            .host_port
+    };
+    wait_for_mysql(
+        &context,
+        source.id.as_str(),
+        client.image(),
+        &source_password,
+    )
+    .await;
+    wait_for_mysql(
+        &context,
+        destination.id.as_str(),
+        client.image(),
+        &destination_password,
+    )
+    .await;
+
+    let database = DatabaseName::try_from(format!("reprodb_push_{}", &suffix[..16])).unwrap();
+    run_mysql_query(
+        &context,
+        source.id.as_str(),
+        client.image(),
+        &source_password,
+        MysqlTlsMode::Required,
+        None,
+        &format!(
+            "CREATE DATABASE `{database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; \
+             CREATE TABLE `{database}`.`items` (`id` BIGINT PRIMARY KEY, `label` VARCHAR(64) NOT NULL); \
+             INSERT INTO `{database}`.`items` VALUES (1, 'one'), (2, 'two');"
+        ),
+    )
+    .expect("source fixture");
+
+    let source_profile = ProfileName::try_from("push-source").unwrap();
+    let destination_profile = ProfileName::try_from("push-sandbox").unwrap();
+    let source_key = CredentialKey::new(CredentialScope::Source);
+    let destination_key = CredentialKey::new(CredentialScope::Source);
+    let profile = |port: u16, key: CredentialKey, push_destination: bool| SourceProfileConfig {
+        host: "127.0.0.1".to_owned(),
+        port,
+        username: "root".to_owned(),
+        credential_key: key,
+        mysql_family: MysqlFamily::Mysql,
+        mysql_series: "8.4".to_owned(),
+        production: false,
+        push_destination,
+        tls_mode: MysqlTlsMode::Required,
+        tls_material: Default::default(),
+        client: MysqlClientConfig {
+            image: client.image().to_owned(),
+        },
+    };
+    let temp = TempDir::new().unwrap();
+    let repository = ConfigRepository::new(AppPaths::new(
+        temp.path().join("config"),
+        temp.path().join("cache"),
+        temp.path().join("data"),
+    ));
+    repository
+        .save(&AppConfig {
+            active_profile: Some(source_profile.clone()),
+            client_runtime: ClientRuntimeConfig {
+                docker_context: Some(context.clone()),
+                ..ClientRuntimeConfig::default()
+            },
+            profiles: std::collections::BTreeMap::from([
+                (
+                    source_profile.clone(),
+                    profile(port(&source), source_key, false),
+                ),
+                (
+                    destination_profile.clone(),
+                    profile(port(&destination), destination_key, true),
+                ),
+            ]),
+            ..AppConfig::default()
+        })
+        .unwrap();
+    let credentials = MemoryCredentialStore::default();
+    credentials
+        .set(&source_key, source_password.clone())
+        .await
+        .unwrap();
+    credentials
+        .set(&destination_key, destination_password.clone())
+        .await
+        .unwrap();
+
+    let workflow = DockerDumpWorkflow::new(TokioProcessRunner);
+    let dump_executor = DockerMysqlDumpExecutor::default();
+    let probe = DockerRemoteTargetProbe::new(TokioProcessRunner);
+    let selector = ScriptedPush {
+        destination: destination_profile.clone(),
+        dump: std::sync::Mutex::new(PushDumpChoice::Fresh),
+    };
+    let service = PushService::new(repository);
+
+    let first = service
+        .push(
+            &credentials,
+            &probe,
+            PullDumpDependencies {
+                preflight: &workflow,
+                executor: &dump_executor,
+            },
+            DockerMysqlRemoteImportExecutor::default(),
+            &selector,
+            database.clone(),
+        )
+        .await
+        .expect("fresh push");
+    let PushOutcome::Ready(first) = first else {
+        panic!("fresh push was cancelled");
+    };
+
+    run_mysql_query(
+        &context,
+        destination.id.as_str(),
+        client.image(),
+        &destination_password,
+        MysqlTlsMode::Required,
+        Some(&database),
+        "UPDATE items SET label = 'changed' WHERE id = 1; CREATE TABLE extra (`id` INT);",
+    )
+    .expect("destination drift");
+
+    *selector.dump.lock().unwrap() = PushDumpChoice::Existing(first.plan.dump_id);
+    let second = service
+        .push(
+            &credentials,
+            &probe,
+            PullDumpDependencies {
+                preflight: &workflow,
+                executor: &dump_executor,
+            },
+            DockerMysqlRemoteImportExecutor::default(),
+            &selector,
+            database.clone(),
+        )
+        .await
+        .expect("cached push");
+    assert!(matches!(second, PushOutcome::Ready(_)));
+
+    let rows = run_mysql_query(
+        &context,
+        destination.id.as_str(),
+        client.image(),
+        &destination_password,
+        MysqlTlsMode::Required,
+        Some(&database),
+        "SELECT id, label FROM items ORDER BY id; SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'extra'",
+    )
+    .expect("destination verification");
+    assert_eq!(String::from_utf8(rows).unwrap(), "1\tone\n2\ttwo\n1\n");
+
+    struct ToSource;
+    impl PushSelector for ToSource {
+        fn profile(&self, _: &[RemoteProfileChoice]) -> Result<ProfileName, PushSelectionError> {
+            Ok(ProfileName::try_from("push-source").unwrap())
+        }
+        fn dump(
+            &self,
+            _: &DatabaseName,
+            _: &[RestoreDumpChoice],
+        ) -> Result<PushDumpChoice, PushSelectionError> {
+            unreachable!("the gate must refuse before choosing a dump")
+        }
+        fn database(&self, _: &DatabaseName) -> Result<DatabaseName, PushSelectionError> {
+            unreachable!("the gate must refuse before naming a database")
+        }
+        fn confirm(&self, _: &PushPlan) -> Result<bool, PushSelectionError> {
+            unreachable!("the gate must refuse before confirming")
+        }
+    }
+    let refused = service
+        .push(
+            &credentials,
+            &probe,
+            PullDumpDependencies {
+                preflight: &workflow,
+                executor: &dump_executor,
+            },
+            DockerMysqlRemoteImportExecutor::default(),
+            &ToSource,
+            database.clone(),
+        )
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains("does not accept pushes"));
 }
 
 fn benchmark_row_count() -> u64 {

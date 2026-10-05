@@ -337,6 +337,7 @@ mod tests {
             mysql_family: MysqlFamily::Mysql,
             mysql_series: "8.4".to_owned(),
             production: false,
+            push_destination: false,
             tls_mode: crate::domain::MysqlTlsMode::Disabled,
             tls_material: Default::default(),
             client: MysqlClientConfig {

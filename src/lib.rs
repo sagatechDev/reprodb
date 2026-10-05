@@ -197,6 +197,26 @@ pub async fn execute_with_cancellation(
                 print!("{}", cli::profile::render_activated(&style, &name));
                 Ok(())
             }
+            ProfileCommands::AllowPush(arguments) => {
+                let name = ProfileName::try_from(arguments.name)?;
+                let service = application::ProfileService::new(ConfigRepository::discover()?);
+                service.set_push_destination(&name, true)?;
+                print!(
+                    "{}",
+                    cli::profile::render_push_destination(&style, &name, true)
+                );
+                Ok(())
+            }
+            ProfileCommands::DenyPush(arguments) => {
+                let name = ProfileName::try_from(arguments.name)?;
+                let service = application::ProfileService::new(ConfigRepository::discover()?);
+                service.set_push_destination(&name, false)?;
+                print!(
+                    "{}",
+                    cli::profile::render_push_destination(&style, &name, false)
+                );
+                Ok(())
+            }
             ProfileCommands::Remove(arguments) => {
                 let name = ProfileName::try_from(arguments.name)?;
                 let confirmed = arguments.yes || cli::prompt::confirm_profile_removal(&name)?;
@@ -388,6 +408,66 @@ pub async fn execute_with_cancellation(
             progress.finish();
             let ready = result?;
             print!("{}", cli::pull::render_complete(&style, &ready));
+            Ok(())
+        }
+        Commands::Push(arguments) => {
+            let database = DatabaseName::try_from(arguments.database)?;
+            let profile = arguments.profile.map(ProfileName::try_from).transpose()?;
+            let dump_id = arguments
+                .dump_id
+                .map(|raw| raw.parse::<domain::DumpId>())
+                .transpose()?;
+            let target_database = arguments
+                .target_database
+                .map(DatabaseName::try_from)
+                .transpose()?;
+            let selector = cli::push::CliPushSelector::new(
+                style,
+                profile,
+                dump_id,
+                arguments.fresh,
+                target_database,
+                arguments.yes,
+            );
+            print!("{}", cli::push::render_start(&style));
+            std::io::stdout().flush().map_err(AppError::Output)?;
+
+            let repository = ConfigRepository::discover()?;
+            let workflow = infrastructure::mysql::DockerDumpWorkflow::new(
+                infrastructure::process::TokioProcessRunner,
+            );
+            let progress = std::sync::Arc::new(cli::push::CliPushProgress::new(style));
+            let service = application::PushService::new(repository)
+                .with_progress(progress.clone())
+                .with_compression_progress(progress.clone());
+            let dump_executor =
+                infrastructure::mysql::DockerMysqlDumpExecutor::new(cancellation.clone());
+            let result = service
+                .push(
+                    &credential_store,
+                    &infrastructure::mysql::DockerRemoteTargetProbe::new(
+                        infrastructure::process::TokioProcessRunner,
+                    ),
+                    application::PullDumpDependencies {
+                        preflight: &workflow,
+                        executor: &dump_executor,
+                    },
+                    infrastructure::mysql::DockerMysqlRemoteImportExecutor::new(
+                        cancellation.clone(),
+                    ),
+                    &selector,
+                    database,
+                )
+                .await;
+            progress.finish();
+            match result? {
+                application::PushOutcome::Ready(ready) => {
+                    print!("{}", cli::push::render_complete(&style, &ready));
+                }
+                application::PushOutcome::Cancelled => {
+                    print!("{}", cli::push::render_cancelled(&style));
+                }
+            }
             Ok(())
         }
         Commands::Cache(arguments) => {

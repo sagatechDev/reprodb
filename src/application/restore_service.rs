@@ -153,7 +153,7 @@ impl RestoreService {
     /// Reads metadata only. The expensive validation (size, Zstd and both
     /// SHA-256 digests) runs once, on the dump the user picks, so offering six
     /// candidates does not mean hashing six artifacts.
-    fn dump_choices(
+    pub(crate) fn dump_choices(
         &self,
         database: &DatabaseName,
     ) -> Result<Vec<RestoreDumpChoice>, RestoreServiceError> {

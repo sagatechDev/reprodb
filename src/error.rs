@@ -5,8 +5,9 @@ use crate::{
         CacheServiceError, CredentialProvisionError, DatabaseCatalogReadError,
         DatabaseCatalogServiceError, DoctorFailureKind, DumpServiceError,
         LocalTargetAttestationError, LocalTargetGateError, ProfileServiceError, PullServiceError,
-        RestoreEngineError, RestoreSelectionError, RestoreServiceError, SetupServiceError,
-        SourceVerificationError, TargetVerificationError,
+        PushSelectionError, PushServiceError, RemoteTargetGateError, RestoreEngineError,
+        RestoreSelectionError, RestoreServiceError, SetupServiceError, SourceVerificationError,
+        TargetVerificationError,
     },
     cli::prompt::PromptError,
     domain::{DumpMetadataError, ValueObjectError},
@@ -14,7 +15,7 @@ use crate::{
     infrastructure::docker::DockerDiscoveryError,
     infrastructure::mysql::{
         DockerClientError, DumpExecutorError, DumpFailureKind, DumpPreflightError,
-        RestoreExecutorError, RestoreFailureKind,
+        RemoteFailureKind, RemoteImportError, RestoreExecutorError, RestoreFailureKind,
     },
 };
 
@@ -84,6 +85,9 @@ pub enum AppError {
     Pull(#[from] PullServiceError),
 
     #[error(transparent)]
+    Push(#[from] PushServiceError),
+
+    #[error(transparent)]
     Cache(#[from] CacheServiceError),
 
     #[error(transparent)]
@@ -117,7 +121,10 @@ impl AppError {
             Self::InvalidDumpId(..) => ErrorCategory::Usage,
             Self::Profile(ProfileServiceError::Config(_))
             | Self::Profile(ProfileServiceError::NotFound)
-            | Self::Profile(ProfileServiceError::AlreadyExists) => ErrorCategory::Configuration,
+            | Self::Profile(ProfileServiceError::AlreadyExists)
+            | Self::Profile(ProfileServiceError::ProductionPushDestination) => {
+                ErrorCategory::Configuration
+            }
             Self::Profile(ProfileServiceError::InvalidField { .. }) => ErrorCategory::Usage,
             Self::Profile(ProfileServiceError::Verification(
                 SourceVerificationError::DockerUnavailable,
@@ -177,6 +184,7 @@ impl AppError {
             Self::Dump(error) => dump_error_category(error),
             Self::Restore(error) => restore_error_category(error),
             Self::Pull(error) => pull_error_category(error),
+            Self::Push(error) => push_error_category(error),
             Self::Cache(error) => cache_error_category(error),
             Self::DatabaseCatalog(error) => match error {
                 DatabaseCatalogServiceError::Config(_)
@@ -243,6 +251,65 @@ const fn pull_error_category(error: &PullServiceError) -> ErrorCategory {
         PullServiceError::Cache(_) => ErrorCategory::Cache,
         PullServiceError::Dump(error) => dump_error_category(error),
         PullServiceError::Restore(error) => restore_error_category(error),
+    }
+}
+
+const fn push_error_category(error: &PushServiceError) -> ErrorCategory {
+    match error {
+        PushServiceError::NoEligibleProfile => ErrorCategory::Configuration,
+        PushServiceError::Selection(
+            PushSelectionError::Unavailable(_) | PushSelectionError::UnknownDump(_),
+        ) => ErrorCategory::Usage,
+        PushServiceError::Target(error) => remote_target_error_category(error),
+        PushServiceError::DumpChoices(error) => restore_error_category(error),
+        PushServiceError::Dump(error) => dump_error_category(error),
+        PushServiceError::Artifact(_) | PushServiceError::Lock(_) => ErrorCategory::Cache,
+        PushServiceError::Import(RemoteImportError::Client(error)) => {
+            docker_client_error_category(error)
+        }
+        PushServiceError::Import(RemoteImportError::Stream(error)) => {
+            restore_executor_error_category(error)
+        }
+        PushServiceError::Import(
+            RemoteImportError::EnsureFailed { kind, .. }
+            | RemoteImportError::ImportFailed { kind, .. },
+        ) => remote_failure_category(*kind),
+        PushServiceError::ImportedSizeMismatch => ErrorCategory::Restore,
+    }
+}
+
+const fn remote_target_error_category(error: &RemoteTargetGateError) -> ErrorCategory {
+    match error {
+        RemoteTargetGateError::Config(_)
+        | RemoteTargetGateError::ProfileNotFound
+        | RemoteTargetGateError::ProductionDestination
+        | RemoteTargetGateError::PushNotAllowed { .. }
+        | RemoteTargetGateError::ProtectedEndpoint { .. }
+        | RemoteTargetGateError::DockerContextMissing
+        | RemoteTargetGateError::ProtectedSourceServer { .. }
+        | RemoteTargetGateError::ProtectedServer { .. }
+        | RemoteTargetGateError::SourceCollision => ErrorCategory::Configuration,
+        RemoteTargetGateError::Credential(_) => ErrorCategory::Credential,
+        RemoteTargetGateError::Store(_) => ErrorCategory::Cache,
+        RemoteTargetGateError::ClientCatalog(_)
+        | RemoteTargetGateError::UnsupportedVendor
+        | RemoteTargetGateError::UnsupportedServerSeries => ErrorCategory::Dependency,
+        RemoteTargetGateError::Probe(error) => docker_client_error_category(error),
+        RemoteTargetGateError::TlsRequiredButNotNegotiated => ErrorCategory::SourceConnection,
+        RemoteTargetGateError::VersionMismatch => ErrorCategory::Restore,
+    }
+}
+
+const fn remote_failure_category(kind: RemoteFailureKind) -> ErrorCategory {
+    match kind {
+        RemoteFailureKind::Authentication => ErrorCategory::Credential,
+        RemoteFailureKind::DestinationUnavailable | RemoteFailureKind::DestinationChanged => {
+            ErrorCategory::SourceConnection
+        }
+        RemoteFailureKind::DockerUnavailable => ErrorCategory::Docker,
+        RemoteFailureKind::Permission | RemoteFailureKind::Sql | RemoteFailureKind::Unknown => {
+            ErrorCategory::Restore
+        }
     }
 }
 
@@ -525,5 +592,49 @@ mod tests {
         assert_eq!(configuration.exit_code(), 10);
         assert_eq!(cache.exit_code(), 50);
         assert_eq!(source.exit_code(), 40);
+    }
+
+    #[test]
+    fn push_refusals_and_interruptions_map_to_stable_exit_codes() {
+        let production = AppError::Push(PushServiceError::Target(
+            RemoteTargetGateError::ProductionDestination,
+        ));
+        let not_allowed = AppError::Push(PushServiceError::Target(
+            RemoteTargetGateError::PushNotAllowed {
+                profile: crate::domain::ProfileName::try_from("production").unwrap(),
+            },
+        ));
+        let collision = AppError::Push(PushServiceError::Target(
+            RemoteTargetGateError::SourceCollision,
+        ));
+        let version = AppError::Push(PushServiceError::Target(
+            RemoteTargetGateError::VersionMismatch,
+        ));
+        let interrupted = AppError::Push(PushServiceError::Import(RemoteImportError::Stream(
+            RestoreExecutorError::Interrupted,
+        )));
+        let changed = AppError::Push(PushServiceError::Import(RemoteImportError::ImportFailed {
+            exit_code: Some(1),
+            kind: RemoteFailureKind::DestinationChanged,
+            stderr_truncated: false,
+        }));
+        let permission =
+            AppError::Push(PushServiceError::Import(RemoteImportError::ImportFailed {
+                exit_code: Some(1),
+                kind: RemoteFailureKind::Permission,
+                stderr_truncated: false,
+            }));
+        let no_terminal = AppError::Push(PushServiceError::Selection(
+            PushSelectionError::Unavailable("rerun with --yes".to_owned()),
+        ));
+
+        assert_eq!(production.exit_code(), 10);
+        assert_eq!(not_allowed.exit_code(), 10);
+        assert_eq!(collision.exit_code(), 10);
+        assert_eq!(version.exit_code(), 70);
+        assert_eq!(interrupted.exit_code(), 130);
+        assert_eq!(changed.exit_code(), 30);
+        assert_eq!(permission.exit_code(), 70);
+        assert_eq!(no_terminal.exit_code(), 2);
     }
 }

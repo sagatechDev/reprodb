@@ -70,8 +70,13 @@ pub fn render_list(style: &OutputStyle, profiles: &[ProfileSummary]) -> String {
         } else {
             style.muted("development")
         };
+        let push = if profile.push_destination {
+            format!(" · {}", style.attention("accepts push"))
+        } else {
+            String::new()
+        };
         output.push_str(&format!(
-            "{marker} {}{active}\n    {}:{} · MySQL {} · TLS {} · {policy}\n",
+            "{marker} {}{active}\n    {}:{} · MySQL {} · TLS {} · {policy}{push}\n",
             profile.name, profile.host, profile.port, profile.mysql_series, profile.tls_mode,
         ));
     }
@@ -111,6 +116,22 @@ pub fn render_removed(style: &OutputStyle, name: &ProfileName, removal: ProfileR
     output
 }
 
+pub fn render_push_destination(style: &OutputStyle, name: &ProfileName, allowed: bool) -> String {
+    if allowed {
+        format!(
+            "{} Profile {} now accepts `reprodb push`; tables present in a pushed dump will be replaced there.\n",
+            style.attention("!"),
+            style.value(name.as_str()),
+        )
+    } else {
+        format!(
+            "{} Profile {} no longer accepts `reprodb push`.\n",
+            style.success("✓"),
+            style.value(name.as_str()),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +145,7 @@ mod tests {
             mysql_series: "8.4".to_owned(),
             tls_mode: crate::domain::MysqlTlsMode::Required,
             production,
+            push_destination: false,
         }
     }
 

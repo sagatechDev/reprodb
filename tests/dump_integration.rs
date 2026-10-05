@@ -50,6 +50,7 @@ async fn dumps_a_real_local_database_into_a_managed_zstd_artifact() {
             mysql_family: MysqlFamily::Mysql,
             mysql_series: "8.4".to_owned(),
             production: false,
+            push_destination: false,
             tls_mode: MysqlTlsMode::Required,
             tls_material: Default::default(),
             client: MysqlClientConfig {

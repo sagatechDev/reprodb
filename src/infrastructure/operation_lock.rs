@@ -16,6 +16,7 @@ const LOCKS_DIRECTORY: &str = "locks";
 pub enum OperationLockScope {
     Source,
     Target,
+    Remote,
 }
 
 impl OperationLockScope {
@@ -23,6 +24,7 @@ impl OperationLockScope {
         match self {
             Self::Source => "source",
             Self::Target => "target",
+            Self::Remote => "remote",
         }
     }
 }
@@ -37,6 +39,13 @@ impl OperationLockKey {
     pub fn source(profile: &ProfileName, database: &DatabaseName) -> Self {
         Self::new(
             OperationLockScope::Source,
+            [profile.as_str().as_bytes(), database.as_str().as_bytes()],
+        )
+    }
+
+    pub fn remote(profile: &ProfileName, database: &DatabaseName) -> Self {
+        Self::new(
+            OperationLockScope::Remote,
             [profile.as_str().as_bytes(), database.as_str().as_bytes()],
         )
     }

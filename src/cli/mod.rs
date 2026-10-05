@@ -11,6 +11,7 @@ pub mod preview;
 pub mod profile;
 pub mod prompt;
 pub mod pull;
+pub mod push;
 pub mod restore;
 pub mod setup;
 
@@ -48,6 +49,9 @@ pub enum Commands {
     /// Dump and restore a source database into the configured local target.
     Pull(PullArgs),
 
+    /// Import a managed dump into a database of a profile that accepts pushes.
+    Push(PushArgs),
+
     /// Inspect and prune the local dump cache.
     Cache(CacheArgs),
 
@@ -65,6 +69,7 @@ impl Commands {
             Self::Dump(_) => "dump",
             Self::Restore(_) => "restore",
             Self::Pull(_) => "pull",
+            Self::Push(_) => "push",
             Self::Cache(_) => "cache",
             Self::Database(_) => "database",
         }
@@ -90,6 +95,12 @@ pub enum ProfileCommands {
 
     /// Remove a source profile and its credential.
     Remove(ProfileRemoveArgs),
+
+    /// Allow `reprodb push` to write to a profile. Production profiles are refused.
+    AllowPush(ProfileNameArgs),
+
+    /// Forbid `reprodb push` from writing to a profile.
+    DenyPush(ProfileNameArgs),
 }
 
 #[derive(Debug, Args)]
@@ -274,6 +285,33 @@ pub struct PullArgs {
     /// Show the planned flow without connecting, dumping or restoring.
     #[arg(long)]
     pub preview: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PushArgs {
+    /// Source database name stored in the managed dump.
+    #[arg(value_name = "DATABASE")]
+    pub database: String,
+
+    /// Destination profile; it must have been allowed with `profile allow-push`.
+    #[arg(long, value_name = "PROFILE")]
+    pub profile: Option<String>,
+
+    /// ID of a stored dump to push. Omit to choose interactively.
+    #[arg(long, value_name = "ID", conflicts_with = "fresh")]
+    pub dump_id: Option<String>,
+
+    /// Create a new dump from the active profile and push it.
+    #[arg(long)]
+    pub fresh: bool,
+
+    /// Destination database name; defaults to DATABASE.
+    #[arg(long = "database", value_name = "DATABASE")]
+    pub target_database: Option<String>,
+
+    /// Skip the typed confirmation.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 }
 
 #[derive(Debug, Args)]
@@ -618,5 +656,61 @@ mod tests {
             panic!("expected restore command")
         };
         assert_eq!(restore.target.as_deref(), Some("mysql-target"));
+    }
+
+    #[test]
+    fn parses_push_with_every_flag_and_rejects_dump_id_with_fresh() {
+        let cli = Cli::try_parse_from([
+            "reprodb",
+            "push",
+            "salt_sagatec",
+            "--profile",
+            "sandbox",
+            "--dump-id",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "--database",
+            "salt_sagatec_qa",
+            "--yes",
+        ])
+        .unwrap();
+        let Commands::Push(push) = cli.command else {
+            panic!("expected push command")
+        };
+        assert_eq!(push.database, "salt_sagatec");
+        assert_eq!(push.profile.as_deref(), Some("sandbox"));
+        assert_eq!(push.target_database.as_deref(), Some("salt_sagatec_qa"));
+        assert!(push.yes);
+        assert!(!push.fresh);
+
+        assert!(
+            Cli::try_parse_from([
+                "reprodb",
+                "push",
+                "salt_sagatec",
+                "--fresh",
+                "--dump-id",
+                "550e8400-e29b-41d4-a716-446655440000",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_push_opt_in_commands() {
+        for (command, expected_allow) in [("allow-push", true), ("deny-push", false)] {
+            let cli = Cli::try_parse_from(["reprodb", "profile", command, "sandbox"]).unwrap();
+            let Commands::Profile(profile) = cli.command else {
+                panic!("expected profile command")
+            };
+            match profile.command {
+                ProfileCommands::AllowPush(arguments) if expected_allow => {
+                    assert_eq!(arguments.name, "sandbox")
+                }
+                ProfileCommands::DenyPush(arguments) if !expected_allow => {
+                    assert_eq!(arguments.name, "sandbox")
+                }
+                other => panic!("unexpected command {other:?}"),
+            }
+        }
     }
 }

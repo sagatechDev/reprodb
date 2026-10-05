@@ -34,6 +34,7 @@ async fn cli_lists_and_prunes_a_managed_dump_without_accessing_docker_or_credent
         mysql_family: MysqlFamily::Mysql,
         mysql_series: "8.4".to_owned(),
         production: false,
+        push_destination: false,
         tls_mode: MysqlTlsMode::Disabled,
         tls_material: Default::default(),
         client: MysqlClientConfig {

@@ -19,6 +19,8 @@ Os códigos abaixo fazem parte da interface da CLI. Novas mensagens podem ser ad
 
 No fluxo de restore, UUID inválido é erro de uso (`2`); artefato ausente, duplicado ou corrompido pertence ao cache (`50`). Sem `--dump-id`, o comando abre o seletor de dumps: database sem nenhum candidato continua sendo cache (`50`), e a ausência de terminal para escolher é erro de uso (`2`), assim como `cache prune` sem terminal e sem `--yes`; identidade do target pertence a Docker/configuração (`60`/`10`); e falha depois do início da recriação/importação pertence ao restore (`70`).
 
+No `push`, as recusas do destino (produção, profile não liberado, endpoint ou servidor protegido, colisão com a origem) são configuração (`10`); destino inacessível, TLS ou servidor diferente do validado no momento da escrita são conexão (`30`); versão incompatível, falta de privilégio e falha de import são `70`; e rodar sem terminal sem `--profile`/`--yes` é uso (`2`).
+
 ## Regras de mensagem e logging
 
 - mensagens para o usuário vão a stderr e precisam sugerir uma ação quando possível;

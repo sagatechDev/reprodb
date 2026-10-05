@@ -446,6 +446,7 @@ mod tests {
                 mysql_family: MysqlFamily::Mysql,
                 mysql_series: "8.4".to_owned(),
                 production,
+                push_destination: false,
                 tls_mode: if production {
                     MysqlTlsMode::VerifyIdentity
                 } else {

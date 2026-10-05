@@ -117,103 +117,23 @@ impl RestoreExecutor for DockerMysqlRestoreExecutor {
         let option_file = target_option_file(target)?;
         let operation_container = ephemeral_container_name("restore");
         let spec = import_process_spec(target, artifact, option_file.path(), &operation_container);
-        let mut child = spawn(&spec, true)?;
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or(RestoreExecutorError::MissingStdin)?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or(RestoreExecutorError::MissingStderr)?;
-        let stderr_task = tokio::spawn(read_bounded(stderr, MAX_STDERR_BYTES));
-
-        let path = artifact.dump_path().to_owned();
-        let (sender, mut receiver) = mpsc::channel::<Vec<u8>>(BUFFERED_CHUNKS);
-        let decoder = tokio::task::spawn_blocking(move || decode_chunks(path, sender));
-        let copy_result = async {
-            loop {
-                let chunk = tokio::select! {
-                    biased;
-                    () = self.cancellation.cancelled() => {
-                        return Err(RestoreExecutorError::Interrupted);
-                    }
-                    chunk = receiver.recv() => chunk,
-                };
-                let Some(chunk) = chunk else {
-                    break;
-                };
-                tokio::select! {
-                    biased;
-                    () = self.cancellation.cancelled() => {
-                        return Err(RestoreExecutorError::Interrupted);
-                    }
-                    result = stdin.write_all(&chunk) => {
-                        result.map_err(RestoreExecutorError::WriteStdin)?;
-                    }
-                }
-            }
-            tokio::select! {
-                biased;
-                () = self.cancellation.cancelled() => {
-                    Err(RestoreExecutorError::Interrupted)
-                }
-                result = stdin.shutdown() => result.map_err(RestoreExecutorError::CloseStdin),
-            }
-        }
-        .await;
-        drop(receiver);
-        drop(stdin);
-
-        let mut interrupted_while_waiting = false;
-        let status = if copy_result.is_err() {
-            terminate_ephemeral_run(&mut child, target.docker_context(), &operation_container).await
-        } else {
-            tokio::select! {
-                biased;
-                () = self.cancellation.cancelled() => {
-                    interrupted_while_waiting = true;
-                    terminate_ephemeral_run(
-                        &mut child,
-                        target.docker_context(),
-                        &operation_container,
-                    ).await
-                }
-                status = child.wait() => status,
-            }
-        }
-        .map_err(RestoreExecutorError::Wait);
-        let diagnostic = stderr_task
-            .await
-            .map_err(RestoreExecutorError::StderrTask)??;
-        let decoded = decoder.await.map_err(RestoreExecutorError::DecoderTask)?;
-
-        if matches!(&copy_result, Err(RestoreExecutorError::Interrupted))
-            || interrupted_while_waiting
-        {
-            if let Err(error) = status {
-                tracing::warn!(%error, "could not confirm interrupted restore child termination");
-            }
-            return Err(RestoreExecutorError::Interrupted);
-        }
-        copy_result?;
-        let decoded = decoded?;
-        let status = status?;
-        if !status.success() {
+        let streamed = stream_import(
+            &spec,
+            b"",
+            artifact,
+            &self.cancellation,
+            target.docker_context(),
+            &operation_container,
+        )
+        .await?;
+        if !streamed.status.success() {
             return Err(RestoreExecutorError::ImportFailed {
-                exit_code: status.code(),
-                kind: classify_failure(&diagnostic.bytes),
-                stderr_truncated: diagnostic.truncated,
+                exit_code: streamed.status.code(),
+                kind: classify_failure(&streamed.diagnostic.bytes),
+                stderr_truncated: streamed.diagnostic.truncated,
             });
         }
-        if decoded.bytes != artifact.metadata().uncompressed_bytes
-            || decoded.sha256 != artifact.metadata().sql_sha256
-        {
-            return Err(RestoreExecutorError::ArtifactChangedDuringImport);
-        }
-        Ok(RestoreMetrics {
-            imported_bytes: decoded.bytes,
-        })
+        streamed.verified_metrics(artifact)
     }
 }
 
@@ -313,7 +233,141 @@ fn spawn(spec: &ProcessSpec, pipe_stdin: bool) -> Result<Child, RestoreExecutorE
         .map_err(RestoreExecutorError::Start)
 }
 
-async fn run_without_stdin(
+/// Result of streaming a validated dump into a Dockerized `mysql` client.
+///
+/// The caller classifies a non-zero exit with its own target wording; the
+/// streaming itself does not know whether the target is local or remote.
+pub(super) struct StreamedImport {
+    pub(super) status: std::process::ExitStatus,
+    pub(super) diagnostic: BoundedBytes,
+    bytes: u64,
+    sha256: Sha256Digest,
+}
+
+impl StreamedImport {
+    /// Confirms mysql consumed exactly the validated SQL before reporting it.
+    pub(super) fn verified_metrics(
+        &self,
+        artifact: &ValidatedRestoreArtifact,
+    ) -> Result<RestoreMetrics, RestoreExecutorError> {
+        if self.bytes != artifact.metadata().uncompressed_bytes
+            || self.sha256 != artifact.metadata().sql_sha256
+        {
+            return Err(RestoreExecutorError::ArtifactChangedDuringImport);
+        }
+        Ok(RestoreMetrics {
+            imported_bytes: self.bytes,
+        })
+    }
+}
+
+/// `preamble` is written before the dump and is not part of the imported
+/// byte count; a remote push uses it to re-attest the server identity inside
+/// the same session that writes.
+pub(super) async fn stream_import(
+    spec: &ProcessSpec,
+    preamble: &[u8],
+    artifact: &ValidatedRestoreArtifact,
+    cancellation: &CancellationToken,
+    docker_context: &str,
+    operation_container: &str,
+) -> Result<StreamedImport, RestoreExecutorError> {
+    let mut child = spawn(spec, true)?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or(RestoreExecutorError::MissingStdin)?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or(RestoreExecutorError::MissingStderr)?;
+    let stderr_task = tokio::spawn(read_bounded(stderr, MAX_STDERR_BYTES));
+
+    let path = artifact.dump_path().to_owned();
+    let (sender, mut receiver) = mpsc::channel::<Vec<u8>>(BUFFERED_CHUNKS);
+    let decoder = tokio::task::spawn_blocking(move || decode_chunks(path, sender));
+    let copy_result = async {
+        if !preamble.is_empty() {
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    return Err(RestoreExecutorError::Interrupted);
+                }
+                result = stdin.write_all(preamble) => {
+                    result.map_err(RestoreExecutorError::WriteStdin)?;
+                }
+            }
+        }
+        loop {
+            let chunk = tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    return Err(RestoreExecutorError::Interrupted);
+                }
+                chunk = receiver.recv() => chunk,
+            };
+            let Some(chunk) = chunk else {
+                break;
+            };
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    return Err(RestoreExecutorError::Interrupted);
+                }
+                result = stdin.write_all(&chunk) => {
+                    result.map_err(RestoreExecutorError::WriteStdin)?;
+                }
+            }
+        }
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {
+                Err(RestoreExecutorError::Interrupted)
+            }
+            result = stdin.shutdown() => result.map_err(RestoreExecutorError::CloseStdin),
+        }
+    }
+    .await;
+    drop(receiver);
+    drop(stdin);
+
+    let mut interrupted_while_waiting = false;
+    let status = if copy_result.is_err() {
+        terminate_ephemeral_run(&mut child, docker_context, operation_container).await
+    } else {
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {
+                interrupted_while_waiting = true;
+                terminate_ephemeral_run(&mut child, docker_context, operation_container).await
+            }
+            status = child.wait() => status,
+        }
+    }
+    .map_err(RestoreExecutorError::Wait);
+    let diagnostic = stderr_task
+        .await
+        .map_err(RestoreExecutorError::StderrTask)??;
+    let decoded = decoder.await.map_err(RestoreExecutorError::DecoderTask)?;
+
+    if matches!(&copy_result, Err(RestoreExecutorError::Interrupted)) || interrupted_while_waiting {
+        if let Err(error) = status {
+            tracing::warn!(%error, "could not confirm interrupted restore child termination");
+        }
+        return Err(RestoreExecutorError::Interrupted);
+    }
+    copy_result?;
+    let decoded = decoded?;
+    let status = status?;
+    Ok(StreamedImport {
+        status,
+        diagnostic,
+        bytes: decoded.bytes,
+        sha256: decoded.sha256,
+    })
+}
+
+pub(super) async fn run_without_stdin(
     spec: &ProcessSpec,
     cancellation: &CancellationToken,
     docker_context: &str,
@@ -409,7 +463,7 @@ impl std::fmt::Display for RestoreFailureKind {
     }
 }
 
-fn classify_failure(stderr: &[u8]) -> RestoreFailureKind {
+pub(super) fn classify_failure(stderr: &[u8]) -> RestoreFailureKind {
     let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
     if stderr.contains("access denied") {
         RestoreFailureKind::Authentication
@@ -594,5 +648,43 @@ mod tests {
         };
         assert!(permission.to_string().contains("cannot recreate or import"));
         assert!(!format!("{:?}", classify_failure(marker.as_bytes())).contains(marker));
+    }
+
+    #[tokio::test]
+    async fn stream_import_feeds_the_preamble_then_the_whole_validated_dump() {
+        let directory = tempfile::tempdir().unwrap();
+        let sql = b"CREATE TABLE `items` (`id` BIGINT);\nINSERT INTO `items` VALUES (1);\n";
+        let artifact = crate::infrastructure::restore_artifact::test_support::validated_artifact(
+            directory.path(),
+            sql,
+        )
+        .await;
+        let output = directory.path().join("received.sql");
+        let spec =
+            ProcessSpec::new("sh").args(["-c".to_owned(), format!("cat > '{}'", output.display())]);
+
+        let streamed = stream_import(
+            &spec,
+            b"-- preamble\n",
+            &artifact,
+            &CancellationToken::default(),
+            "unused-context",
+            "unused-container",
+        )
+        .await
+        .unwrap();
+
+        assert!(streamed.status.success());
+        assert_eq!(
+            std::fs::read(&output).unwrap(),
+            [b"-- preamble\n".as_slice(), sql].concat()
+        );
+        assert_eq!(
+            streamed
+                .verified_metrics(&artifact)
+                .unwrap()
+                .imported_bytes(),
+            sql.len() as u64
+        );
     }
 }

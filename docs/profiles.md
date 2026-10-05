@@ -37,6 +37,8 @@ O modo não interativo equivalente aceita `--tls verify-identity --tls-ca /path/
 
 `profile edit NAME --central-database DATABASE` altera somente o resolver do profile no arquivo de configuração. Não solicita nem substitui a senha, não testa a conexão e não executa SQL. Isso permite corrigir o catálogo central sem remover e cadastrar novamente o profile.
 
+`profile allow-push NAME` libera o profile como destino de `reprodb push` e `profile deny-push NAME` revoga. Profiles de produção nunca podem ser liberados; o campo fica no TOML como `push_destination = true`. Detalhes em [`push-command.md`](push-command.md).
+
 `profile remove` pede confirmação, exceto com `--yes`. A configuração deixa de referenciar a credencial antes de o credential store ser alterado. Remover o profile ativo deixa o projeto sem profile selecionado e a saída explica como escolher o próximo.
 
 Se a credencial já não existir, a remoção do profile termina com aviso. Se o credential store falhar, o comando informa a chave órfã e retorna exit code `11`, sem restaurar um profile removido nem mostrar o segredo.

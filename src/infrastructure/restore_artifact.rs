@@ -470,3 +470,77 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::{io::Cursor, path::Path, sync::Arc};
+
+    use crate::{
+        domain::{
+            DatabaseEncoding, DatabaseName, DumpArtifactCompletion, DumpArtifactContext,
+            DumpArtifactMetadata, MysqlVersion, ProfileName, Sha256Digest,
+        },
+        infrastructure::{
+            artifact_store::LocalArtifactStore,
+            compression::{NoCompressionProgress, ZstdCompressor},
+        },
+    };
+
+    use super::{LocalRestoreArtifactValidator, RestoreArtifactRequest, ValidatedRestoreArtifact};
+
+    /// Publishes `sql` as a complete `local-source/acme_production` dump made
+    /// on server `11111111-…` (MySQL 8.4.4) and returns it validated.
+    pub(crate) async fn validated_artifact(
+        cache_root: &Path,
+        sql: &[u8],
+    ) -> ValidatedRestoreArtifact {
+        let profile = ProfileName::try_from("local-source").unwrap();
+        let database = DatabaseName::try_from("acme_production").unwrap();
+        let store = LocalArtifactStore::new(cache_root);
+        let stage = store.begin(&profile, &database).unwrap();
+        let dump_id = stage.dump_id();
+        let metrics = ZstdCompressor::default()
+            .compress(
+                Cursor::new(sql.to_vec()),
+                stage.create_dump_writer().unwrap(),
+                Arc::new(NoCompressionProgress),
+            )
+            .await
+            .unwrap();
+        let metadata = DumpArtifactMetadata::try_new(
+            dump_id,
+            DumpArtifactContext {
+                database: database.clone(),
+                profile: profile.clone(),
+                source_fingerprint: Sha256Digest::from_bytes([1; 32]),
+                source_server_uuid: "11111111-1111-4111-8111-111111111111".parse().unwrap(),
+                source_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
+                client_version: "8.4.4".parse::<MysqlVersion>().unwrap(),
+                database_encoding: DatabaseEncoding::try_new(
+                    "utf8mb4".to_owned(),
+                    "utf8mb4_0900_ai_ci".to_owned(),
+                )
+                .unwrap(),
+                policy_version: 1,
+            },
+            DumpArtifactCompletion {
+                created_at_unix_seconds: 100,
+                completed_at_unix_seconds: 101,
+                uncompressed_bytes: metrics.input_bytes(),
+                compressed_bytes: metrics.compressed_bytes(),
+                sql_sha256: metrics.input_sha256(),
+                artifact_sha256: metrics.compressed_sha256(),
+            },
+        )
+        .unwrap();
+        stage.publish(&metadata, &metrics).unwrap();
+        LocalRestoreArtifactValidator::new(cache_root)
+            .validate(RestoreArtifactRequest {
+                profile: &profile,
+                database: &database,
+                dump_id,
+            })
+            .await
+            .unwrap()
+    }
+}

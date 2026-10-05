@@ -114,6 +114,8 @@ O `pull` recebe o nome do database na origem e pergunta com que nome ele será c
 | `reprodb doctor` | Diagnostica config, credenciais, Docker, disco e conexões — sem alterar nada |
 | `reprodb db list` | Lista os databases disponíveis na origem ativa |
 | `reprodb pull <database>` | **Fluxo principal**: dump (ou cache) + restore |
+| `reprodb push <database>` | Importa um dump em um database de outro profile liberado (ex.: produção → sandbox) |
+| `reprodb profile allow-push` / `deny-push` | Libera/revoga um profile como destino de `push` (nunca produção) |
 | `reprodb dump <database>` | Só gera o dump em cache |
 | `reprodb restore <database> --dump-id <id>` | Só restaura um dump já existente |
 | `reprodb cache list` / `clean` / `purge <database>` | Inspeciona e limpa os dumps locais |
@@ -142,7 +144,7 @@ origem MySQL ──mysqldump──► dump.sql.zst (~/.reprodb/cache)
 
 **Garantias de segurança** — por que dá para rodar isso apontando para produção:
 
-- a origem é lida apenas com `mysqldump`; nada é escrito nela;
+- a origem é lida apenas com `mysqldump`; só o `push` escreve fora do container local, e apenas em profiles liberados com `profile allow-push`, nunca em produção nem no servidor de um profile não liberado;
 - senhas ficam fora do TOML, em `~/.reprodb/credentials/` (diretório `0700`, arquivos `0600`); o TOML guarda só chaves opacas;
 - databases de sistema (`mysql`, `information_schema`, `performance_schema`, `sys`) são recusados como destino;
 - o container de destino é identificado pelo ID completo — um container recriado com o mesmo nome é recusado;
@@ -214,7 +216,7 @@ cargo test -- --ignored --test-threads=1
 |---|---|
 | Target Docker local | [`setup.md`](docs/setup.md) · [`local-target-safety.md`](docs/local-target-safety.md) |
 | Perfis de origem | [`profiles.md`](docs/profiles.md) · [`configuration.md`](docs/configuration.md) |
-| Fluxo principal | [`pull-command.md`](docs/pull-command.md) · [`dump-command.md`](docs/dump-command.md) · [`restore-command.md`](docs/restore-command.md) |
+| Fluxo principal | [`pull-command.md`](docs/pull-command.md) · [`dump-command.md`](docs/dump-command.md) · [`restore-command.md`](docs/restore-command.md) · [`push-command.md`](docs/push-command.md) |
 | Cache | [`cache-commands.md`](docs/cache-commands.md) · [`cache-validity.md`](docs/cache-validity.md) · [`compression.md`](docs/compression.md) |
 | Diagnóstico | [`doctor.md`](docs/doctor.md) · [`exit-codes.md`](docs/exit-codes.md) |
 | Decisões e roadmap | [`docs/adr`](docs/adr) · [`implementation-roadmap.md`](docs/implementation-roadmap.md) · [`local-mvp-definition-of-done.md`](docs/local-mvp-definition-of-done.md) |

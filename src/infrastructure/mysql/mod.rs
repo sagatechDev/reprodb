@@ -6,6 +6,8 @@ mod dump_preflight;
 mod dump_workflow;
 mod local_target_attestor;
 mod profile_verifier;
+mod remote_import_executor;
+mod remote_target_probe;
 mod restore_executor;
 mod target_verifier;
 
@@ -25,6 +27,10 @@ pub use dump_preflight::{
 pub use dump_workflow::DockerDumpWorkflow;
 pub use local_target_attestor::DockerLocalTargetAttestor;
 pub use profile_verifier::DockerSourceProfileVerifier;
+pub use remote_import_executor::{
+    DockerMysqlRemoteImportExecutor, RemoteFailureKind, RemoteImportError, RemoteImportExecutor,
+};
+pub use remote_target_probe::DockerRemoteTargetProbe;
 pub use restore_executor::{
     DockerMysqlRestoreExecutor, RestoreExecutor, RestoreExecutorError, RestoreFailureKind,
     RestoreMetrics,

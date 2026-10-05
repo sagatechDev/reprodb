@@ -437,6 +437,48 @@ pub fn select_pull_target(choices: &[PullTargetChoice]) -> Result<ContainerName,
     Ok(choices[selected].container.clone())
 }
 
+pub fn select_push_profile(labels: &[String]) -> Result<usize, PromptError> {
+    Select::with_theme(&SimpleTheme)
+        .with_prompt("Destination profile")
+        .items(labels)
+        .default(0)
+        .interact()
+        .map_err(unavailable)
+}
+
+pub fn select_push_dump(labels: &[String]) -> Result<usize, PromptError> {
+    Select::with_theme(&SimpleTheme)
+        .with_prompt("Dump to push")
+        .items(labels)
+        .default(0)
+        .interact()
+        .map_err(unavailable)
+}
+
+pub fn select_push_database(default: &DatabaseName) -> Result<DatabaseName, PromptError> {
+    let value = Input::<String>::with_theme(&SimpleTheme)
+        .with_prompt("Remote database")
+        .default(default.as_str().to_owned())
+        .validate_with(|value: &String| -> Result<(), &str> {
+            DatabaseName::try_from(value.as_str())
+                .map(|_| ())
+                .map_err(|_| "enter a safe non-administrative database name")
+        })
+        .interact_text()
+        .map_err(unavailable)?;
+    DatabaseName::try_from(value).map_err(|_| PromptError::InvalidRestoreDatabase)
+}
+
+/// Returns `true` only when the user retypes `expected` exactly.
+pub fn confirm_push_destination(expected: &str) -> Result<bool, PromptError> {
+    let typed = Input::<String>::with_theme(&SimpleTheme)
+        .with_prompt(format!("Type `{expected}` to confirm"))
+        .allow_empty(true)
+        .interact_text()
+        .map_err(unavailable)?;
+    Ok(typed.trim() == expected)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
