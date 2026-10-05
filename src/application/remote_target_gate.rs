@@ -146,7 +146,9 @@ impl RemoteTargetGate {
         if profile.tls_mode.requires_encrypted_transport() && server.tls_cipher.is_none() {
             return Err(RemoteTargetGateError::TlsRequiredButNotNegotiated);
         }
-        if !server.vendor.to_ascii_lowercase().contains("mysql") {
+        // Same rule as the dump policy: Amazon RDS reports "Source
+        // distribution", so only MariaDB is refused by name.
+        if server.vendor.to_ascii_lowercase().contains("mariadb") {
             return Err(RemoteTargetGateError::UnsupportedVendor);
         }
         let detected_series = format!("{}.{}", server.version.major, server.version.minor);
@@ -488,7 +490,7 @@ pub enum RemoteTargetGateError {
     #[error("the destination did not negotiate the TLS transport required by its profile")]
     TlsRequiredButNotNegotiated,
 
-    #[error("the destination server is not MySQL")]
+    #[error("the destination server is MariaDB, which push does not support")]
     UnsupportedVendor,
 
     #[error("the destination server series differs from its profile; re-add the profile")]
@@ -549,10 +551,14 @@ mod tests {
 
     impl FakeProbe {
         fn returning(version: &str, server_uuid: &str, tls: bool) -> Self {
+            Self::with_vendor("MySQL Community Server - GPL", version, server_uuid, tls)
+        }
+
+        fn with_vendor(vendor: &str, version: &str, server_uuid: &str, tls: bool) -> Self {
             Self {
                 server: MysqlServerInfo {
                     version: version.parse().unwrap(),
-                    vendor: "MySQL Community Server - GPL".to_owned(),
+                    vendor: vendor.to_owned(),
                     server_uuid: server_uuid.parse().unwrap(),
                     tls_cipher: tls.then(|| "TLS_AES_256_GCM_SHA384".to_owned()),
                 },
@@ -1028,5 +1034,23 @@ mod tests {
                 .iter()
                 .any(|choice| choice.profile.as_str() == "dev" && !choice.accepts_push)
         );
+    }
+
+    #[tokio::test]
+    async fn amazon_rds_is_accepted_and_mariadb_is_refused() {
+        let rds = verify(
+            "sandbox",
+            &FakeProbe::with_vendor("Source distribution", "8.4.4", OTHER_UUID, true),
+        )
+        .await;
+        let mariadb = verify(
+            "sandbox",
+            &FakeProbe::with_vendor("mariadb.org binary distribution", "8.4.4", OTHER_UUID, true),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(rds.is_ok());
+        assert!(matches!(mariadb, RemoteTargetGateError::UnsupportedVendor));
     }
 }
