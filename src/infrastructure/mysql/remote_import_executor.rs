@@ -1,4 +1,4 @@
-use std::{ffi::OsString, path::Path};
+use std::{ffi::OsString, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use thiserror::Error;
@@ -13,8 +13,8 @@ use crate::{
         },
         docker::ephemeral_container_name,
         mysql::{
-            DockerClientError, DockerMysqlClientRuntime, RestoreExecutorError, RestoreFailureKind,
-            RestoreMetrics,
+            DockerClientError, DockerMysqlClientRuntime, ImportProgressObserver, NoImportProgress,
+            RestoreExecutorError, RestoreFailureKind, RestoreMetrics,
         },
         process::{ProcessSpec, TokioProcessRunner},
         restore_artifact::ValidatedRestoreArtifact,
@@ -38,14 +38,29 @@ pub trait RemoteImportExecutor: Send + Sync {
     ) -> Result<RestoreMetrics, RemoteImportError>;
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone)]
 pub struct DockerMysqlRemoteImportExecutor {
     cancellation: CancellationToken,
+    progress: Arc<dyn ImportProgressObserver>,
+}
+
+impl Default for DockerMysqlRemoteImportExecutor {
+    fn default() -> Self {
+        Self::new(CancellationToken::default())
+    }
 }
 
 impl DockerMysqlRemoteImportExecutor {
     pub fn new(cancellation: CancellationToken) -> Self {
-        Self { cancellation }
+        Self {
+            cancellation,
+            progress: Arc::new(NoImportProgress),
+        }
+    }
+
+    pub fn with_progress(mut self, progress: Arc<dyn ImportProgressObserver>) -> Self {
+        self.progress = progress;
+        self
     }
 }
 
@@ -98,6 +113,7 @@ impl RemoteImportExecutor for DockerMysqlRemoteImportExecutor {
             &self.cancellation,
             target.docker_context(),
             &operation_container,
+            self.progress.as_ref(),
         )
         .await?;
         if !streamed.status.success() {

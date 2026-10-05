@@ -32,7 +32,7 @@ pub use remote_import_executor::{
 };
 pub use remote_target_probe::DockerRemoteTargetProbe;
 pub use restore_executor::{
-    DockerMysqlRestoreExecutor, RestoreExecutor, RestoreExecutorError, RestoreFailureKind,
-    RestoreMetrics,
+    DockerMysqlRestoreExecutor, ImportProgress, ImportProgressObserver, NoImportProgress,
+    RestoreExecutor, RestoreExecutorError, RestoreFailureKind, RestoreMetrics,
 };
 pub use target_verifier::DockerLocalTargetVerifier;

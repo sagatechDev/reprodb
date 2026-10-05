@@ -1,4 +1,11 @@
-use std::io::Write as _;
+use std::{
+    io::{IsTerminal as _, Write as _},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use crate::{
     application::{
@@ -7,12 +14,15 @@ use crate::{
     },
     cli::{
         cache::format_duration,
-        dump::{CliDumpProgress, format_bytes},
+        dump::{CliDumpProgress, format_bytes, format_duration as format_clock},
         output::OutputStyle,
         prompt,
     },
     domain::{DatabaseName, DumpId, MysqlVersion, ProfileName},
-    infrastructure::compression::{CompressionProgress, CompressionProgressObserver},
+    infrastructure::{
+        compression::{CompressionProgress, CompressionProgressObserver},
+        mysql::{ImportProgress, ImportProgressObserver},
+    },
 };
 
 pub struct CliPushSelector {
@@ -277,9 +287,25 @@ pub fn render_cancelled(style: &OutputStyle) -> String {
     )
 }
 
+const IMPORT_RENDER_INTERVAL: Duration = Duration::from_millis(250);
+const IMPORT_ETA_SAMPLE_WINDOW: Duration = Duration::from_secs(3);
+const WAITING_TICK: Duration = Duration::from_millis(500);
+const BAR_WIDTH: usize = 24;
+
 pub struct CliPushProgress {
     style: OutputStyle,
     dump: CliDumpProgress,
+    enabled: bool,
+    rendered: AtomicBool,
+    last_rendered: Mutex<Option<Duration>>,
+    waiting: Mutex<Option<WaitingTicker>>,
+}
+
+/// Keeps a live clock on screen while MySQL applies the statements that are
+/// already sent, so a long final index build never looks like a hang.
+struct WaitingTicker {
+    stop: Arc<AtomicBool>,
+    handle: std::thread::JoinHandle<()>,
 }
 
 impl CliPushProgress {
@@ -287,12 +313,124 @@ impl CliPushProgress {
         Self {
             style,
             dump: CliDumpProgress::new(style),
+            enabled: std::io::stderr().is_terminal(),
+            rendered: AtomicBool::new(false),
+            last_rendered: Mutex::new(None),
+            waiting: Mutex::new(None),
         }
     }
 
     pub fn finish(&self) {
         self.dump.finish();
+        let ticker = self
+            .waiting
+            .lock()
+            .ok()
+            .and_then(|mut waiting| waiting.take());
+        if let Some(ticker) = ticker {
+            ticker.stop.store(true, Ordering::Relaxed);
+            let _ = ticker.handle.join();
+        }
+        if self.enabled && self.rendered.swap(false, Ordering::Relaxed) {
+            eprintln!();
+        }
     }
+
+    fn draw(&self, line: &str) {
+        self.rendered.store(true, Ordering::Relaxed);
+        eprint!("\r\x1b[2K{line}");
+        let _ = std::io::stderr().flush();
+    }
+}
+
+impl ImportProgressObserver for CliPushProgress {
+    fn update(&self, progress: ImportProgress) {
+        if !self.enabled {
+            return;
+        }
+        let Ok(mut last_rendered) = self.last_rendered.lock() else {
+            return;
+        };
+        let complete = progress.sent_bytes >= progress.total_bytes;
+        if let Some(previous) = *last_rendered
+            && progress.elapsed.saturating_sub(previous) < IMPORT_RENDER_INTERVAL
+            && !complete
+        {
+            return;
+        }
+        *last_rendered = Some(progress.elapsed);
+        self.draw(&render_import_line(&self.style, progress));
+    }
+
+    fn streaming_finished(&self) {
+        if !self.enabled {
+            eprintln!("All data sent; waiting for MySQL to apply the last statements...");
+            return;
+        }
+        // Keep the final 100% line and start the waiting clock below it.
+        eprintln!();
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let style = self.style;
+        let started = Instant::now();
+        let handle = std::thread::spawn(move || {
+            while !thread_stop.load(Ordering::Relaxed) {
+                eprint!(
+                    "\r\x1b[2K{}",
+                    render_waiting_line(&style, started.elapsed())
+                );
+                let _ = std::io::stderr().flush();
+                std::thread::sleep(WAITING_TICK);
+            }
+        });
+        self.rendered.store(true, Ordering::Relaxed);
+        if let Ok(mut waiting) = self.waiting.lock() {
+            *waiting = Some(WaitingTicker { stop, handle });
+        }
+    }
+}
+
+fn render_import_line(style: &OutputStyle, progress: ImportProgress) -> String {
+    let total = progress.total_bytes.max(1);
+    let fraction = (progress.sent_bytes as f64 / total as f64).clamp(0.0, 1.0);
+    let filled = (fraction * BAR_WIDTH as f64).round() as usize;
+    let bar = format!("{}{}", "█".repeat(filled), "░".repeat(BAR_WIDTH - filled));
+    let eta = import_eta(progress)
+        .map(|remaining| format!(" | ETA ~{}", format_clock(remaining)))
+        .unwrap_or_default();
+    format!(
+        "{} Importing: {} / {} {:>3}% [{bar}] | avg {}/s | {}{eta}",
+        style.attention("◌"),
+        format_bytes(progress.sent_bytes),
+        format_bytes(progress.total_bytes),
+        (fraction * 100.0).floor() as u64,
+        format_bytes(progress.bytes_per_second() as u64),
+        format_clock(progress.elapsed),
+    )
+}
+
+fn import_eta(progress: ImportProgress) -> Option<Duration> {
+    if progress.elapsed < IMPORT_ETA_SAMPLE_WINDOW
+        || progress.sent_bytes == 0
+        || progress.sent_bytes >= progress.total_bytes
+    {
+        return None;
+    }
+    let rate = progress.bytes_per_second();
+    if !rate.is_finite() || rate <= 0.0 {
+        return None;
+    }
+    Some(Duration::from_secs_f64(
+        (progress.total_bytes - progress.sent_bytes) as f64 / rate,
+    ))
+}
+
+fn render_waiting_line(style: &OutputStyle, waited: Duration) -> String {
+    format!(
+        "{} All data sent; waiting for MySQL to apply the last statements · {}",
+        style.attention("◌"),
+        format_clock(waited),
+    )
 }
 
 impl PushProgressObserver for CliPushProgress {
@@ -508,5 +646,44 @@ mod tests {
 
         assert_eq!(allowed, "sandbox  sandbox.db.internal:3306");
         assert!(pending.contains("you will be asked to allow it"));
+    }
+
+    fn import(sent: u64, total: u64, seconds: u64) -> ImportProgress {
+        ImportProgress {
+            sent_bytes: sent,
+            total_bytes: total,
+            elapsed: Duration::from_secs(seconds),
+        }
+    }
+
+    #[test]
+    fn the_import_line_shows_size_percent_bar_rate_and_eta() {
+        let gib = 1024 * 1024 * 1024;
+        let line = render_import_line(&OutputStyle::plain(), import(gib / 2, 2 * gib, 600));
+
+        assert!(
+            line.contains("Importing: 512.0 MiB / 2.0 GiB  25%"),
+            "{line}"
+        );
+        assert!(line.contains("[██████░░░░░░░░░░░░░░░░░░]"), "{line}");
+        assert!(line.contains("| 10:00"), "{line}");
+        // 1.5 GiB left at the observed rate of 0.5 GiB per 10 minutes.
+        assert!(line.contains("ETA ~30:00"), "{line}");
+    }
+
+    #[test]
+    fn eta_waits_for_a_sample_and_disappears_once_everything_is_sent() {
+        assert_eq!(import_eta(import(10, 100, 1)), None);
+        assert_eq!(import_eta(import(100, 100, 60)), None);
+        assert!(render_import_line(&OutputStyle::plain(), import(100, 100, 60)).contains("100%"));
+    }
+
+    #[test]
+    fn the_waiting_line_says_what_is_happening_and_keeps_a_clock() {
+        let line = render_waiting_line(&OutputStyle::plain(), Duration::from_secs(75));
+
+        assert!(
+            line.contains("All data sent; waiting for MySQL to apply the last statements · 01:15")
+        );
     }
 }

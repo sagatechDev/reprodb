@@ -49,6 +49,39 @@ impl RestoreMetrics {
     }
 }
 
+/// How much of a validated dump has been handed to `mysql`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImportProgress {
+    pub sent_bytes: u64,
+    pub total_bytes: u64,
+    pub elapsed: std::time::Duration,
+}
+
+impl ImportProgress {
+    pub fn bytes_per_second(self) -> f64 {
+        let seconds = self.elapsed.as_secs_f64();
+        if seconds > 0.0 {
+            self.sent_bytes as f64 / seconds
+        } else {
+            0.0
+        }
+    }
+}
+
+pub trait ImportProgressObserver: Send + Sync {
+    fn update(&self, progress: ImportProgress);
+
+    /// Every byte was sent; mysql may still be applying the last statements.
+    fn streaming_finished(&self) {}
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoImportProgress;
+
+impl ImportProgressObserver for NoImportProgress {
+    fn update(&self, _progress: ImportProgress) {}
+}
+
 #[async_trait]
 pub trait RestoreExecutor: Send + Sync {
     async fn recreate_database(
@@ -124,6 +157,7 @@ impl RestoreExecutor for DockerMysqlRestoreExecutor {
             &self.cancellation,
             target.docker_context(),
             &operation_container,
+            &NoImportProgress,
         )
         .await?;
         if !streamed.status.success() {
@@ -271,7 +305,11 @@ pub(super) async fn stream_import(
     cancellation: &CancellationToken,
     docker_context: &str,
     operation_container: &str,
+    progress: &dyn ImportProgressObserver,
 ) -> Result<StreamedImport, RestoreExecutorError> {
+    let started = std::time::Instant::now();
+    let total_bytes = artifact.metadata().uncompressed_bytes;
+    let mut sent_bytes = 0_u64;
     let mut child = spawn(spec, true)?;
     let mut stdin = child
         .stdin
@@ -318,14 +356,26 @@ pub(super) async fn stream_import(
                     result.map_err(RestoreExecutorError::WriteStdin)?;
                 }
             }
+            // mysql reads the next statement only after the previous one ran,
+            // so bytes accepted on stdin track what the server has applied.
+            sent_bytes += chunk.len() as u64;
+            progress.update(ImportProgress {
+                sent_bytes,
+                total_bytes,
+                elapsed: started.elapsed(),
+            });
         }
-        tokio::select! {
+        let closed = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
                 Err(RestoreExecutorError::Interrupted)
             }
             result = stdin.shutdown() => result.map_err(RestoreExecutorError::CloseStdin),
+        };
+        if closed.is_ok() {
+            progress.streaming_finished();
         }
+        closed
     }
     .await;
     drop(receiver);
@@ -663,6 +713,21 @@ mod tests {
         let spec =
             ProcessSpec::new("sh").args(["-c".to_owned(), format!("cat > '{}'", output.display())]);
 
+        #[derive(Default)]
+        struct Recorder {
+            updates: std::sync::Mutex<Vec<ImportProgress>>,
+            finished: std::sync::atomic::AtomicBool,
+        }
+        impl ImportProgressObserver for Recorder {
+            fn update(&self, progress: ImportProgress) {
+                self.updates.lock().unwrap().push(progress);
+            }
+            fn streaming_finished(&self) {
+                self.finished
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        let recorder = Recorder::default();
         let streamed = stream_import(
             &spec,
             b"-- preamble\n",
@@ -670,6 +735,7 @@ mod tests {
             &CancellationToken::default(),
             "unused-context",
             "unused-container",
+            &recorder,
         )
         .await
         .unwrap();
@@ -686,5 +752,10 @@ mod tests {
                 .imported_bytes(),
             sql.len() as u64
         );
+        let updates = recorder.updates.lock().unwrap();
+        let last = updates.last().unwrap();
+        assert_eq!(last.sent_bytes, sql.len() as u64);
+        assert_eq!(last.total_bytes, sql.len() as u64);
+        assert!(recorder.finished.load(std::sync::atomic::Ordering::Relaxed));
     }
 }

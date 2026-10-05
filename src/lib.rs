@@ -455,7 +455,8 @@ pub async fn execute_with_cancellation(
                     },
                     infrastructure::mysql::DockerMysqlRemoteImportExecutor::new(
                         cancellation.clone(),
-                    ),
+                    )
+                    .with_progress(progress.clone()),
                     &selector,
                     database,
                 )
