@@ -9,7 +9,7 @@ use std::{
 
 use crate::{
     application::{DumpCreated, DumpStatus, DumpStatusObserver},
-    cli::output::OutputStyle,
+    cli::output::{OutputStyle, redraw_status_line},
     domain::DumpPolicyNotice,
     infrastructure::compression::{CompressionProgress, CompressionProgressObserver},
 };
@@ -129,15 +129,14 @@ impl CompressionProgressObserver for CliDumpProgress {
         let eta = estimated_remaining(progress, self.estimated_input_bytes.load(Ordering::Relaxed))
             .map(|duration| format!(" | ETA ~{}", format_duration(duration)))
             .unwrap_or_default();
-        eprint!(
-            "\r\x1b[2K{} Exporting: {} | avg {}/s | {}{}",
+        redraw_status_line(&format!(
+            "{} Exporting: {} | avg {}/s | {}{}",
             self.style.attention("◌"),
             format_bytes(progress.input_bytes),
             format_bytes(progress.input_bytes_per_second() as u64),
             format_duration(progress.elapsed),
             eta,
-        );
-        let _ = io::stderr().flush();
+        ));
     }
 }
 

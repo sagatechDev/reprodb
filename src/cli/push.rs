@@ -15,7 +15,7 @@ use crate::{
     cli::{
         cache::format_duration,
         dump::{CliDumpProgress, format_bytes, format_duration as format_clock},
-        output::OutputStyle,
+        output::{OutputStyle, redraw_status_line},
         prompt,
     },
     domain::{DatabaseName, DumpId, MysqlVersion, ProfileName},
@@ -290,7 +290,7 @@ pub fn render_cancelled(style: &OutputStyle) -> String {
 const IMPORT_RENDER_INTERVAL: Duration = Duration::from_millis(250);
 const IMPORT_ETA_SAMPLE_WINDOW: Duration = Duration::from_secs(3);
 const WAITING_TICK: Duration = Duration::from_millis(500);
-const BAR_WIDTH: usize = 24;
+const BAR_WIDTH: usize = 16;
 
 pub struct CliPushProgress {
     style: OutputStyle,
@@ -338,8 +338,7 @@ impl CliPushProgress {
 
     fn draw(&self, line: &str) {
         self.rendered.store(true, Ordering::Relaxed);
-        eprint!("\r\x1b[2K{line}");
-        let _ = std::io::stderr().flush();
+        redraw_status_line(line);
     }
 }
 
@@ -375,11 +374,7 @@ impl ImportProgressObserver for CliPushProgress {
         let started = Instant::now();
         let handle = std::thread::spawn(move || {
             while !thread_stop.load(Ordering::Relaxed) {
-                eprint!(
-                    "\r\x1b[2K{}",
-                    render_waiting_line(&style, started.elapsed())
-                );
-                let _ = std::io::stderr().flush();
+                redraw_status_line(&render_waiting_line(&style, started.elapsed()));
                 std::thread::sleep(WAITING_TICK);
             }
         });
@@ -396,14 +391,15 @@ fn render_import_line(style: &OutputStyle, progress: ImportProgress) -> String {
     let filled = (fraction * BAR_WIDTH as f64).round() as usize;
     let bar = format!("{}{}", "█".repeat(filled), "░".repeat(BAR_WIDTH - filled));
     let eta = import_eta(progress)
-        .map(|remaining| format!(" | ETA ~{}", format_clock(remaining)))
+        .map(|remaining| format!(" · ETA ~{}", format_clock(remaining)))
         .unwrap_or_default();
+    // Most useful first: a narrow terminal cuts the end of the line.
     format!(
-        "{} Importing: {} / {} {:>3}% [{bar}] | avg {}/s | {}{eta}",
+        "{} Importing {:>3}% [{bar}] {}/{}{eta} · {}/s · {}",
         style.attention("◌"),
+        (fraction * 100.0).floor() as u64,
         format_bytes(progress.sent_bytes),
         format_bytes(progress.total_bytes),
-        (fraction * 100.0).floor() as u64,
         format_bytes(progress.bytes_per_second() as u64),
         format_clock(progress.elapsed),
     )
@@ -661,14 +657,14 @@ mod tests {
         let gib = 1024 * 1024 * 1024;
         let line = render_import_line(&OutputStyle::plain(), import(gib / 2, 2 * gib, 600));
 
-        assert!(
-            line.contains("Importing: 512.0 MiB / 2.0 GiB  25%"),
-            "{line}"
-        );
-        assert!(line.contains("[██████░░░░░░░░░░░░░░░░░░]"), "{line}");
-        assert!(line.contains("| 10:00"), "{line}");
         // 1.5 GiB left at the observed rate of 0.5 GiB per 10 minutes.
-        assert!(line.contains("ETA ~30:00"), "{line}");
+        assert_eq!(
+            line,
+            "◌ Importing  25% [████░░░░░░░░░░░░] 512.0 MiB/2.0 GiB · ETA ~30:00 · 873.8 KiB/s · 10:00"
+        );
+        // An 80-column terminal keeps everything up to the ETA.
+        let eta_end = line.find("30:00").unwrap() + "30:00".len();
+        assert!(console::measure_text_width(&line[..eta_end]) < 79, "{line}");
     }
 
     #[test]

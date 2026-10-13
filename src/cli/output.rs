@@ -92,6 +92,27 @@ impl OutputStyle {
     }
 }
 
+/// Redraws one status line in place on stderr.
+///
+/// The line is cut to the terminal width: once a line wraps, `\r` only
+/// returns to the start of its last row, so every update would stack
+/// below the previous one instead of replacing it.
+pub fn redraw_status_line(line: &str) {
+    let width = console::Term::stderr()
+        .size_checked()
+        .map(|(_, columns)| usize::from(columns));
+    eprint!("\r\x1b[2K{}", fit_to_width(line, width));
+    let _ = io::Write::flush(&mut io::stderr());
+}
+
+/// Leaves the last column free so the cursor never triggers an auto-wrap.
+fn fit_to_width(line: &str, width: Option<usize>) -> std::borrow::Cow<'_, str> {
+    match width {
+        Some(width) if width > 1 => console::truncate_str(line, width - 1, "…"),
+        _ => std::borrow::Cow::Borrowed(line),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +156,21 @@ mod tests {
             OutputStyle::colored().success("✓ connected"),
             "\u{1b}[1;32m✓ connected\u{1b}[0m"
         );
+    }
+
+    #[test]
+    fn status_lines_are_cut_to_fit_the_terminal_without_breaking_colors() {
+        let line = "◌ Importing: 4.2 MiB / 2.0 GiB   0% [░░░░] | avg 1016.9 KiB/s | 00:04";
+
+        assert_eq!(fit_to_width(line, None), line);
+        assert_eq!(fit_to_width(line, Some(200)), line);
+        let cut = fit_to_width(line, Some(30));
+        assert_eq!(console::measure_text_width(&cut), 29);
+        assert!(cut.ends_with('…'));
+
+        let colored = format!("\x1b[33m◌\x1b[0m {}", &line[4..]);
+        let cut = fit_to_width(&colored, Some(30));
+        assert_eq!(console::measure_text_width(&cut), 29);
+        assert!(cut.starts_with("\x1b[33m◌\x1b[0m"));
     }
 }
